@@ -1,0 +1,12 @@
+.{
+    .name = "hello_world_client",
+    .version = "0.1.0",
+    .paths = .{"src"},
+
+    .dependencies = .{
+        .zzmq = .{
+            .url = "https://github.com/nine-lives-later/zzmq/archive/refs/tags/v0.2.2-zig0.12.tar.gz",
+            .hash = "122048ba004ea870098285b895c9f9dfefe33027d0982c7df0efe2a07bb6040cebea",
+        },
+    },
+}

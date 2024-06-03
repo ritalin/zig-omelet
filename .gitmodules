@@ -1,0 +1,6 @@
+[submodule "vendor/json"]
+	path = vendor/json
+	url = https://github.com/nlohmann/json.git
+[submodule "vendor/magic-enum"]
+	path = vendor/magic-enum
+	url = https://github.com/Neargye/magic_enum.git

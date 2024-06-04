@@ -15,7 +15,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const dep_zzmq = b.dependency("zzmq", .{});
+    const zmq_prefix = "/usr/local/opt";
+
+    const dep_zzmq = b.dependency("zzmq", .{
+        .prefix = @as([]const u8, zmq_prefix)
+    });
 
     const exe = b.addExecutable(.{
         .name = "duckdb-sql-parser",
@@ -31,8 +35,8 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/duckdb/include" });
     exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/duckdb/lib" });
     exe.linkSystemLibrary("duckdb");
-    exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/zmq/include" });
-    exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/zmq/lib" });
+    exe.addIncludePath(.{ .cwd_relative = zmq_prefix ++ "/zmq/include" });
+    exe.addLibraryPath(.{ .cwd_relative = zmq_prefix ++ "/zmq/lib" });
     exe.linkSystemLibrary("zmq");
     exe.addIncludePath(.{ .cwd_relative = "vendor/magic-enum/include" });
     exe.addIncludePath(.{ .cwd_relative = "vendor/json/include" });

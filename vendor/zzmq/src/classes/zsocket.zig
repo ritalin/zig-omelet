@@ -273,7 +273,26 @@ pub const ZSocketOption = union(enum) {
     RouterHandover: bool,
 
     /// ZMQ_SUBSCRIBE: establish a new message filter on a 'ZMQ_SUB' socket.
-    Subscribe: void,
+    /// 
+    /// Newly created 'ZMQ_SUB' sockets shall filter out all incoming messages, 
+    /// therefore you should call this option to establish an initial message filter.
+    /// 
+    /// An empty 'option_value' of length zero shall subscribe to all incoming messages. 
+    /// A non-empty 'option_value' shall subscribe to all messages beginning with the specified prefix. 
+    /// Multiple filters may be attached to a single 'ZMQ_SUB' socket, 
+    /// in which case a message shall be accepted if it matches at least one filter.
+    /// 
+    /// For more details, see https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html
+    Subscribe: []u8,
+
+    /// ZMQ_UNSUBSCRIBE: option shall remove an existing message filter on a 'ZMQ_SUB' socket.
+    /// 
+    /// The filter specified must match an existing filter previously established with the 'ZMQ_SUBSCRIBE' option. 
+    /// If the socket has several instances of the same filter attached the 'ZMQ_UNSUBSCRIBE' option shall remove only one instance, 
+    /// leaving the rest in place and functional.
+    /// 
+    /// For more details, see https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html
+    Unsubscribe: []u8,
 };
 
 /// System level socket, which allows for opening outgoing and
@@ -547,8 +566,11 @@ pub const ZSocket = struct {
 
                 result = c.zmq_setsockopt(self.socket_, c.ZMQ_ROUTER_HANDOVER, &v, @sizeOf(@TypeOf(v)));
             },
-            .Subscribe => {
-                    result = c.zmq_setsockopt(self.socket_, c.ZMQ_SUBSCRIBE, "", 0);
+            .Subscribe => |v| {
+                result = c.zmq_setsockopt(self.socket_, c.ZMQ_SUBSCRIBE, v.ptr, v.len);
+            },
+            .Unsubscribe => |v| {
+                result = c.zmq_setsockopt(self.socket_, c.ZMQ_UNSUBSCRIBE, v.ptr, v.len);
             },
 
             //else => return error.UnknownOption,
@@ -615,7 +637,10 @@ pub const ZSocket = struct {
                 return error.UnknownOption; // ZMQ_ROUTER_HANDOVER cannot be retrieved
             },
             .Subscribe => {
-                return error.UnknownOption; // ZMQ_SUBSCRIBE does not have a value.
+                result = c.zmq_getsockopt(self.socket_, c.ZMQ_SUBSCRIBE, opt.Subscribe.ptr, &opt.Subscribe.len);
+            },
+            .Unsubscribe => {
+                result = c.zmq_getsockopt(self.socket_, c.ZMQ_UNSUBSCRIBE, opt.Unsubscribe.ptr, &opt.Unsubscribe.len);
             },
 
             //else => return error.UnknownOption,
@@ -913,4 +938,127 @@ test "ZSocket - routing id" {
         var v = ZSocketOption{ .RouterHandover = undefined };
         try std.testing.expectError(error.UnknownOption, socket.getSocketOption(&v));
     }
+}
+
+test "ZSocket - PubSub" {
+    const allocator = std.testing.allocator;
+
+    // create the context
+    var context = try zcontext.ZContext.init(allocator);
+    defer context.deinit();
+
+    const endpoint = "inproc://#0";
+
+    // bind the publisher socket
+    var publisher = try ZSocket.init(ZSocketType.Pub, &context);
+    defer publisher.deinit();
+
+    try publisher.bind(endpoint);
+    try std.testing.expect(publisher.endpoint_ != null);
+
+    // connect to the subscriber socket
+    var subscriber_a = sub: {
+        const socket = try ZSocket.init(ZSocketType.Sub, &context);
+        try socket.setSocketOption(.{.Subscribe = ""});
+
+        try socket.connect(endpoint);
+        try std.testing.expect(socket.endpoint_ != null);
+        break :sub socket;
+    };
+    defer subscriber_a.deinit();
+
+    var subscriber_b = sub: {
+        const socket = try ZSocket.init(ZSocketType.Sub, &context);
+        try socket.setSocketOption(.{.Subscribe = ""});
+
+        try socket.connect(endpoint);
+        try std.testing.expect(socket.endpoint_ != null);
+        break :sub socket;
+    };
+    defer subscriber_b.deinit();
+
+    const msg = "Hello world";
+
+    var data = try zmessage.ZMessage.initUnmanaged(msg, null);
+    defer data.deinit();
+
+    try publisher.send(&data, .{.dontwait = true});
+
+    var frame_a = try subscriber_a.receive(.{});
+    defer frame_a.deinit();
+
+    try std.testing.expectEqual(msg.len, try frame_a.size());
+    try std.testing.expectEqualStrings(msg, try frame_a.data());
+    try std.testing.expectEqual(false, frame_a.hasMore());
+
+    var frame_b = try subscriber_b.receive(.{});
+    defer frame_b.deinit();
+
+    try std.testing.expectEqual(msg.len, try frame_b.size());
+    try std.testing.expectEqualStrings(msg, try frame_b.data());
+    try std.testing.expectEqual(false, frame_b.hasMore());
+}
+
+pub fn makeProxy(frontend_socket: *ZSocket, backend_socket: *ZSocket, capture_socket: ?*ZSocket) void {
+    _ = c.zmq_proxy(frontend_socket.socket_, backend_socket.socket_, capture_socket orelse null);
+}
+
+test "ZSocket - PubSub with filter" {
+    const allocator = std.testing.allocator;
+
+    // create the context
+    var context = try zcontext.ZContext.init(allocator);
+    defer context.deinit();
+
+    const endpoint = "inproc://#0";
+
+    // bind the publisher socket
+    var publisher = try ZSocket.init(ZSocketType.Pub, &context);
+    defer publisher.deinit();
+
+    try publisher.bind(endpoint);
+    try std.testing.expect(publisher.endpoint_ != null);
+
+    // connect to the subscriber socket
+    var subscriber_a = sub: {
+        const socket = try ZSocket.init(ZSocketType.Sub, &context);
+        try socket.setSocketOption(.{.Subscribe = @constCast("Main")});
+
+        try socket.connect(endpoint);
+        try std.testing.expect(socket.endpoint_ != null);
+        break :sub socket;
+    };
+    defer subscriber_a.deinit();
+
+    var subscriber_b = sub: {
+        const socket = try ZSocket.init(ZSocketType.Sub, &context);
+        try socket.setSocketOption(.{.Subscribe = @constCast("Sub")});
+
+        try socket.connect(endpoint);
+        try std.testing.expect(socket.endpoint_ != null);
+        break :sub socket;
+    };
+    defer subscriber_b.deinit();
+
+    var topic_a = try zmessage.ZMessage.initUnmanaged("Main:Hello world", null);
+    defer topic_a.deinit();
+    try publisher.send(&topic_a, .{.dontwait = true});
+
+    var topic_b = try zmessage.ZMessage.initUnmanaged("Sub:Hello world", null);
+    defer topic_b.deinit();
+    try publisher.send(&topic_b, .{.dontwait = true});
+
+    var frame_a = try subscriber_a.receive(.{});
+    defer frame_a.deinit();
+
+    try std.testing.expectEqual(topic_a.size(), try frame_a.size());
+    try std.testing.expectEqualStrings(try topic_a.data(), try frame_a.data());
+    try std.testing.expectEqual(false, frame_a.hasMore());
+
+    var frame_b = try subscriber_b.receive(.{});
+    defer frame_b.deinit();
+
+    try std.testing.expectEqual(topic_b.size(), try frame_b.size());
+    try std.testing.expectEqualStrings(try topic_b.data(), try frame_b.data());
+    try std.testing.expectEqual(false, frame_b.hasMore());
 }

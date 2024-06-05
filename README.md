@@ -8,6 +8,8 @@ this tool can extract named placeholder in SQL to convert into positional
 * libduckdb (https://duckdb.org) - 0.10.1 or latter
 * zmq (https://zeromq.org) - 4.3.5 or latter
 
+This product has tested on MacOS Ventura 13.6.7.
+
 ## Build
 
 ```

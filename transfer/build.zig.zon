@@ -43,7 +43,7 @@
         //    // actually used.
         //    .lazy = false,
         //},
-        .zzmq = .{ .path = "vendor/zzmq" },
+        .zzmq = .{ .path = "../vendor/zzmq" },
     },
 
     .paths = .{

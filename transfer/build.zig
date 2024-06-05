@@ -17,9 +17,7 @@ pub fn build(b: *std.Build) void {
 
     const zmq_prefix = "/usr/local/opt";
 
-    const dep_zzmq = b.dependency("zzmq", .{
-        .prefix = @as([]const u8, zmq_prefix)
-    });
+    const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
 
     const exe = b.addExecutable(.{
         .name = "duckdb-sql-parser",
@@ -31,15 +29,15 @@ pub fn build(b: *std.Build) void {
     exe.addCSourceFiles(.{ .files = &[_][]const u8{
         "src/c/parser.cpp",
         "src/c/dump.cpp",
-    }});
+    } });
     exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/duckdb/include" });
     exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/duckdb/lib" });
     exe.linkSystemLibrary("duckdb");
     exe.addIncludePath(.{ .cwd_relative = zmq_prefix ++ "/zmq/include" });
     exe.addLibraryPath(.{ .cwd_relative = zmq_prefix ++ "/zmq/lib" });
     exe.linkSystemLibrary("zmq");
-    exe.addIncludePath(.{ .cwd_relative = "vendor/magic-enum/include" });
-    exe.addIncludePath(.{ .cwd_relative = "vendor/json/include" });
+    exe.addIncludePath(.{ .cwd_relative = "../vendor/magic-enum/include" });
+    exe.addIncludePath(.{ .cwd_relative = "../vendor/json/include" });
     exe.linkLibCpp();
     exe.root_module.addImport("zzmq", dep_zzmq.module("zzmq"));
 

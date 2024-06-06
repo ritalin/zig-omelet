@@ -15,31 +15,12 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zmq_prefix = "/usr/local/opt";
-
-    const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
-
     const exe = b.addExecutable(.{
-        .name = "stage-transfer-placeholder",
+        .name = "stage-parse-duckdb-sql",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    exe.addCSourceFiles(.{ .files = &[_][]const u8{
-        "src/c/parser.cpp",
-        "src/c/dump.cpp",
-    } });
-    exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/duckdb/include" });
-    exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/duckdb/lib" });
-    exe.linkSystemLibrary("duckdb");
-    exe.addIncludePath(.{ .cwd_relative = zmq_prefix ++ "/zmq/include" });
-    exe.addLibraryPath(.{ .cwd_relative = zmq_prefix ++ "/zmq/lib" });
-    exe.linkSystemLibrary("zmq");
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/magic-enum/include" });
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/json/include" });
-    exe.linkLibCpp();
-    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

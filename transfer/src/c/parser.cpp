@@ -246,12 +246,16 @@ auto PlaceholderCollector::finish(duckdb::unique_ptr<duckdb::SQLStatement>& stmt
         zmq_send(this->socket, topic.c_str(), topic.length(), ZMQ_SNDMORE);
         auto query = stmt->ToString();
         zmq_send(this->socket, query.c_str(), query.length(), 0);
+
+        std::cout << "publish: " << topic << " - " << query << std::endl;
     }
     send_place_holder: {
         auto topic = std::string("place-holder");
         zmq_send(this->socket, topic.c_str(), topic.length(), ZMQ_SNDMORE);
         auto ph = serializePlaceHolder(this->lookup);
         zmq_send(this->socket, ph.c_str(), ph.length(), 0);
+
+        std::cout << "publish: " << topic << " - " << ph << std::endl;
     }
 }
 

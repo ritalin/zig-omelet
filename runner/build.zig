@@ -16,35 +16,32 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zmq_prefix = "/usr/local/opt";
-
     const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
 
     const exe = b.addExecutable(.{
-        .name = "stage-transfer-placeholder",
+        .name = "extract-sql-placeholder",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    exe.addCSourceFiles(.{ .files = &[_][]const u8{
-        "src/c/parser.cpp",
-        "src/c/dump.cpp",
-    } });
-    exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/duckdb/include" });
-    exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/duckdb/lib" });
-    exe.linkSystemLibrary("duckdb");
-    exe.addIncludePath(.{ .cwd_relative = zmq_prefix ++ "/zmq/include" });
     exe.addLibraryPath(.{ .cwd_relative = zmq_prefix ++ "/zmq/lib" });
     exe.linkSystemLibrary("zmq");
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/magic-enum/include" });
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/json/include" });
-    exe.linkLibCpp();
+
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
+
+    // Transfer stage
+    const dep_transfer = b.dependency("transfer", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const exe_transfer = dep_transfer.artifact("stage-transfer-placeholder");
+    b.installArtifact(exe_transfer);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish

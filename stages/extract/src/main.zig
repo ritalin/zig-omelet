@@ -23,6 +23,8 @@ pub fn main() !void {
     const ctrl2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, ctx);
     defer ctrl2s_socket.deinit();
     try ctrl2s_socket.connect(CTRL_C2S_END_POINT);
+
+    
 }
 
 test "simple test" {

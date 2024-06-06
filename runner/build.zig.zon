@@ -45,7 +45,7 @@
         //},
         .zzmq = .{ .path = "../vendor/zzmq" },
         .transfer = .{
-            .path = "../transfer"
+            .path = "../stages/transfer"
         },
     },
 

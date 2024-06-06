@@ -1,19 +1,28 @@
 const std = @import("std");
+const zmq = @import("zmq");
+
+// (control) Client -> Server
+const CTRL_C2S_END_POINT = "ipc:///tmp/duckdb-extract-placeholder_ctrl_c2s";
+// (control) Server -> Client
+const CTRL_S2C_END_POINT = "ipc:///tmp/duckdb-extract-placeholder_ctrl_s2c";
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    const allocator = arena.allocator();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    const ctx = try allocator.create(zmq.ZContext);
+    ctx.* = try zmq.ZContext.init(allocator);
+    defer ctx.deinit();
 
-    try bw.flush(); // don't forget to flush!
+    const ctrl2c_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, ctx);
+    defer ctrl2c_socket.deinit();
+    try ctrl2c_socket.bind(CTRL_S2C_END_POINT);
+
+    const ctrl2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, ctx);
+    defer ctrl2s_socket.deinit();
+    try ctrl2s_socket.connect(CTRL_C2S_END_POINT);
 }
 
 test "simple test" {

@@ -44,9 +44,8 @@
         //    .lazy = false,
         //},
         .zzmq = .{ .path = "../vendor/zzmq" },
-        .transfer = .{
-            .path = "../stages/transfer"
-        },
+        .stage_extract_ph = .{ .path = "../stages/extract-ph" },
+        .stage_generate_ts = .{ .path = "../stages/generate" },
     },
 
     // Specifies the set of files and directories that are included in this package.
@@ -56,16 +55,10 @@
     // the build root itself.
     // A directory listed here means that all files within, recursively, are included.
     .paths = .{
-        // This makes *all* files, recursively, included in this package. It is generally
-        // better to explicitly list the files and directories instead, to insure that
-        // fetching from tarballs, file system paths, and version control all result
-        // in the same contents hash.
-        "",
-        // For example...
-        //"build.zig",
-        //"build.zig.zon",
-        //"src",
-        //"LICENSE",
-        //"README.md",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
     },
 }

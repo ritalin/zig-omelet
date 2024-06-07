@@ -15,12 +15,13 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zmq_prefix = "/usr/local/opt";
-
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
 
+    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
+    
     const exe = b.addExecutable(.{
-        .name = "stage-transfer-placeholder",
+        .name = "stage-extract-ph",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -30,15 +31,18 @@ pub fn build(b: *std.Build) void {
         "src/c/parser.cpp",
         "src/c/dump.cpp",
     } });
-    exe.addIncludePath(.{ .cwd_relative = "/usr/local/opt/duckdb/include" });
-    exe.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/duckdb/lib" });
+    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {duckdb_prefix, "duckdb/include" }) });
+    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {duckdb_prefix, "duckdb/lib"}) });
     exe.linkSystemLibrary("duckdb");
-    exe.addIncludePath(.{ .cwd_relative = zmq_prefix ++ "/zmq/include" });
-    exe.addLibraryPath(.{ .cwd_relative = zmq_prefix ++ "/zmq/lib" });
+
+    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/include" }) });
+    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/magic-enum/include" });
-    exe.addIncludePath(.{ .cwd_relative = "../vendor/json/include" });
+
+    exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
+    exe.addIncludePath(b.path("../../vendor/json/include"));
     exe.linkLibCpp();
+
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
 
     // This declares intent for the executable to be installed into the

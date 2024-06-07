@@ -1,178 +1,157 @@
 const std = @import("std");
 const zmq = @import("zmq");
 
-extern fn dmpParseedSQL(query: [*c]const u8, len: usize) callconv(.C) void;
-extern fn duckDbParseSQL(query: [*c]const u8, len: usize, socket: *anyopaque) callconv(.C) void;
+// (control) Client -> Server
+const CMD_C2S_END_POINT = "ipc:///tmp/duckdb-ext-ph_cmd_c2s";
+// (control) Server -> Client
+const CMD_S2C_END_POINT = "ipc:///tmp/duckdb-ext-ph_cmd_s2c";
+// const CMD_S2C_END_POINT = "tcp://localhost:6001";
+// (source) Client -> Server
+const SRC_C2S_END_POINT = "ipc:///tmp/duckdb-ext-ph_pipe_c2s";
+// (source) Client -> Server
+const SRC_S2C_END_POINT = "ipc:///tmp/duckdb-ext-ph_pipe_s2c";
 
-const IPC_SYNC_END_POINT: []const u8 = "ipc:///tmp/duckdb-extract-placeholder_sync";
-const IPC_IN_END_POINT: []const u8 = "ipc:///tmp/duckdb-extract-placeholder_pull";
-const IPC_OUT_END_POINT: []const u8 = "ipc:///tmp/duckdb-extract-placeholder_pub";
-const INPROC_END_POINT: []const u8 = "inproc://#0";
+pub const ChannelType = enum {
+    channel_command,
+    channel_source,
+    channel_generate,
+};
 
-pub fn parse_sql(allocator: std.mem.Allocator, query: ?[]const u8) !void {
-    const ctx = try allocator.create(zmq.ZContext);
-    ctx.* = try zmq.ZContext.init(allocator);
+pub const Symbol = []const u8;
+
+pub const EventType = enum (u8) {
+    launched = 1,
+    begin_topic,
+    topic,
+    end_topic,
+    begin_session,
+    source,
+    topic_payload,
+    begin_generate,
+    end_generate,
+    quit,
+    quit_accept,
+};
+pub const Event = union(EventType) {
+    laucned: void,
+    begin_topic: void,
+    topic: struct { name: Symbol },
+    end_topic: void,
+    begin_session: void,
+    source: struct { path: Symbol, hash: Symbol },
+    topic_payload: struct { topic: Symbol, payload: Symbol },
+    begin_generate: void,
+    end_generate: void,
+    quit: void,
+    quit_accept: void,
+};
+
+const APP_CONTEXT = "exctract-ph";
+
+pub fn run(allocator: std.mem.Allocator) !void {
+    std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
+
+    const oneshot = true;
+
+    var ctx = try zmq.ZContext.init(allocator);
     defer ctx.deinit();
 
-    // publisher
-    const pub_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, ctx);
-    defer pub_socket.deinit();
-    try pub_socket.bind(INPROC_END_POINT);
+    const cmd_s2c_socket = try zmq.ZSocket.init(zmq.ZSocketType.Sub, &ctx);
+    defer cmd_s2c_socket.deinit();
+    try cmd_s2c_socket.setSocketOption(.{.Subscribe = ""});
+    try cmd_s2c_socket.connect(CMD_S2C_END_POINT);
 
-    if (query) |q0| {
-        // w/o proxy
-        const sub_socket = try zmq.ZSocket.init(zmq.ZSocketType.Sub, ctx);
-        defer sub_socket.deinit();
-        try sub_socket.setSocketOption(.{.Subscribe = ""});
-        try sub_socket.connect(INPROC_END_POINT);
-    
-        const q = try allocator.dupeZ(u8, q0);
-        defer allocator.free(q);
+    const cmd_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, &ctx);
+    defer cmd_c2s_socket.deinit();
+    try cmd_c2s_socket.connect(CMD_C2S_END_POINT);
 
-        std.debug.print("Begin parse\n", .{});
-        duckDbParseSQL(q.ptr, q.len, pub_socket.socket_);
+    // const src_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, &ctx);
+    // defer src_c2s_socket.deinit();
+    // try src_c2s_socket.connect(SRC_C2S_END_POINT);
 
-        {
-            var frame = try sub_socket.receive(.{});
-            defer frame.deinit();
+    launch: {
+        var msg = try zmq.ZMessage.init(allocator, ".launched");
+        defer msg.deinit();
+        try cmd_c2s_socket.send(&msg, .{});
 
-            std.debug.print("[1] Frame#hasmore: {}\n", .{frame.hasMore()});
-            std.debug.print("[1] Frame#data: {s}\n", .{try frame.data()});
-        }
-        {
-            var frame = try sub_socket.receive(.{});
-            defer frame.deinit();
-
-            std.debug.print("[2] Frame#hasmore: {}\n", .{frame.hasMore()});
-            std.debug.print("[2] Frame#data: {s}\n", .{try frame.data()});
-        }
-        {
-            var frame = try sub_socket.receive(.{});
-            defer frame.deinit();
-
-            std.debug.print("[3] Frame#hasmore: {}\n", .{frame.hasMore()});
-            std.debug.print("[3] Frame#data: {s}\n", .{try frame.data()});
-        }
-        {
-            var frame = try sub_socket.receive(.{});
-            defer frame.deinit();
-
-            std.debug.print("[4] Frame#hasmore: {}\n", .{frame.hasMore()});
-            std.debug.print("[4] Frame#data: {s}\n", .{try frame.data()});
-        }
-
-        std.debug.print("End parse\n", .{});
+        std.debug.print("({s}) End send .launch\n", .{APP_CONTEXT});
+        break :launch;
     }
-    else {
-        // inbound socket
-        const pull_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, ctx);
-        defer pull_socket.deinit();
-        try pull_socket.bind(IPC_IN_END_POINT);
 
-        // with proxy
-        const sub_proxy_socket = try zmq.ZSocket.init(zmq.ZSocketType.Sub, ctx);
-        defer sub_proxy_socket.deinit();
-        try sub_proxy_socket.setSocketOption(.{.Subscribe = ""});
-        try sub_proxy_socket.connect(INPROC_END_POINT);
+    const polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item {
+        zmq.ZPolling.Item.fromSocket(cmd_s2c_socket, .{ .PollIn = true }),
+    });
 
-        const pub_proxy_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, ctx);
-        // const pub_proxy_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, ctx);
-        defer pub_proxy_socket.deinit();
-        try pub_proxy_socket.bind(IPC_OUT_END_POINT);
+    loop: while (true) {
+        std.debug.print("({s}) Waiting...\n", .{APP_CONTEXT});
 
-        // sync
-        const sync_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, ctx);
-        defer sync_socket.deinit();
-        try sync_socket.bind(IPC_SYNC_END_POINT);
+        var it = try polling.poll(allocator);
+        defer it.deinit();
 
-        const test_push_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, ctx);
-        defer test_push_socket.deinit();
-        try test_push_socket.connect(IPC_IN_END_POINT);
+        while (it.next()) |item| {
+            var frame = try item.socket.receive(.{});
+            defer frame.deinit();
 
-        const polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item {
-            zmq.ZPolling.Item.fromSocket(pull_socket, .{ .PollIn = true }),
-            zmq.ZPolling.Item.fromSocket(sub_proxy_socket, .{ .PollIn = true }),
-            zmq.ZPolling.Item.fromSocket(sync_socket, .{ .PollIn = true }),
-        });
+            const command = try frame.data();
+            std.debug.print("({s}) Command: {s}\n", .{APP_CONTEXT, command});
+            
+            if (std.mem.eql(u8, command, ".begin_topic")) {
+                // topics: {
+                //     const topics = std.StaticStringMap(void).initComptime(.{
+                //        .{ "name"}, .{"query"}, .{"placeholder"}
+                //     });
+                    
+                //     inline for (0..topics.kvs.len) |i| {
+                //         topic: {
+                //             var msg = try zmq.ZMessage.init(allocator, ".topic");
+                //             defer msg.deinit();
+                //             try src_c2s_socket.send(&msg, .{.more = true});
+                //             break :topic;
+                //         }
+                //         data: {
+                //             var msg = try zmq.ZMessage.init(allocator, topics.kvs.keys[i]);
+                //             defer msg.deinit();
+                //             try src_c2s_socket.send(&msg, .{});
+                //             break :data;
+                //         }
+                //     }
+                //     break :topics;
+                // }
 
-        std.debug.print("Waiting...\n", .{});
-
-        const dontwait = false;
-
-        while (true) {
-            var it = try polling.poll(allocator);
-            defer it.deinit();
-
-            // it.dump();
-
-            while (it.next()) |item| {
-                if (item.socket == sync_socket) {
-                    var frame = try item.socket.receive(.{});
-                    defer frame.deinit();
-                    std.debug.print("Accept Sync-Req", .{});
-
-                    sync_ack: {
-                        var msg = try zmq.ZMessage.init(allocator, "");
-                        try item.socket.send(&msg, .{});
-                        break :sync_ack;
-                    }
-                    std.debug.print("End send Sync-Ack", .{});
-
-                    push_sql: {
-                        var msg = try zmq.ZMessage.init(allocator, "select ?::varchar as name from Foo where v = ?::int");
-                        defer msg.deinit();
-                        try test_push_socket.send(&msg, .{});
-                        break :push_sql;
-                    }
-                    std.debug.print("End push SQL\n", .{});
+                ack_topics: {
+                    var msg = try zmq.ZMessage.init(allocator, ".end_topic");
+                    defer msg.deinit();
+                    try cmd_c2s_socket.send(&msg, .{});       
+                    break :ack_topics;
                 }
-                else if (item.socket == pull_socket) {
-                    std.debug.print("Begin pull\n", .{});
-                    var frame = try item.socket.receive(.{});
-                    defer frame.deinit();
-
-                    const q = try allocator.dupeZ(u8, try frame.data());
-                    defer allocator.free(q);
-
-                    std.debug.print("Begin parse\n", .{});
-                    duckDbParseSQL(q.ptr, q.len, pub_socket.socket_);
-                    std.debug.print("End parse\n", .{});
-
-                    terminate: {
-                        var term_envelope = try zmq.ZMessage.init(allocator, "command");
-                        defer term_envelope.deinit();
-                        try pub_socket.send(&term_envelope, .{.dontwait = dontwait, .more = true});
-
-                        var term_body = try zmq.ZMessage.init(allocator, ".exit");
-                        defer term_body.deinit();
-                        try pub_socket.send(&term_body, .{.dontwait = dontwait});
-                        break :terminate;
-                    }
-                }
-                else if (item.socket == sub_proxy_socket) {
-                    std.debug.print("Begin intercept sub\n", .{});
-                    {
-                        topic: {
-                            var frame = try item.socket.receive(.{});
-                            std.debug.print("Begin send1 {s}\n", .{try frame.data()});
-                            
-                            try pub_proxy_socket.send(&frame.message_, .{ .dontwait = dontwait, .more = true });
-                            break :topic;
-                        }
-                        data: {
-                            var frame = try item.socket.receive(.{});
-                            std.debug.print("Begin send2: {s}\n", .{try frame.data()});
-
-                            try pub_proxy_socket.send(&frame.message_, .{.dontwait = dontwait});
-                            std.debug.print("End send2\n", .{});
-                            break :data;
-                        }
-                    }
-                    std.debug.print("End intercept sub\n", .{});
-                }
+                
+                std.debug.print("({s}) End Send topics\n", .{APP_CONTEXT});
             }
 
-            std.debug.print(".next\n", .{});
+            parse: {
+                break :parse;
+            }
+
+            if (oneshot) {
+                end: {
+                    var msg = try zmq.ZMessage.init(allocator, ".quit_accept");
+                    defer msg.deinit();
+                    try cmd_c2s_socket.send(&msg, .{});
+                    break :end;
+                }
+                break :loop;
+            }
+            else if (std.mem.eql(u8, command, ".quit")) {
+                end: {
+                    var msg = try zmq.ZMessage.init(allocator, ".quit_accept");
+                    defer msg.deinit();
+                    try cmd_c2s_socket.send(&msg, .{});
+                    break :end;
+                }
+                break :loop;
+            }
         }
     }
+    std.debug.print("({s}) Terminated\n", .{APP_CONTEXT});
 }
+

@@ -15,12 +15,19 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
+
     const exe = b.addExecutable(.{
-        .name = "stage-generate-typescript",
+        .name = "stage-generate-ts",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+
+    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
+    exe.linkSystemLibrary("zmq");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

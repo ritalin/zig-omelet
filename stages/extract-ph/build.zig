@@ -20,6 +20,8 @@ pub fn build(b: *std.Build) void {
 
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
     
+    const dep_core = b.dependency("lib_core", .{});
+
     const exe = b.addExecutable(.{
         .name = "stage-extract-ph",
         .root_source_file = b.path("src/main.zig"),
@@ -44,6 +46,7 @@ pub fn build(b: *std.Build) void {
     exe.linkLibCpp();
 
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("core", dep_core.module("core"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

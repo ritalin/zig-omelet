@@ -44,6 +44,7 @@
         //    .lazy = false,
         //},
         .zzmq = .{ .path = "../vendor/zzmq" },
+        .lib_core = .{ .path = "../lib" },
         .stage_extract_ph = .{ .path = "../stages/extract-ph" },
         .stage_generate_ts = .{ .path = "../stages/generate" },
     },

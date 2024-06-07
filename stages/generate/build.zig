@@ -18,6 +18,8 @@ pub fn build(b: *std.Build) void {
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
 
+    const dep_core = b.dependency("lib_core", .{});
+
     const exe = b.addExecutable(.{
         .name = "stage-generate-ts",
         .root_source_file = b.path("src/main.zig"),
@@ -25,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("core", dep_core.module("core"));
 
     exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");

@@ -1,16 +1,10 @@
 const std = @import("std");
 const zmq = @import("zmq");
-
-// (control) Client -> Server
-const CMD_C2S_END_POINT = "ipc:///tmp/duckdb-ext-ph_cmd_c2s";
-// (control) Server -> Client
-const CMD_S2C_END_POINT = "ipc:///tmp/duckdb-ext-ph_cmd_s2c";
-// const CMD_S2C_END_POINT = "tcp://*:6001";
-
+const core = @import("core");
 
 const APP_CONTEXT = "runner";
 
-pub fn run(allocator: std.mem.Allocator, stage_count: struct {extract: usize, generate: usize}) !void {
+pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, generate: usize }) !void {
     std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
 
     var ctx = try zmq.ZContext.init(allocator);
@@ -18,12 +12,12 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct {extract: usize, ge
 
     const cmd_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
     defer cmd_c2s_socket.deinit();
-    try cmd_c2s_socket.bind(CMD_C2S_END_POINT);
+    try cmd_c2s_socket.bind(core.CMD_C2S_END_POINT);
 
     const cmd_s2c_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, &ctx);
     defer cmd_s2c_socket.deinit();
-    try cmd_s2c_socket.bind(CMD_S2C_END_POINT);
-    
+    try cmd_s2c_socket.bind(core.CMD_S2C_END_POINT);
+
     // const sub_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
     // defer sub_socket.deinit();
     // try sub_socket.bind(IPC_OUT_END_POINT);
@@ -31,14 +25,13 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct {extract: usize, ge
     std.time.sleep(1);
 
     ack_launch: {
-    var left_count = stage_count.extract + stage_count.generate;
+        var left_count = stage_count.extract + stage_count.generate;
 
         while (left_count > 0) {
-            std.debug.print("({s}) Wait launching ({})\n", .{APP_CONTEXT, left_count});
-            var frame = try cmd_c2s_socket.receive(.{});
-            defer frame.deinit();
+            std.debug.print("({s}) Wait launching ({})\n", .{ APP_CONTEXT, left_count });
+            const ev = try core.receiveEvent(cmd_c2s_socket);
 
-            if (std.mem.eql(u8, try frame.data(), ".launched")) {
+            if (ev == .launched) {
                 left_count -= 1;
             }
         }
@@ -63,23 +56,21 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct {extract: usize, ge
         // TODO handle .topic
 
         loop: while (true) {
-            std.debug.print("({s}) Wait sync topic\n", .{APP_CONTEXT});
+            std.debug.print("({s}) Wait sync topic ({})\n", .{APP_CONTEXT, left_count});
 
-            var frame = try cmd_c2s_socket.receive(.{});
-            defer frame.deinit();
-            std.debug.print("({s}) Received message: {s}\n", .{APP_CONTEXT, try frame.data()});
-
-            if (std.mem.eql(u8, try frame.data(), ".end_topic")) {
+            const ev = try core.receiveEvent(cmd_c2s_socket);
+            if (ev == .end_topic) {
                 left_count -= 1;
             }
-            if (left_count <= 0) { break :loop; }
+            if (left_count <= 0) {
+                break :loop;
+            }
         }
         std.debug.print("({s}) End sync topic \n", .{APP_CONTEXT});
         break :ack_topic;
     }
 
     // TODO .start_session
-    
 
     // loop: while (true) {
     //     topic: {

@@ -1,8 +1,12 @@
 const std = @import("std");
-const p = @import("./parser.zig");
+const core = @import("core");
+const run = @import("./parser.zig").run;
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
+
+    _ = try core.makeIpcChannelRoot();
 
     // プレースホルダは、?, $<N> と $<NAME>を混在できない
     // duckdb::NotImplementedExceptionが送出される
@@ -12,12 +16,9 @@ pub fn main() !void {
     // try p.parse_sql(arena.allocator(), "select $name::varchar as name, xyz, 123 from read_json($path::varchar) t(id, v, v2) where v = $value::int and v2 = $value2::bigint");
     // try p.parse_sql(arena.allocator(), "select $2 as name, xyz, 123 from Foo where v = $1");
 
-    try p.run(arena.allocator());
+    try run(arena.allocator());
 }
 
 test "simple test" {
     std.testing.refAllDecls(@This());
 }
-
-// cli:sql| PUSH (ipc) -> PULL (ipc) |svr
-// cli| SUB (ipc) <- XPUB (ipc) - XSUB (inproc) <- PUB (inproc) | svr:ph, sql

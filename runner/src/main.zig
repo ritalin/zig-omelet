@@ -1,4 +1,5 @@
 const std = @import("std");
+const core = @import("core");
 const run = @import("./run.zig").run;
 
 pub fn main() !void {
@@ -6,6 +7,9 @@ pub fn main() !void {
     defer arena.deinit();
 
     const allocator = arena.allocator();
+
+    var channel_root = try core.makeIpcChannelRoot();
+    defer channel_root.deinit();
 
     const app_dir_path = try std.fs.selfExeDirPathAlloc(allocator);
     var app_dir = try std.fs.openDirAbsolute(app_dir_path, .{});

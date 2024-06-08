@@ -46,7 +46,7 @@
 * Monitor
     * Extract/Generateステージの進捗管理
     * `end_xxx`が飛んできたら、`monitor_resume`イベントを投げてもらう
-    * `next_xxx`が飛んできたら、monitor_suspend`イベントを投げてもらう
+    * `next_xxx`が飛んできたら、`monitor_suspend`イベントを投げてもらう
         * カウントアップ
     * `resume`状態でカウント０なら、`monitor_done`イベントを発行する
         * ステージが、ホストに、`finished`イベントを発行する

@@ -13,19 +13,19 @@
     * ホストが、パスとハッシュから同期情報を構成する
     * FileWatchStageが、全てのソースを送信したら、@finished`イベントを発行する
 * ホストが、ExtractStageに`source`イベントを発行する
-    * パス
+    * パスとハッシュ
 * ExtractStageが、ホストに、`topic_payload`イベントを発行する
-    * topicとpayload
+    * topicとpayload + パス/ハッシュ
     * ホストが、同期情報を更新する
-        * 8種が変更されていれば破棄する
+        * キャッシュが変更されていれば破棄する
     * 全てのソースを通知し終えたら、`finished`イベントを発行する
 * ホストが、全てのpayloadを受け取ったら、GenerateStageに、`topic_payload`イベントを発行する
     * topicとpayload
     * ホストが、GenerateStageに、ソースが変わるごとに`next_generate`イベントを発行する。
     * ホストが、GenerateStageに、全てのソースを通知し終えたら、最後に`end_generate`イベントを発行する
-* GenerateStageが、コード生成する
-    * 全てのコード生成を終えたら、ホストに`finished`イベントを発行する
-
+        * ExtractStageから、`finished`イベントを受けっとっている場合のみ
+* GenerateStageが、`next_generate`イベントを受け取ったらコードを生成する
+* 全てのコード生成を終えたら、ホストに`finished`イベントを発行する
 
 ## Stage
 
@@ -43,12 +43,23 @@
         * placeholderを置換したSQLを保存する
     * TypescriptTygeGenerateStage
         * typescriptのコードを吐く
+* Monitor
+    * Extract/Generateステージの進捗管理
+    * `end_xxx`が飛んできたら、`monitor_resume`イベントを投げてもらう
+    * `next_xxx`が飛んできたら、monitor_suspend`イベントを投げてもらう
+        * カウントアップ
+    * `resume`状態でカウント０なら、`monitor_done`イベントを発行する
+        * ステージが、ホストに、`finished`イベントを発行する
 
 ## 通信チャネル
 
 * ホスト -> ステージ (Pub/Sub)
 * ステージ -> ホスト (Push/Pull)
-
+* ステージ -> ホスト (Req/Rep)
+    * 完了通知/完了樹里
+    * 終了通知/終了受理 (oneshotのみ)
+* ステージ <-> モニター
+    
 ## oneshot
 
 `oneshot`で起動した場合。

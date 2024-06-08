@@ -31,6 +31,8 @@ pub fn build(b: *std.Build) void {
 
     exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");
+    exe.linkLibCpp();
+    exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

@@ -11,9 +11,7 @@ pub const CMD_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_cmd_c2s", .{CHANN
 /// (control) Server -> Client
 pub const CMD_S2C_END_POINT = std.fmt.comptimePrint("ipc://{s}_cmd_s2c", .{CHANNEL_ROOT});
 /// (source) Client -> Server
-pub const SRC_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_src_c2s", .{CHANNEL_ROOT});
-/// (source) Client -> Server
-pub const SRC_S2C_END_POINT = std.fmt.comptimePrint("ipc://{s}_src_s2c", .{CHANNEL_ROOT});
+pub const REQ_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_req_c2s", .{CHANNEL_ROOT});
 
 /// ChannelType
 pub const ChannelType = enum {
@@ -37,6 +35,7 @@ pub const EventType = enum (u8) {
     end_generate,
     finished,
     finished_accept,
+    quit_all,
     quit,
     quit_accept,
 };
@@ -56,6 +55,7 @@ pub const Event = union(EventType) {
     end_generate: void,
     finished: void,
     finished_accept: void,
+    quit_all: void,
     quit: void,
     quit_accept: void,
 };

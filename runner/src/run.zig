@@ -12,7 +12,9 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
     const oneshot = true;
 
     var ctx = try zmq.ZContext.init(allocator);
-    defer ctx.deinit();
+    defer {
+        ctx.deinit();
+    }
 
     const cmd_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
     defer cmd_c2s_socket.deinit();
@@ -22,18 +24,9 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
     defer cmd_s2c_socket.deinit();
     try cmd_s2c_socket.bind(core.CMD_S2C_END_POINT);
 
-    var ctx2 = try zmq.ZContext.init(allocator);
-    defer ctx2.deinit();
-
-    // const src_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx2);
-    // defer src_c2s_socket.deinit();
-    // try src_c2s_socket.bind(core.SRC_C2S_END_POINT);
-
-    // const sub_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
-    // defer sub_socket.deinit();
-    // try sub_socket.bind(IPC_OUT_END_POINT);
-
-    std.time.sleep(1);
+    const req_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, &ctx);
+    defer req_c2s_socket.deinit();
+    try req_c2s_socket.bind(core.REQ_C2S_END_POINT);
 
     ack_launch: {
         var left_count = stage_count.watch + stage_count.extract + stage_count.generate;
@@ -81,7 +74,7 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
 
                 switch (ev) {
                     .topic => |payload| {
-                        std.debug.print("Receive topic: {s}\n", .{payload.name});
+                        std.debug.print("({s}) Receive topic: {s}\n", .{APP_CONTEXT, payload.name});
                         try topics.insert(payload.name);
                     },
                     .end_topic => {
@@ -105,10 +98,10 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
     main_loop: {
         const main_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
             zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
-            // TODO response_socket
+            zmq.ZPolling.Item.fromSocket(req_c2s_socket, .{ .PollIn = true }),
         });
 
-        var left_launched = stage_count.extract + stage_count.generate;
+        var left_launched = stage_count.watch + stage_count.extract + stage_count.generate;
         
         var source_payloads = try PayloadCacheManager.init(allocator);
         defer source_payloads.deinit();
@@ -125,6 +118,7 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
 
             while (it.next()) |item| {
                 const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
+                std.debug.print("({s}) Received command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
             
                 switch (ev) {
                     .source => |payload| {
@@ -134,21 +128,35 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
                         try core.sendEventWithPayload(allocator, cmd_s2c_socket, .source, &[_]Symbol{payload.path, payload.content, payload.hash});
                     },
                     .finished => {
+                        std.debug.print("({s}) Received finished somewhere\n", .{APP_CONTEXT});
                         if (oneshot) {
-                            // TODO Need to send quit event
-                            left_launched -= 1;
-                            std.debug.print("({s}) Left connected ({})\n", .{APP_CONTEXT, left_launched});
+                        //     std.time.sleep(100);
+                        //     // TODO Need to send quit event to taget
+                            try core.sendEvent(allocator, req_c2s_socket, .quit);
+                        }
+                        else {
+                            try core.sendEvent(allocator, req_c2s_socket, .finished_accept);
+                        }
+                            std.time.sleep(100_000);
+    try core.sendEvent(allocator, cmd_s2c_socket, .quit_all);
+                    },
+                    .quit_accept => {
+                        left_launched -= 1;
+                        std.debug.print("({s}) Left connected ({})\n", .{APP_CONTEXT, left_launched});
+                        if (left_launched <= 0) {
                             break :main_loop;
                         }
                     },
-                    else => {},
+                    else => {
+                        std.debug.print("({s}) Discard command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
+                    },
                 }
             }
         }
         break :main_loop;
     }
 
-    std.debug.print("Runner terminated\n", .{});
+    std.debug.print("({s}) terminated\n", .{APP_CONTEXT});
 }
 
 fn dumpTopics(topics: std.BufSet) void {

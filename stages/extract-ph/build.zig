@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
     exe.addIncludePath(b.path("../../vendor/json/include"));
     exe.linkLibCpp();
+    exe.linkLibC();
 
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe.root_module.addImport("core", dep_core.module("core"));

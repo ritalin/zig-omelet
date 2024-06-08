@@ -13,7 +13,7 @@ pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !voi
 
     while (it.next()) |ev| {
         const filter: []const u8 = @tagName(ev);
-
+        std.debug.print("[DEBUG] SUB filter: {s}\n", .{filter});
         try socket.setSocketOption(.{ .Subscribe = filter });
     }
 }
@@ -89,6 +89,7 @@ pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocke
             .end_generate => return .end_generate,
             .finished => return .finished,
             .finished_accept => return .finished_accept,
+            .quit_all => return .quit_all,
             .quit => return .quit,
             .quit_accept => return .quit_accept,
 

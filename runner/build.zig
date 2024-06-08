@@ -31,7 +31,9 @@ pub fn build(b: *std.Build) void {
 
     exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");
-
+    exe.linkLibCpp();
+    exe.linkLibC();
+    
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe.root_module.addImport("core", dep_core.module("core"));
 

@@ -24,7 +24,11 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer cmd_c2s_socket.deinit();
     try cmd_c2s_socket.connect(core.CMD_C2S_END_POINT);
 
-    std.time.sleep(1000);
+    const req_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, &ctx);
+    defer req_c2s_socket.deinit();
+    try req_c2s_socket.connect(core.REQ_C2S_END_POINT);
+
+    std.time.sleep(100_000);
 
     launch: {
         try core.sendEvent(allocator, cmd_c2s_socket, .launched);
@@ -34,6 +38,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
     const polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
         zmq.ZPolling.Item.fromSocket(cmd_s2c_socket, .{ .PollIn = true }),
+        zmq.ZPolling.Item.fromSocket(req_c2s_socket, .{ .PollIn = true }),
     });
 
     loop: while (true) {
@@ -48,15 +53,26 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
         while (it.next()) |item| {
             const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
-            std.debug.print("({s}) Command: {}\n", .{ APP_CONTEXT, ev });
+            std.debug.print("({s}) Received command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
 
             switch (ev) {
-                .quit => {
+                .quit_all => {
+                    std.debug.print("({s}) Begin Send quit accept (quit_all)\n", .{APP_CONTEXT});
                     try core.sendEvent(managed_allocator, cmd_c2s_socket, .quit_accept);
+                    std.debug.print("({s}) End Send quit accept (quit_all)\n", .{APP_CONTEXT});
                     break :loop;
                 },
-                else => {}
+                .quit => {
+                    try core.sendEvent(managed_allocator, req_c2s_socket, .quit_accept);
+                    std.debug.print("({s}) End Send quit accept (quit)\n", .{APP_CONTEXT});
+                    break :loop;
+                },
+                else => {
+                    std.debug.print("({s}) Discard command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
+                },
             }
         }
     }
+    
+    std.debug.print("({s}) Terminated\n", .{APP_CONTEXT});   
 }

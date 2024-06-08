@@ -6,7 +6,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    _ = try core.makeIpcChannelRoot();
+    // _ = try core.makeIpcChannelRoot();
 
     // プレースホルダは、?, $<N> と $<NAME>を混在できない
     // duckdb::NotImplementedExceptionが送出される

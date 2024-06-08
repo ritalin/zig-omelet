@@ -85,8 +85,10 @@ pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocke
             .begin_topic => return .begin_topic,
             .end_topic => return .end_topic,
             .begin_session => return .begin_session,
-            .begin_generate => return .begin_generate,
+            .next_generate => return .next_generate,
             .end_generate => return .end_generate,
+            .finished => return .finished,
+            .finished_accept => return .finished_accept,
             .quit => return .quit,
             .quit_accept => return .quit_accept,
 
@@ -95,7 +97,17 @@ pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocke
                 break :event .{ .topic = .{ .name = payload } };
             },
             .source => {
-                unreachable;
+                const path = try receivePayload(allocator, socket);
+                const content = try receivePayload(allocator, socket);
+                const hash = try receivePayload(allocator, socket);
+                
+                break :event .{
+                    .source = .{
+                        .path = try allocator.dupe(u8, path),
+                        .content = try allocator.dupe(u8, content),
+                        .hash = try allocator.dupe(u8, hash),
+                    }
+                };
             },
             .topic_payload => {
                 unreachable;

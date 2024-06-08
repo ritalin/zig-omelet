@@ -15,62 +15,27 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
-
-    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
 
     const dep_core = b.dependency("lib_core", .{});
 
     const exe = b.addExecutable(.{
-        .name = "extract-sql-placeholder",
+        .name = "stage-watch-files",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("core", dep_core.module("core"));
 
     exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");
 
-    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-    exe.root_module.addImport("core", dep_core.module("core"));
-
+    // This declares intent for the executable to be installed into the
+    // standard location when the user invokes the "install" step (the default
+    // step when running `zig build`).
     b.installArtifact(exe);
-
-    // watch-files stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_watch_files", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-watch-files");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
-    // extract-ph stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_extract_ph", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-            .duckdb_prefix = duckdb_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-extract-ph");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
-    // generate-ts stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_generate_ts", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-generate-ts");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish

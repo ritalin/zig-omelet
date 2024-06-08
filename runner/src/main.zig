@@ -16,6 +16,8 @@ pub fn main() !void {
     defer app_dir.close();
     std.debug.print("Runner/dir: {s}\n", .{app_dir_path});
 
+    // launch watch-files
+    var stage_watcher = try launchStage(allocator, app_dir, "stage-watch-files"); 
     // launch extrach-ph
     var stage_extract_ph = try launchStage(allocator, app_dir, "stage-extract-ph");
     // launch generate-ts
@@ -23,13 +25,14 @@ pub fn main() !void {
 
     const thread = try std.Thread.spawn(
         .{}, run, 
-        .{allocator, .{ .extract = 1, .generate = 1 }}
+        .{allocator, .{ .watch = 1, .extract = 1, .generate = 1 }}
     );
     thread.join();
 
     // TODO remove
     _ = try stage_extract_ph.kill();
     _ = try stage_generate_ts.kill();
+    _ = try stage_watcher.kill();
 
 
 }

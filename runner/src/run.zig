@@ -2,10 +2,14 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
+const Symbol = core.Symbol;
+
 const APP_CONTEXT = "runner";
 
-pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, generate: usize }) !void {
+pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, extract: usize, generate: usize }) !void {
     std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
+
+    const oneshot = true;
 
     var ctx = try zmq.ZContext.init(allocator);
     defer ctx.deinit();
@@ -32,7 +36,7 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
     std.time.sleep(1);
 
     ack_launch: {
-        var left_count = stage_count.extract + stage_count.generate;
+        var left_count = stage_count.watch + stage_count.extract + stage_count.generate;
 
         while (left_count > 0) {
             std.debug.print("({s}) Wait launching ({})\n", .{ APP_CONTEXT, left_count });
@@ -52,15 +56,14 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
         break :sync_topic;
     }
 
-    const topic_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
-        zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
-        // zmq.ZPolling.Item.fromSocket(src_c2s_socket, .{ .PollIn = true }),
-    });
-
     var topics = std.BufSet.init(allocator);
     defer topics.deinit();
 
     ack_topic: {
+        const topic_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
+            zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
+        });
+
         var left_count = stage_count.extract;
 
         loop: while (true) {
@@ -85,7 +88,7 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
                         left_count -= 1;
                         if (left_count <= 0) {
                             break :loop;
-                        }   
+                        }
                     },
                     else => {},
                 }
@@ -97,31 +100,53 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
 
     dumpTopics(topics);
 
-    // TODO .start_session
+    try core.sendEvent(allocator, cmd_s2c_socket, .begin_session);
 
-    // loop: while (true) {
-    //     topic: {
-    //         var frame = try sub_socket.receive(.{});
-    //         defer frame.deinit();
+    main_loop: {
+        const main_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
+            zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
+            // TODO response_socket
+        });
 
-    //         std.debug.print("topic: {s}\n", .{try frame.data()});
-    //         break :topic;
-    //     }
+        var left_launched = stage_count.extract + stage_count.generate;
+        
+        var source_payloads = try PayloadCacheManager.init(allocator);
+        defer source_payloads.deinit();
 
-    //     std.debug.print("Begin receive data \n", .{});
-    //     data: {
-    //         var frame = try sub_socket.receive(.{});
-    //         defer frame.deinit();
+        while (true) {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const managed_allocator = arena.allocator();
 
-    //         const msg = try frame.data();
-    //         std.debug.print("data: {s}\n", .{msg});
+            std.debug.print("({s}) Waiting...\n", .{APP_CONTEXT});
 
-    //         if (std.mem.eql(u8, msg, ".exit")) { break :loop; }
+            var it = try main_polling.poll(managed_allocator);
+            defer it.deinit();
 
-    //         break :data;
-    //     }
-    //     std.debug.print("End receive\n", .{});
-    // }
+            while (it.next()) |item| {
+                const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
+            
+                switch (ev) {
+                    .source => |payload| {
+                        try source_payloads.resetExpired(payload.hash, payload.path);
+                        std.debug.print("({s}) Received source path: {s}, hash: {s}\n", .{APP_CONTEXT, payload.path, payload.hash});
+
+                        try core.sendEventWithPayload(allocator, cmd_s2c_socket, .source, &[_]Symbol{payload.path, payload.content, payload.hash});
+                    },
+                    .finished => {
+                        if (oneshot) {
+                            // TODO Need to send quit event
+                            left_launched -= 1;
+                            std.debug.print("({s}) Left connected ({})\n", .{APP_CONTEXT, left_launched});
+                            break :main_loop;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+        break :main_loop;
+    }
 
     std.debug.print("Runner terminated\n", .{});
 }
@@ -136,3 +161,58 @@ fn dumpTopics(topics: std.BufSet) void {
     }
     std.debug.print("\n", .{});
 }
+
+const PayloadCacheManager = struct {
+    arena: *std.heap.ArenaAllocator,
+    cache: std.StringHashMap(Entry),
+
+    pub fn init(allocator: std.mem.Allocator) !PayloadCacheManager {
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+
+        return .{
+            .arena = arena,
+            .cache = std.StringHashMap(Entry).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *PayloadCacheManager) void {
+        const child = self.arena.child_allocator;
+
+        self.cache.deinit();
+        self.arena.deinit();
+        
+        child.destroy(self.arena);
+    }
+
+    pub fn resetExpired(self: *PayloadCacheManager, hash: Symbol, path: Symbol) !void {
+        var entry = try self.cache.getOrPut(path);
+
+        if (entry.found_existing) {
+            if (std.mem.eql(u8, entry.value_ptr.hash, hash)) return;
+
+            entry.value_ptr.deinit();
+        }
+
+        entry.value_ptr.* = try Entry.init(self.arena.allocator(), hash);
+    }
+
+    pub const Entry = struct {
+        allocator: std.mem.Allocator,
+        hash: Symbol,
+        contents: std.BufMap,
+
+        pub fn init(allocator: std.mem.Allocator, hash: Symbol) !Entry {
+            return .{
+                .allocator = allocator,
+                .hash = try allocator.dupe(u8, hash),
+                .contents = std.BufMap.init(allocator),
+            };
+        }
+
+        pub fn deinit(self: *Entry) void {
+            self.contents.deinit();
+            self.allocator.free(self.hash);
+        }
+    };
+};

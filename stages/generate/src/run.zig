@@ -13,8 +13,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
     const cmd_s2c_socket = try zmq.ZSocket.init(zmq.ZSocketType.Sub, &ctx);
     defer cmd_s2c_socket.deinit();
     try core.addSubscriberFilters(cmd_s2c_socket, .{
-        .launched = true,
-        .begin_generate = true,
         .topic_payload = true,
         .next_generate = true,
         .end_generate = true,
@@ -41,23 +39,23 @@ pub fn run(allocator: std.mem.Allocator) !void {
     loop: while (true) {
         std.debug.print("({s}) Waiting...\n", .{APP_CONTEXT});
 
-        var it = try polling.poll(allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const managed_allocator = arena.allocator();
+
+        var it = try polling.poll(managed_allocator);
         defer it.deinit();
 
         while (it.next()) |item| {
-            var frame = try item.socket.receive(.{});
-            defer frame.deinit();
+            const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
+            std.debug.print("({s}) Command: {}\n", .{ APP_CONTEXT, ev });
 
-            const command = try frame.data();
-
-            if (std.mem.eql(u8, command, ".quit")) {
-                end: {
-                    var msg = try zmq.ZMessage.init(allocator, ".quit_accept");
-                    defer msg.deinit();
-                    try cmd_c2s_socket.send(&msg, .{});
-                    break :end;
-                }
-                break :loop;
+            switch (ev) {
+                .quit => {
+                    try core.sendEvent(managed_allocator, cmd_c2s_socket, .quit_accept);
+                    break :loop;
+                },
+                else => {}
             }
         }
     }

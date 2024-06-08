@@ -7,8 +7,6 @@ const APP_CONTEXT = "exctract-ph";
 pub fn run(allocator: std.mem.Allocator) !void {
     std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
 
-    const oneshot = false;
-
     var ctx = try zmq.ZContext.init(allocator);
     defer ctx.deinit();
 
@@ -16,7 +14,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer cmd_s2c_socket.deinit();
     defer cmd_s2c_socket.deinit();
     try core.addSubscriberFilters(cmd_s2c_socket, .{
-        .launched = true,
         .begin_topic = true,
         .source = true,
         .quit = true,
@@ -29,10 +26,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
     var ctx2 = try zmq.ZContext.init(allocator);
     defer ctx2.deinit();
-
-    // const src_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, &ctx2);
-    // defer src_c2s_socket.deinit();
-    // try src_c2s_socket.connect(core.SRC_C2S_END_POINT);
 
     std.time.sleep(1000);
 
@@ -80,16 +73,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
                     break :loop;
                 },
                 else => {},
-            }
-
-            if (oneshot) {
-                end: {
-                    var msg = try zmq.ZMessage.init(allocator, ".quit_accept");
-                    defer msg.deinit();
-                    try cmd_c2s_socket.send(&msg, .{});
-                    break :end;
-                }
-                break :loop;
             }
         }
     }

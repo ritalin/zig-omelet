@@ -11,17 +11,21 @@
 * FileWatchStageが、ホストに、`source` イベントを発行する
     * パスとハッシュ
     * ホストが、パスとハッシュから同期情報を構成する
+    * FileWatchStageが、全てのソースを送信したら、@finished`イベントを発行する
 * ホストが、ExtractStageに`source`イベントを発行する
     * パス
 * ExtractStageが、ホストに、`topic_payload`イベントを発行する
     * topicとpayload
     * ホストが、同期情報を更新する
         * 8種が変更されていれば破棄する
-* ホストが、全てのpayloadを受け取ったら、GenerateStageに、`begin_generate`イベントを発行する
-    * ホストが、GenerateStageに、`topic_payload`イベントを発行する
-        * topicとpayload
-    * ホストが、GenerateStageに、`end_generate`イベントを発行する
+    * 全てのソースを通知し終えたら、`finished`イベントを発行する
+* ホストが、全てのpayloadを受け取ったら、GenerateStageに、`topic_payload`イベントを発行する
+    * topicとpayload
+    * ホストが、GenerateStageに、ソースが変わるごとに`next_generate`イベントを発行する。
+    * ホストが、GenerateStageに、全てのソースを通知し終えたら、最後に`end_generate`イベントを発行する
 * GenerateStageが、コード生成する
+    * 全てのコード生成を終えたら、ホストに`finished`イベントを発行する
+
 
 ## Stage
 
@@ -42,14 +46,16 @@
 
 ## 通信チャネル
 
-* CMD
-    * ホスト -> ステージ (Pub/Sub)
-    * ステージ -> ホスト (Push/Pull)
-* SRC
-    * ExtractStage -> ホスト(Push/Pull)
-    * ホスト -> ExtractStage (Pub/Sub)
-* GEN
-    * ホスト -> GenerateStage (Pub/Sub)
+* ホスト -> ステージ (Pub/Sub)
+* ステージ -> ホスト (Push/Pull)
+
+## oneshot
+
+`oneshot`で起動した場合。
+
+* ホストが、ExtractStageから、`finished`イベントを受け取ったら、`quit`イベントを投げ返す
+* ホストが、GenerateStageから、`finished`イベントを受け取ったら、`quit`イベントを投げ返す
+* ホストが、全ステージから、`quit_accept`イベントを受け取ったら、井ペンとループを抜け出す
 
 ## 要検討
 
@@ -63,4 +69,3 @@
             * ステージが、ホストに、`quit_accept`イベントを発行する
             * ステージを終了させる
 * ログ
-* oneshot

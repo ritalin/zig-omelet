@@ -283,7 +283,7 @@ pub const ZSocketOption = union(enum) {
     /// in which case a message shall be accepted if it matches at least one filter.
     /// 
     /// For more details, see https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html
-    Subscribe: []u8,
+    Subscribe: []const u8,
 
     /// ZMQ_UNSUBSCRIBE: option shall remove an existing message filter on a 'ZMQ_SUB' socket.
     /// 
@@ -292,7 +292,7 @@ pub const ZSocketOption = union(enum) {
     /// leaving the rest in place and functional.
     /// 
     /// For more details, see https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html
-    Unsubscribe: []u8,
+    Unsubscribe: []const u8,
 };
 
 /// System level socket, which allows for opening outgoing and
@@ -528,6 +528,55 @@ pub const ZSocket = struct {
 
         return ZMessageReceived.init(&message, hasMore != 0);
     }
+
+    pub fn receiveIterate(self: *ZSocket) !ReceiveIterator {
+        var frame = try self.receive(.{});
+        const msg = try frame.message_.allocExternal();
+
+        return .{ 
+            .socket_ = self, 
+            .current_ = msg,
+            .prev_ = msg,
+            .need_receve = false,
+        };
+    }
+
+    pub const ReceiveIterator = struct {
+        socket_: *ZSocket,
+        current_: ?zmessage.ZMessageExternal,
+        prev_: zmessage.ZMessageExternal,
+        need_receve: bool,
+
+        pub fn next(self: *ReceiveIterator) !?zmessage.ZMessage {
+            if (self.current_) |*msg| {
+                if (self.need_receve) {
+                    const err = c.zmq_msg_recv(&msg.msg_, self.socket_.socket_, 0);
+                    if (err < 0) {
+                        return error.ReceiveMessageFailed;
+                    }
+                }
+
+                const result: zmessage.ZMessage = .{ 
+                    .impl_ = .{ .External = msg.* } 
+                };
+
+                self.prev_ = msg.*;
+                self.need_receve = true;
+                
+                if (c.zmq_msg_more(&msg.msg_) == 0) {
+                    self.current_ = null;
+                }
+
+                return result;
+            } else {
+                return null;
+            }
+        }
+
+        pub fn deinit(self: *ReceiveIterator) void {
+            _ = c.zmq_msg_close(&self.prev_.msg_);
+        }
+    };
 
     /// Set an option on the socket. See `ZSocketOption` for details.
     pub fn setSocketOption(self: *ZSocket, opt: ZSocketOption) !void {
@@ -1061,4 +1110,74 @@ test "ZSocket - PubSub with filter" {
     try std.testing.expectEqual(topic_b.size(), try frame_b.size());
     try std.testing.expectEqualStrings(try topic_b.data(), try frame_b.data());
     try std.testing.expectEqual(false, frame_b.hasMore());
+}
+
+test "ZSocket - Receive iterate more" {
+    const allocator = std.testing.allocator;
+
+    // create the context
+    var context = try zcontext.ZContext.init(allocator);
+    defer context.deinit();
+
+    // bind the incoming socket
+    var incoming = try ZSocket.init(ZSocketType.Pair, &context);
+    defer incoming.deinit();
+    try incoming.bind("tcp://127.0.0.1:*");
+    try std.testing.expect(incoming.endpoint_ != null);
+
+    std.log.info("Endpoint: {s}", .{try incoming.endpoint()});
+
+    // connect to the socket
+    var outgoing = try ZSocket.init(ZSocketType.Pair, &context);
+    defer outgoing.deinit();
+
+    try outgoing.connect(try incoming.endpoint());
+    try std.testing.expect(outgoing.endpoint_ != null);
+
+    const msg_1 = "Greetings:";
+    const msg_2 = "Hello";
+    const msg_3 = "world!";
+
+    send: {
+        var outgoingData = try zmessage.ZMessage.initUnmanaged(msg_1, null);
+        defer outgoingData.deinit();
+        try outgoing.send(&outgoingData, .{ .dontwait = true, .more = true });
+        break :send;
+    }
+    send: {
+        var outgoingData = try zmessage.ZMessage.initUnmanaged(msg_2, null);
+        defer outgoingData.deinit();
+        try outgoing.send(&outgoingData, .{ .dontwait = true, .more = true });
+        break :send;
+    }
+    send: {
+        var outgoingData = try zmessage.ZMessage.initUnmanaged(msg_3, null);
+        defer outgoingData.deinit();
+        try outgoing.send(&outgoingData, .{ .dontwait = true, .more = false });
+        break :send;
+    }
+
+    var it = try incoming.receiveIterate();
+    defer it.deinit();
+
+    var msg = try it.next();
+    try std.testing.expect(msg != null);
+    var data = try msg.?.data();
+    try std.testing.expectEqual(msg_1.len, data.len);
+    try std.testing.expectEqualStrings(msg_1, data);
+
+    msg = try it.next();
+    try std.testing.expect(msg != null);
+    data = try msg.?.data();
+    try std.testing.expectEqual(msg_2.len, data.len);
+    try std.testing.expectEqualStrings(msg_2, data);
+
+    msg = try it.next();
+    try std.testing.expect(msg != null);
+    data = try msg.?.data();
+    try std.testing.expectEqual(msg_3.len, data.len);
+    try std.testing.expectEqualStrings(msg_3, data);
+
+    msg = try it.next();
+    try std.testing.expect(msg == null);
 }

@@ -18,6 +18,13 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
     defer cmd_s2c_socket.deinit();
     try cmd_s2c_socket.bind(core.CMD_S2C_END_POINT);
 
+    var ctx2 = try zmq.ZContext.init(allocator);
+    defer ctx2.deinit();
+
+    // const src_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx2);
+    // defer src_c2s_socket.deinit();
+    // try src_c2s_socket.bind(core.SRC_C2S_END_POINT);
+
     // const sub_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
     // defer sub_socket.deinit();
     // try sub_socket.bind(IPC_OUT_END_POINT);
@@ -29,7 +36,7 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
 
         while (left_count > 0) {
             std.debug.print("({s}) Wait launching ({})\n", .{ APP_CONTEXT, left_count });
-            const ev = try core.receiveEvent(cmd_c2s_socket);
+            const ev = try core.receiveEventType(cmd_c2s_socket);
 
             if (ev == .launched) {
                 left_count -= 1;
@@ -41,11 +48,14 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
     }
 
     sync_topic: {
-        var msg = try zmq.ZMessage.init(allocator, ".begin_topic");
-        defer msg.deinit();
-        try cmd_s2c_socket.send(&msg, .{});
+        try core.sendEvent(allocator, cmd_s2c_socket, .begin_topic);
         break :sync_topic;
     }
+
+    const topic_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
+        zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
+        // zmq.ZPolling.Item.fromSocket(src_c2s_socket, .{ .PollIn = true }),
+    });
 
     var topics = std.BufSet.init(allocator);
     defer topics.deinit();
@@ -53,22 +63,39 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
     ack_topic: {
         var left_count = stage_count.extract;
 
-        // TODO handle .topic
-
         loop: while (true) {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const managed_allocator = arena.allocator();
+
             std.debug.print("({s}) Wait sync topic ({})\n", .{APP_CONTEXT, left_count});
 
-            const ev = try core.receiveEvent(cmd_c2s_socket);
-            if (ev == .end_topic) {
-                left_count -= 1;
-            }
-            if (left_count <= 0) {
-                break :loop;
+            var it = try topic_polling.poll(managed_allocator);
+            defer it.deinit();
+
+            while (it.next()) |item| {
+                const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
+
+                switch (ev) {
+                    .topic => |payload| {
+                        std.debug.print("Receive topic: {s}\n", .{payload.name});
+                        try topics.insert(payload.name);
+                    },
+                    .end_topic => {
+                        left_count -= 1;
+                        if (left_count <= 0) {
+                            break :loop;
+                        }   
+                    },
+                    else => {},
+                }
             }
         }
         std.debug.print("({s}) End sync topic \n", .{APP_CONTEXT});
         break :ack_topic;
     }
+
+    dumpTopics(topics);
 
     // TODO .start_session
 
@@ -97,4 +124,15 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { extract: usize, g
     // }
 
     std.debug.print("Runner terminated\n", .{});
+}
+
+fn dumpTopics(topics: std.BufSet) void {
+    std.debug.print("({s}) Received topics ({}): ", .{APP_CONTEXT, topics.count()});
+
+    var it = topics.iterator();
+
+    while (it.next()) |topic| {
+        std.debug.print("{s}, ", .{topic.*});
+    }
+    std.debug.print("\n", .{});
 }

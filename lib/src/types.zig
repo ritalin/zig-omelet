@@ -11,9 +11,9 @@ pub const CMD_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_cmd_c2s", .{CHANN
 /// (control) Server -> Client
 pub const CMD_S2C_END_POINT = std.fmt.comptimePrint("ipc://{s}_cmd_s2c", .{CHANNEL_ROOT});
 /// (source) Client -> Server
-pub const SRC_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_pipe_c2s", .{CHANNEL_ROOT});
+pub const SRC_C2S_END_POINT = std.fmt.comptimePrint("ipc://{s}_src_c2s", .{CHANNEL_ROOT});
 /// (source) Client -> Server
-pub const SRC_S2C_END_POINT = std.fmt.comptimePrint("ipc://{s}_pipe_s2c", .{CHANNEL_ROOT});
+pub const SRC_S2C_END_POINT = std.fmt.comptimePrint("ipc://{s}_src_s2c", .{CHANNEL_ROOT});
 
 /// ChannelType
 pub const ChannelType = enum {
@@ -33,14 +33,18 @@ pub const EventType = enum (u8) {
     begin_session,
     source,
     topic_payload,
-    begin_generate,
+    next_generate,
     end_generate,
+    finishd,
     quit,
     quit_accept,
 };
+/// Event type options
+pub const EventTypes = std.enums.EnumFieldStruct(EventType, bool, false);
+
 /// Events
 pub const Event = union(EventType) {
-    laucned: void,
+    launched: void,
     begin_topic: void,
     topic: struct { name: Symbol },
     end_topic: void,

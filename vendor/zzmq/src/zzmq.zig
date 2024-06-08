@@ -16,7 +16,7 @@ pub const ZMessageReceived = zsocket.ZMessageReceived;
 pub const ZMessage = zmessage.ZMessage;
 
 pub const ZPolling = zpolling.ZPolling;
-pub const ZPollingEvents = zpolling.ZPollingEvents;
+pub const ZPollEvents = zpolling.ZPollEvents;
 
 pub const makeProxy = zsocket.makeProxy;
 

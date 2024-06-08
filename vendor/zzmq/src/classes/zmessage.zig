@@ -219,7 +219,7 @@ test "ZMessageInternal - create unmanaged" {
     try std.testing.expectEqualStrings(msg, data.data());
 }
 
-const ZMessageExternal = struct {
+pub const ZMessageExternal = struct {
     msg_: c.zmq_msg_t,
     msgOwned_: bool = true,
 

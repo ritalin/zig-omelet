@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const run = @import("./run.zig").run;
+const Stage = @import("./Stage.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -8,6 +8,9 @@ pub fn main() !void {
 
     // _ = try core.makeIpcChannelRoot();
     
-    try run(arena.allocator());
+    var stage = try Stage.init(arena.allocator());
+    defer stage.deinit();
+
+    try stage.run();
 }
 

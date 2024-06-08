@@ -5,35 +5,53 @@ const core = @import("core");
 const Symbol = core.Symbol;
 
 const APP_CONTEXT = "runner";
+const Self = @This();
 
-pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, extract: usize, generate: usize }) !void {
+allocator: std.mem.Allocator,
+context: zmq.ZContext,
+sender_socket: *zmq.ZSocket,
+rep_socket: *zmq.ZSocket,
+receiver_socket: *zmq.ZSocket,
+
+pub fn init(allocator: std.mem.Allocator) !Self {
+    var ctx = try zmq.ZContext.init(allocator);
+
+    const receiver_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
+    try receiver_socket.bind(core.CMD_C2S_END_POINT);
+
+    const sender_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, &ctx);
+    try sender_socket.bind(core.CMD_S2C_END_POINT);
+
+    const rep_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, &ctx);
+    try rep_socket.bind(core.REQ_C2S_END_POINT);
+
+    return .{
+        .allocator = allocator,
+        .context = ctx,
+        .sender_socket = sender_socket,
+        .rep_socket = rep_socket,
+        .receiver_socket = receiver_socket,
+    };
+}
+
+pub fn deinit(self: *Self) void {
+    self.rep_socket.deinit();
+    self.sender_socket.deinit();
+    self.receiver_socket.deinit();
+    self.context.deinit();
+}
+
+pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, generate: usize }) !void {
     std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
 
     const oneshot = true;
-
-    var ctx = try zmq.ZContext.init(allocator);
-    defer {
-        ctx.deinit();
-    }
-
-    const cmd_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pull, &ctx);
-    defer cmd_c2s_socket.deinit();
-    try cmd_c2s_socket.bind(core.CMD_C2S_END_POINT);
-
-    const cmd_s2c_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, &ctx);
-    defer cmd_s2c_socket.deinit();
-    try cmd_s2c_socket.bind(core.CMD_S2C_END_POINT);
-
-    const req_c2s_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, &ctx);
-    defer req_c2s_socket.deinit();
-    try req_c2s_socket.bind(core.REQ_C2S_END_POINT);
 
     ack_launch: {
         var left_count = stage_count.watch + stage_count.extract + stage_count.generate;
 
         while (left_count > 0) {
             std.debug.print("({s}) Wait launching ({})\n", .{ APP_CONTEXT, left_count });
-            const ev = try core.receiveEventType(cmd_c2s_socket);
+            const ev = try core.receiveEventType(self.receiver_socket);
 
             if (ev == .launched) {
                 left_count -= 1;
@@ -45,22 +63,22 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
     }
 
     sync_topic: {
-        try core.sendEvent(allocator, cmd_s2c_socket, .begin_topic);
+        try core.sendEvent(self.allocator, self.sender_socket, .begin_topic);
         break :sync_topic;
     }
 
-    var topics = std.BufSet.init(allocator);
+    var topics = std.BufSet.init(self.allocator);
     defer topics.deinit();
 
     ack_topic: {
         const topic_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
-            zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
+            zmq.ZPolling.Item.fromSocket(self.receiver_socket, .{ .PollIn = true }),
         });
 
         var left_count = stage_count.extract;
 
         loop: while (true) {
-            var arena = std.heap.ArenaAllocator.init(allocator);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const managed_allocator = arena.allocator();
 
@@ -93,21 +111,21 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
 
     dumpTopics(topics);
 
-    try core.sendEvent(allocator, cmd_s2c_socket, .begin_session);
+    try core.sendEvent(self.allocator, self.sender_socket, .begin_session);
 
     main_loop: {
         const main_polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
-            zmq.ZPolling.Item.fromSocket(cmd_c2s_socket, .{ .PollIn = true }),
-            zmq.ZPolling.Item.fromSocket(req_c2s_socket, .{ .PollIn = true }),
+            zmq.ZPolling.Item.fromSocket(self.receiver_socket, .{ .PollIn = true }),
+            zmq.ZPolling.Item.fromSocket(self.rep_socket, .{ .PollIn = true }),
         });
 
         var left_launched = stage_count.watch + stage_count.extract + stage_count.generate;
         
-        var source_payloads = try PayloadCacheManager.init(allocator);
+        var source_payloads = try PayloadCacheManager.init(self.allocator);
         defer source_payloads.deinit();
 
         while (true) {
-            var arena = std.heap.ArenaAllocator.init(allocator);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
             const managed_allocator = arena.allocator();
 
@@ -125,20 +143,20 @@ pub fn run(allocator: std.mem.Allocator, stage_count: struct { watch: usize, ext
                         try source_payloads.resetExpired(payload.hash, payload.path);
                         std.debug.print("({s}) Received source path: {s}, hash: {s}\n", .{APP_CONTEXT, payload.path, payload.hash});
 
-                        try core.sendEventWithPayload(allocator, cmd_s2c_socket, .source, &[_]Symbol{payload.path, payload.content, payload.hash});
+                        try core.sendEventWithPayload(self.allocator, self.sender_socket, .source, &[_]Symbol{payload.path, payload.content, payload.hash});
                     },
                     .finished => {
                         std.debug.print("({s}) Received finished somewhere\n", .{APP_CONTEXT});
                         if (oneshot) {
                         //     std.time.sleep(100);
                         //     // TODO Need to send quit event to taget
-                            try core.sendEvent(allocator, req_c2s_socket, .quit);
+                            try core.sendEvent(self.allocator, self.rep_socket, .quit);
                         }
                         else {
-                            try core.sendEvent(allocator, req_c2s_socket, .finished_accept);
+                            try core.sendEvent(self.allocator, self.rep_socket, .finished_accept);
                         }
-                            std.time.sleep(100_000);
-    try core.sendEvent(allocator, cmd_s2c_socket, .quit_all);
+    std.time.sleep(100_000);
+    try core.sendEvent(self.allocator, self.sender_socket, .quit_all);
                     },
                     .quit_accept => {
                         left_launched -= 1;

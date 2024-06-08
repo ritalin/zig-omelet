@@ -1,10 +1,13 @@
 const std = @import("std");
 const core = @import("core");
-const run = @import("./parser.zig").run;
+const Stage = @import("./Stage.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
+
+    var stage = try Stage.init(arena.allocator());
+    defer stage.deinit();
 
     // _ = try core.makeIpcChannelRoot();
 
@@ -16,9 +19,6 @@ pub fn main() !void {
     // try p.parse_sql(arena.allocator(), "select $name::varchar as name, xyz, 123 from read_json($path::varchar) t(id, v, v2) where v = $value::int and v2 = $value2::bigint");
     // try p.parse_sql(arena.allocator(), "select $2 as name, xyz, 123 from Foo where v = $1");
 
-    try run(arena.allocator());
+    try stage.run();
 }
 
-test "simple test" {
-    std.testing.refAllDecls(@This());
-}

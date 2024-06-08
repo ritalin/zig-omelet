@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const run = @import("./run.zig").run;
+const Runner = @import("./Runner.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -11,42 +11,28 @@ pub fn main() !void {
     var channel_root = try core.makeIpcChannelRoot();
     defer channel_root.deinit();
 
+    var runner = try Runner.init(allocator);
+
     const app_dir_path = try std.fs.selfExeDirPathAlloc(allocator);
     var app_dir = try std.fs.openDirAbsolute(app_dir_path, .{});
     defer app_dir.close();
     std.debug.print("Runner/dir: {s}\n", .{app_dir_path});
 
     // launch watch-files
-    var stage_extract_ph = try launchStage(arena.child_allocator, app_dir, "stage-watch-files", false); 
+    var stage_extract_ph = try launchStage(arena.child_allocator, app_dir, "stage-watch-files", true); 
     // launch extrach-ph
     var stage_generate_ts = try launchStage(arena.child_allocator, app_dir, "stage-extract-ph", false);
     // launch generate-ts
     var stage_watcher = try launchStage(arena.child_allocator, app_dir, "stage-generate-ts", false);
 
-    // const thread = try std.Thread.spawn(
-    //     .{}, run, 
-    //     .{allocator, .{ .watch = 1, .extract = 1, .generate = 1 }}
-    // );
-    // thread.join();
-
-    // // TODO remove
-    // _ = try stage_extract_ph.kill();
-    // _ = try stage_generate_ts.kill();
-    // _ = try stage_watcher.kill();
-
-    try run(allocator, .{ .watch = 1, .extract = 1, .generate = 1 });
+    try runner.run(.{ .watch = 1, .extract = 1, .generate = 1 });
+    runner.deinit();
 
     std.debug.print("Waiting stage terminate...\n", .{});
-
     _ = try stage_extract_ph.wait();
     _ = try stage_generate_ts.wait();
     _ = try stage_watcher.wait();
     std.debug.print("Stage terminate done\n", .{});
-
-    // stage_extract_ph = undefined;
-    // stage_generate_ts = undefined;
-    // stage_watcher = undefined;
-
 }
 
 fn launchStage(allocator: std.mem.Allocator, app_dir: std.fs.Dir, stage_name: []const u8, ignore_stderr: bool) !std.process.Child {

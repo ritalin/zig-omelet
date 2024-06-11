@@ -61,6 +61,7 @@ pub const ZPolling = struct {
 
     pub fn pollWithTimeout(self: ZPolling, timeout_ms: c_int) !Iterator {
         const raw_items = try self.allocator.alloc(c.zmq_pollitem_t, self.items.len);
+        errdefer self.allocator.free(raw_items);
 
         for (self.items, 0..) |item, i| {
             raw_items[i] = .{
@@ -71,7 +72,20 @@ pub const ZPolling = struct {
             };
         }
 
-        _ = c.zmq_poll(raw_items.ptr, @as(c_int, @intCast(raw_items.len)), timeout_ms);
+        const result = c.zmq_poll(raw_items.ptr, @as(c_int, @intCast(raw_items.len)), timeout_ms);
+        if (result == 0) {
+            return error.PollingTimeout;
+        }
+        else if (result < 0) {
+            const err_no = c.zmq_errno();
+
+            return switch (err_no) {
+                c.ETERM => error.SocketClosed,
+                c.EFAULT => error.InvalidPollingItems,
+                c.EINTR => error.InvalidInterrupted,
+                else => error.PollingFailed,
+            };
+        }
 
         return .{
             .allocator = self.allocator,

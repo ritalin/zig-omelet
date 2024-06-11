@@ -13,7 +13,7 @@ const APP_CONTEXT = "watch-files";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.ClientConnection,
+connection: *core.sockets.Connection.Client,
 logger: core.Logger,
 
 const Self = @This();
@@ -21,7 +21,7 @@ const Self = @This();
 pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.ClientConnection.init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Client.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
         .begin_session = true,
         .quit = true,

@@ -3,16 +3,16 @@ const zmq = @import("zmq");
 
 const types = @import("./types.zig");
 const Symbol = types.Symbol;
-const ClientConnection = @import("./sockets/ClientConnection.zig");
+const Connection = @import("./sockets/Connection.zig");
 
 const Self = @This();
 
 allocator: std.mem.Allocator,
 app_context: Symbol,
-connection: *ClientConnection,
+connection: *Connection.Client,
 stand_alone: bool,
 
-pub fn init(allocator: std.mem.Allocator, app_context: Symbol, connection: *ClientConnection, stand_alone: bool) Self {
+pub fn init(allocator: std.mem.Allocator, app_context: Symbol, connection: *Connection.Client, stand_alone: bool) Self {
     return .{
         .allocator = allocator,
         .app_context = app_context,

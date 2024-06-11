@@ -12,44 +12,46 @@ const helpers = @import("../helpers.zig");
 const SubscribeSocket = @import("./SubscribeSocket.zig");
 const Logger = @import("../Logger.zig");
 
-const Self = @This();
+pub const Client = struct {
+    const Self = @This();
 
-allocator: std.mem.Allocator,
-request_socket: *zmq.ZSocket,
-subscribe_socket: *SubscribeSocket,
-dispatcher: EventDispatcher,
+    allocator: std.mem.Allocator,
+    request_socket: *zmq.ZSocket,
+    subscribe_socket: *SubscribeSocket,
+    dispatcher: EventDispatcher,
 
-pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
-    const request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
-    const subscribe_socket = try SubscribeSocket.init(allocator, context);
+    pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
+        const request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
+        const subscribe_socket = try SubscribeSocket.init(allocator, context);
 
-    const self = try allocator.create(Self);
-    self.* = .{
-        .allocator = allocator,
-        .request_socket = request_socket,
-        .subscribe_socket = subscribe_socket,
-        .dispatcher = try EventDispatcher.init(
-            allocator, request_socket, 
-            &.{request_socket, subscribe_socket.socket}
-        ),
-    };
+        const self = try allocator.create(Self);
+        self.* = .{
+            .allocator = allocator,
+            .request_socket = request_socket,
+            .subscribe_socket = subscribe_socket,
+            .dispatcher = try EventDispatcher.init(
+                allocator, request_socket, 
+                &.{request_socket, subscribe_socket.socket}
+            ),
+        };
 
-    return self;
-}
+        return self;
+    }
 
-pub fn deinit(self: *Self) void {
-    self.dispatcher.deinit();
-    self.request_socket.deinit();
-    self.subscribe_socket.deinit();
-    self.allocator.destroy(self);
-    self.* = undefined;
-}
+    pub fn deinit(self: *Self) void {
+        self.dispatcher.deinit();
+        self.request_socket.deinit();
+        self.subscribe_socket.deinit();
+        self.allocator.destroy(self);
+        self.* = undefined;
+    }
 
-/// Connect owned sockets
-pub fn connect(self: Self) !void {
-    try self.request_socket.connect(types.REQ_C2S_END_POINT);
-    try self.subscribe_socket.connect();
-}
+    /// Connect owned sockets
+    pub fn connect(self: Self) !void {
+        try self.request_socket.connect(types.REQ_C2S_END_POINT);
+        try self.subscribe_socket.connect();
+    }
+};
 
 pub fn EventQueue(comptime Entry: type) type {
     return struct {

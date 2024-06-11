@@ -7,13 +7,13 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.ClientConnection,
+connection: *core.sockets.Connection.Client,
 logger: core.Logger,
 
 pub fn init(allocator: std.mem.Allocator) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.ClientConnection.init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Client.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
         .begin_topic = true,
         .source = true,

@@ -43,45 +43,6 @@ pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, gene
 
     const oneshot = true;
 
-    // {
-
-        // ack_launch: while (true) {
-        //     systemLog.debug("[{s}] Wait launching ({})", .{ APP_CONTEXT, left_launching });
-            
-        //     const ev = core.receiveEventWithPayload(self.allocator, self.rep_socket) catch |err| switch (err) {
-        //         error.InvalidResponse => {
-        //             try core.sendEvent(self.allocator, self.rep_socket, .nack);
-        //             continue;
-        //         },
-        //         else => return err,
-        //     };
-        //     defer ev.deinit(self.allocator);
-
-        //     try core.sendEvent(self.allocator, self.rep_socket, .ack);
-
-        //     switch (ev) {
-        //         // .launched => |payload| {
-        //         //     left_launching -= 1;
-        //         //     traceLog.debug("Received launched: '{s}' ({})", .{payload.stage_name, left_launching});
-        //         //     if (left_launching <= 0) {
-        //         //         break :ack_launch;
-        //         //     }
-        //         // },
-        //         .log => |payload| {
-        //             log(payload.level, payload.content);
-        //         },
-        //         else => {
-        //             systemLog.debug("[{s}] Discard command: {} (wait launch)", .{APP_CONTEXT, std.meta.activeTag(ev)});
-        //         },
-        //     }
-        // }
-    // }
-
-    // sync_topic: {
-    //     try core.sendEvent(self.allocator, self.sender_socket, .begin_topic);
-    //     break :sync_topic;
-    // }
-
     var polling = try zmq.ZPolling.init(self.allocator, &.{
         zmq.ZPolling.Item.fromSocket(self.rep_socket, .{ .PollIn = true }),
     });

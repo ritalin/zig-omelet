@@ -72,6 +72,7 @@ pub const Client = struct {
                         return .{ 
                             .allocator = dispatcher.allocator,
                             .socket = entry.socket, 
+                            .kind = .post,
                             .event = try entry.event.clone(dispatcher.allocator) 
                         };
                     }
@@ -106,12 +107,101 @@ pub const Client = struct {
                 defer event.deinit(dispatcher.allocator);
 
                 try dispatcher.receive_queue.enqueue(.{
-                    .allocator = dispatcher.allocator, .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
+                    .allocator = dispatcher.allocator, 
+                    .kind = .response,
+                    .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
                 });
             }
         }
 
         return null;
+    }
+};
+
+pub const Server = struct {
+    allocator: std.mem.Allocator,
+    send_socket: *zmq.ZSocket,
+    reply_socket: *zmq.ZSocket,
+    dispatcher: EventDispatcher,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
+        const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
+        const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
+
+        const self = try allocator.create(Self);
+        self.* = .{
+            .allocator = allocator,
+            .send_socket = send_socket,
+            .reply_socket = reply_socket,
+            .dispatcher = try EventDispatcher.init(allocator, send_socket, &.{reply_socket}, onDispatch),
+        };
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.reply_socket.deinit();
+        self.send_socket.deinit();        
+        self.allocator.destroy(self);
+        self.* = undefined;
+    }
+
+    pub fn bind(self: *Self) !void {
+        try self.send_socket.bind(types.CMD_S2C_END_POINT);
+        try self.reply_socket.bind(types.REQ_C2S_END_POINT);
+    }
+
+    fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
+        while (true) {
+            while (dispatcher.receive_queue.dequeue()) |entry| {
+                return entry;
+            }
+
+            if (dispatcher.send_queue.dequeue()) |*entry| {
+                defer entry.deinit();
+
+                helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
+                    else => {
+                        Logger.Server.traceLog.debug("Unexpected error on sending: {}", .{err});
+                        return err;
+                    }
+                };
+
+                if (entry.kind == .reply) {
+                    continue;
+                }
+            }
+            else if (dispatcher.receive_queue.hasMore()) {
+                continue;
+            }
+            else if (dispatcher.state == .done) {
+                break;
+            }
+
+            var it = try dispatcher.polling.poll();
+            defer it.deinit();
+
+            while (it.next()) |item| {
+                const event = helpers.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
+                    error.InvalidResponse => {
+                        try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
+                        continue;
+                    },
+                    else => return err,
+                };
+                defer event.deinit(dispatcher.allocator);
+
+                try dispatcher.receive_queue.enqueue(.{
+                    .allocator = dispatcher.allocator, 
+                    .kind = .response,
+                    .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
+                });
+            }
+        }
+
+        return null;     
     }
 };
 
@@ -215,13 +305,17 @@ pub const EventDispatcher = struct {
 
     pub fn post(self: *EventDispatcher, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
-            .allocator = self.allocator, .socket = self.send_socket, .event = try event.clone(self.allocator)
+            .allocator = self.allocator, 
+            .kind = .post,
+            .socket = self.send_socket, .event = try event.clone(self.allocator)
         });
     }
 
     pub fn reply(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
-            .allocator = self.allocator, .socket = socket, .event = try event.clone(self.allocator)
+            .allocator = self.allocator, 
+            .kind = .reply,
+            .socket = socket, .event = try event.clone(self.allocator)
         });
     }
 
@@ -256,6 +350,7 @@ pub const EventDispatcher = struct {
     pub const Entry = struct {
         allocator: std.mem.Allocator,
         socket: *zmq.ZSocket,
+        kind: enum { post, reply, response },
         event: types.Event,
 
         pub fn deinit(self: @This()) void {

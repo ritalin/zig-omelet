@@ -39,49 +39,48 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, generate: usize }) !void {
-    systemLog.debug("[{s}] Beginning", .{APP_CONTEXT});
+    systemLog.debug("[{s}] Launched", .{APP_CONTEXT});
 
     const oneshot = true;
 
-    {
-        var left_launching = stage_count.watch + stage_count.extract + stage_count.generate;
+    // {
 
-        ack_launch: while (true) {
-            systemLog.debug("[{s}] Wait launching ({})", .{ APP_CONTEXT, left_launching });
+        // ack_launch: while (true) {
+        //     systemLog.debug("[{s}] Wait launching ({})", .{ APP_CONTEXT, left_launching });
             
-            const ev = core.receiveEventWithPayload(self.allocator, self.rep_socket) catch |err| switch (err) {
-                error.InvalidResponse => {
-                    try core.sendEvent(self.allocator, self.rep_socket, .nack);
-                    continue;
-                },
-                else => return err,
-            };
-            defer ev.deinit(self.allocator);
+        //     const ev = core.receiveEventWithPayload(self.allocator, self.rep_socket) catch |err| switch (err) {
+        //         error.InvalidResponse => {
+        //             try core.sendEvent(self.allocator, self.rep_socket, .nack);
+        //             continue;
+        //         },
+        //         else => return err,
+        //     };
+        //     defer ev.deinit(self.allocator);
 
-            try core.sendEvent(self.allocator, self.rep_socket, .ack);
+        //     try core.sendEvent(self.allocator, self.rep_socket, .ack);
 
-            switch (ev) {
-                .launched => |payload| {
-                    left_launching -= 1;
-                    traceLog.debug("Received launched: '{s}' ({})", .{payload.stage_name, left_launching});
-                    if (left_launching <= 0) {
-                        break :ack_launch;
-                    }
-                },
-                .log => |payload| {
-                    log(payload.level, payload.content);
-                },
-                else => {
-                    systemLog.debug("[{s}] Discard command: {} (wait launch)", .{APP_CONTEXT, std.meta.activeTag(ev)});
-                },
-            }
-        }
-    }
+        //     switch (ev) {
+        //         // .launched => |payload| {
+        //         //     left_launching -= 1;
+        //         //     traceLog.debug("Received launched: '{s}' ({})", .{payload.stage_name, left_launching});
+        //         //     if (left_launching <= 0) {
+        //         //         break :ack_launch;
+        //         //     }
+        //         // },
+        //         .log => |payload| {
+        //             log(payload.level, payload.content);
+        //         },
+        //         else => {
+        //             systemLog.debug("[{s}] Discard command: {} (wait launch)", .{APP_CONTEXT, std.meta.activeTag(ev)});
+        //         },
+        //     }
+        // }
+    // }
 
-    sync_topic: {
-        try core.sendEvent(self.allocator, self.sender_socket, .begin_topic);
-        break :sync_topic;
-    }
+    // sync_topic: {
+    //     try core.sendEvent(self.allocator, self.sender_socket, .begin_topic);
+    //     break :sync_topic;
+    // }
 
     var polling = try zmq.ZPolling.init(self.allocator, &.{
         zmq.ZPolling.Item.fromSocket(self.rep_socket, .{ .PollIn = true }),
@@ -89,6 +88,7 @@ pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, gene
     defer polling.deinit();
 
     main_loop: {
+        var left_launching = stage_count.watch + stage_count.extract + stage_count.generate;
         var left_topic_stage = stage_count.extract;
         var left_launched = stage_count.watch + stage_count.extract + stage_count.generate;
         
@@ -99,8 +99,6 @@ pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, gene
         defer source_payloads.deinit();
 
         while (true) {
-            systemLog.debug("[{s}] Waiting...", .{APP_CONTEXT});
-
             var it = try polling.poll();
             defer it.deinit();
 
@@ -116,6 +114,16 @@ pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, gene
                 traceLog.debug("[{s}] Received command: {}", .{APP_CONTEXT, std.meta.activeTag(ev)});
             
                 switch (ev) {
+                    .launched => |payload| {
+                        try core.sendEvent(self.allocator, self.rep_socket, .ack);
+
+                        left_launching -= 1;
+                        traceLog.debug("Received launched: '{s}' ({})", .{payload.stage_name, left_launching});
+                        if (left_launching <= 0) {
+                            // collect topics
+                            try core.sendEvent(self.allocator, self.sender_socket, .begin_topic);
+                        }
+                    },
                     .topic => |payload| {
                         try core.sendEvent(self.allocator, self.rep_socket, .ack);
 

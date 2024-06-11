@@ -40,18 +40,27 @@ const ZPollEventSet = std.enums.EnumSet(ZPollEvent);
 pub const ZPollEvents = std.enums.EnumFieldStruct(ZPollEvent, bool, false);
 
 pub const ZPolling = struct {
+    allocator: std.mem.Allocator,
     items: []const Item,
 
-    pub fn init(items: []const Item) ZPolling {
-        return .{ .items = items };
+    pub fn init(allocator: std.mem.Allocator, items: []const Item) !ZPolling {
+        return .{ 
+            .allocator = allocator,
+            .items = try allocator.dupe(Item, items),
+        };
     }
 
-    pub fn poll(self: ZPolling, allocator: std.mem.Allocator) !Iterator {
-        return self.pollWithTimeout(allocator, -1);
+    pub fn deinit(self: *ZPolling) void {
+        self.allocator.free(self.items);
+        self.* = undefined;
     }
 
-    pub fn pollWithTimeout(self: ZPolling, allocator: std.mem.Allocator, timeout_ms: c_int) !Iterator {
-        const raw_items = try allocator.alloc(c.zmq_pollitem_t, self.items.len);
+    pub fn poll(self: ZPolling) !Iterator {
+        return self.pollWithTimeout(-1);
+    }
+
+    pub fn pollWithTimeout(self: ZPolling, timeout_ms: c_int) !Iterator {
+        const raw_items = try self.allocator.alloc(c.zmq_pollitem_t, self.items.len);
 
         for (self.items, 0..) |item, i| {
             raw_items[i] = .{
@@ -65,7 +74,7 @@ pub const ZPolling = struct {
         _ = c.zmq_poll(raw_items.ptr, @as(c_int, @intCast(raw_items.len)), timeout_ms);
 
         return .{
-            .allocator = allocator,
+            .allocator = self.allocator,
             .items = self.items,
             .raw_items = raw_items,
             .index = 0,

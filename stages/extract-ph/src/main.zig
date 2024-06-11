@@ -19,6 +19,8 @@ pub fn main() !void {
     // try p.parse_sql(arena.allocator(), "select $name::varchar as name, xyz, 123 from read_json($path::varchar) t(id, v, v2) where v = $value::int and v2 = $value2::bigint");
     // try p.parse_sql(arena.allocator(), "select $2 as name, xyz, 123 from Foo where v = $1");
 
+    std.time.sleep(100_000);
     try stage.run();
+    std.time.sleep(100_000);
 }
 

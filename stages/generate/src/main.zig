@@ -11,6 +11,8 @@ pub fn main() !void {
     var stage = try Stage.init(arena.allocator());
     defer stage.deinit();
 
+    std.time.sleep(100_000);
     try stage.run();
+    std.time.sleep(100_000);
 }
 

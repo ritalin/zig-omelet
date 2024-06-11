@@ -6,107 +6,82 @@ const Symbol = core.Symbol;
 
 const SOURCE_NAME = "/sql/master/Foo.sql";
 const SOURCE_PREFIX = "/sql";
+const PATH = "/path/to/sql/master/Foo.sql";
 const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
 
 const APP_CONTEXT = "watch-files";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-sender_socket: *zmq.ZSocket,
-req_socket: *zmq.ZSocket,
-receiver_socket: *zmq.ZSocket,
+connection: *core.sockets.ClientConnection,
+logger: core.Logger,
 
 const Self = @This();
 
-pub fn init(allocator: std.mem.Allocator) !Self {
+pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    const receiver_socket = try zmq.ZSocket.init(zmq.ZSocketType.Sub, &ctx);
-    std.debug.print("({s}) Begin Add SUB filters\n", .{APP_CONTEXT});
-    try core.addSubscriberFilters(receiver_socket, .{
+    var connection = try core.sockets.ClientConnection.init(allocator, &ctx);
+    try connection.subscribe_socket.addFilters(.{
         .begin_session = true,
         .quit = true,
     });
-    std.debug.print("({s}) End Add SUB filters\n", .{APP_CONTEXT});
-    try receiver_socket.connect(core.CMD_S2C_END_POINT);
-    
-    const sender_socket = try zmq.ZSocket.init(zmq.ZSocketType.Push, &ctx);
-    try sender_socket.connect(core.CMD_C2S_END_POINT);
-
-    const req_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, &ctx);
-    try req_socket.connect(core.REQ_C2S_END_POINT);
+    try connection.connect();
 
     return .{
         .allocator = allocator,
         .context = ctx,
-        .sender_socket = sender_socket,
-        .req_socket = req_socket,
-        .receiver_socket = receiver_socket,
+        .connection = connection,
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection, settings.stand_alone),
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.receiver_socket.deinit();
-    self.req_socket.deinit();
-    self.sender_socket.deinit();
+    self.connection.deinit();
     self.context.deinit();
 }
 
 pub fn run(self: *Self) !void {
-    std.debug.print("({s}) Beginning\n", .{APP_CONTEXT});
-
-    std.time.sleep(100_000);
+    try self.logger.log(.info, "Beginning...", .{});
+    try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
 
     launch: {
-        try core.sendEvent(self.allocator, self.sender_socket, .launched);
-        std.debug.print("({s}) End send .launch\n", .{APP_CONTEXT});
+        try self.connection.dispatcher.post(.{.launched = .{.stage_name = APP_CONTEXT} });
         break :launch;
     }
 
-    const polling = zmq.ZPolling.init(&[_]zmq.ZPolling.Item{
-        zmq.ZPolling.Item.fromSocket(self.receiver_socket, .{ .PollIn = true }),
-        zmq.ZPolling.Item.fromSocket(self.req_socket, .{ .PollIn = true }),
-    });
+     while (self.connection.dispatcher.isReady()) {
+        const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
+            error.InvalidResponse => {
+                try self.logger.log(.warn, "Unexpected data received", .{});
+                continue;
+            },
+            else => return err,
+        };
 
-    loop: while (true) {
-        std.debug.print("({s}) Waiting...\n", .{APP_CONTEXT});
-
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        const managed_allocator = arena.allocator();
-
-        var it = try polling.poll(managed_allocator);
-        defer it.deinit();
-
-        while (it.next()) |item| {
-            const ev = try core.receiveEventWithPayload(managed_allocator, item.socket);
-            std.debug.print("({s}) Received command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
-
-            switch (ev) {
+        if (_item) |item| {
+            defer item.deinit();
+            
+            switch (item.event) {
                 .begin_session => {
                     try self.sendAllFiles();
-                    try core.sendEvent(self.allocator, self.req_socket, .finished);
-                    std.debug.print("({s}) End begin_session\n", .{APP_CONTEXT});
+                    try self.connection.dispatcher.post(.finished);
                 },
                 .quit_all => {
-                    std.debug.print("({s}) Begin Send quit accept (quit_all)\n", .{APP_CONTEXT});
-                    try core.sendEvent(managed_allocator, self.sender_socket, .quit_accept);
-                    std.debug.print("({s}) End Send quit accept (quit_all)\n", .{APP_CONTEXT});
-                    break :loop;
+                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+                    try self.connection.dispatcher.done();
                 },
                 .quit => {
-                    try core.sendEvent(managed_allocator, self.req_socket, .quit_accept);
-                    std.debug.print("({s}) End Send quit accept (quit)\n", .{APP_CONTEXT});
-                    break :loop;
+                    try self.connection.dispatcher.approve();
+                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+                    try self.connection.dispatcher.done();
                 },
                 else => {
-                    std.debug.print("({s}) Discard command: {}\n", .{APP_CONTEXT, std.meta.activeTag(ev)});
+                    try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
                 },
             }
         }
     }
-
-    std.debug.print("({s}) Terminated\n", .{APP_CONTEXT});   
 }
 
 fn sendAllFiles(self: *Self) !void {
@@ -114,9 +89,14 @@ fn sendAllFiles(self: *Self) !void {
     defer self.allocator.free(name);
     const hash = try makeHash(self.allocator, name, SQL);
     defer self.allocator.free(hash);
+    // std.debug.print("[DEBUG] Generated hash: {s}\n", .{hash});
 
     // Send path, content, hash
-    try core.sendEventWithPayload(self.allocator, self.sender_socket, .source, &[_]Symbol{name, SQL, hash});    
+    try self.connection.dispatcher.post(.{
+        .source = .{
+            .name = name, .path = PATH, .hash = hash
+        }
+    });
 }
 
 const Hasher = std.crypto.hash.sha2.Sha256;

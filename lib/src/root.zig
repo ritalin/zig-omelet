@@ -5,7 +5,7 @@ pub usingnamespace @import("./types.zig");
 pub usingnamespace @import("./helpers.zig");
 
 pub const sockets = .{
-    .ClientConnection = @import("./sockets/ClientConnection.zig"),
+    .Connection = @import("./sockets/Connection.zig"),
     .SubscribeSocket = @import("./sockets/SubscribeSocket.zig"),
 };
 

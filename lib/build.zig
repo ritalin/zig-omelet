@@ -97,4 +97,4 @@ pub fn build(b: *std.Build) void {
 //     run_exe.step.dependOn(b.getInstallStep());
 //     const run_step = b.step("run", "Run exe");
 //     run_step.dependOn(&run_exe.step);
-// }
+}

@@ -4,9 +4,6 @@
 [submodule "vendor/magic-enum"]
 	path = vendor/magic-enum
 	url = https://github.com/Neargye/magic_enum.git
-[submodule "vendor/cb0r"]
-	path = vendor/cb0r
-	url = https://github.com/quartzjer/cb0r.git
 [submodule "vendor/cbor"]
 	path = vendor/cbor
 	url = https://github.com/libmcu/cbor.git

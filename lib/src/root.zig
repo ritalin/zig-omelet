@@ -9,4 +9,11 @@ pub const sockets = .{
     .SubscribeSocket = @import("./sockets/SubscribeSocket.zig"),
 };
 
+pub const Queue = @import("./Queue.zig").Queue;
 pub const Logger = @import("./Logger.zig");
+
+pub const CborStream = @import("./CborStream.zig");
+
+test "All tests" {
+    testing.refAllDecls(@This());
+}

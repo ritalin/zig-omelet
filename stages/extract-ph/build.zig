@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
-    const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
+    const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
 
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
     
@@ -38,7 +38,6 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("duckdb");
 
     exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/include" }) });
-    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/lib"}) });
     exe.linkSystemLibrary("zmq");
 
     exe.addIncludePath(b.path("../../vendor/magic-enum/include"));

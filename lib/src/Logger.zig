@@ -29,8 +29,9 @@ pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, arg
     try std.fmt.format(writer, "[{s}] ", .{self.app_context});
     try std.fmt.format(writer, content, args);
 
-    const log_message = try buf.toOwnedSlice();
-    defer self.allocator.free(log_message);
+    // const log_message = try buf.toOwnedSlice();
+    // defer self.allocator.free(log_message);
+    const log_message = buf.items;
 
     if (self.stand_alone) {
         Server.log(log_level, log_message);
@@ -39,9 +40,9 @@ pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, arg
         Server.log(log_level, log_message);
 
         try self.connection.dispatcher.post(.{
-            .log = .{
-                .level = log_level, .content = log_message
-            }
+            .log = try types.EventPayload.Log.init(
+                self.allocator, log_level, log_message
+            )
         });
     }
     // Server.log(log_level, "End output log");

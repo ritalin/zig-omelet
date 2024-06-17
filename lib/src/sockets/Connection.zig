@@ -11,6 +11,7 @@ const types = @import("../types.zig");
 const helpers = @import("../helpers.zig");
 const SubscribeSocket = @import("./SubscribeSocket.zig");
 const Logger = @import("../Logger.zig");
+const EventQueue = @import("../Queue.zig").Queue;
 
 pub const Client = struct {
     const Self = @This();
@@ -49,31 +50,30 @@ pub const Client = struct {
 
     /// Connect owned sockets
     pub fn connect(self: Self) !void {
-        try self.request_socket.connect(types.REQ_C2S_END_POINT);
+        try self.request_socket.connect(types.REQ_C2S_CONN_PORT);
         try self.subscribe_socket.connect();
     }
 
     fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
         while (true) {
             while (dispatcher.receive_queue.dequeue()) |*entry| {
-                defer entry.deinit();
-
                 switch (entry.event) {
                     .ack => {
+                        defer entry.deinit();
                         Logger.Server.traceLog.debug("Received 'ack'", .{});
                         try dispatcher.approve();
                     },
                     .nack => {
+                        defer entry.deinit();
                         try dispatcher.revertFromPending();
                     },
                     else => {
                         Logger.Server.traceLog.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
 
                         return .{ 
-                            .allocator = dispatcher.allocator,
                             .socket = entry.socket, 
                             .kind = .post,
-                            .event = try entry.event.clone(dispatcher.allocator) 
+                            .event = entry.event
                         };
                     }
                 }
@@ -104,10 +104,9 @@ pub const Client = struct {
 
             while (it.next()) |item| {
                 const event = try helpers.receiveEventWithPayload(dispatcher.allocator, item.socket);
-                defer event.deinit(dispatcher.allocator);
+                defer event.deinit();
 
                 try dispatcher.receive_queue.enqueue(.{
-                    .allocator = dispatcher.allocator, 
                     .kind = .response,
                     .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
                 });
@@ -149,8 +148,8 @@ pub const Server = struct {
     }
 
     pub fn bind(self: *Self) !void {
-        try self.send_socket.bind(types.CMD_S2C_END_POINT);
-        try self.reply_socket.bind(types.REQ_C2S_END_POINT);
+        try self.send_socket.bind(types.CMD_S2C_BIND_PORT);
+        try self.reply_socket.bind(types.REQ_C2S_BIND_PORT);
     }
 
     fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
@@ -164,7 +163,7 @@ pub const Server = struct {
 
                 helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
                     else => {
-                        Logger.Server.traceLog.debug("Unexpected error on sending: {}", .{err});
+                        // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
                         return err;
                     }
                 };
@@ -185,16 +184,15 @@ pub const Server = struct {
 
             while (it.next()) |item| {
                 const event = helpers.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
-                    error.InvalidResponse => {
-                        try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
-                        continue;
-                    },
+                    // error.InvalidResponse => {
+                    //     try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
+                    //     continue;
+                    // },
                     else => return err,
                 };
-                defer event.deinit(dispatcher.allocator);
+                defer event.deinit();
 
                 try dispatcher.receive_queue.enqueue(.{
-                    .allocator = dispatcher.allocator, 
                     .kind = .response,
                     .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
                 });
@@ -204,64 +202,6 @@ pub const Server = struct {
         return null;     
     }
 };
-
-pub fn EventQueue(comptime Entry: type) type {
-    return struct {
-        allocator: std.mem.Allocator,
-        queue: std.TailQueue(Entry),
-
-        const Queue = @This();
-
-        pub fn init(allocator: std.mem.Allocator) Queue {
-            return .{
-                .allocator = allocator,
-                .queue = std.TailQueue(Entry){},
-            };
-        }
-
-        pub fn deinit(self: *Queue, _: std.mem.Allocator) void {
-            while (self.dequeue()) |*entry| {
-                entry.deinit();
-            }
-            self.* = undefined;
-        }
-
-        pub fn enqueue(self: *Queue, entry: Entry) !void {
-            const node = try self.allocator.create(std.TailQueue(Entry).Node);
-
-            node.data = entry;
-            self.queue.append(node);
-        }
-
-        pub fn dequeue(self: *Queue) ?Entry {
-            if (self.queue.popFirst()) |node| {
-                defer self.allocator.destroy(node);
-                return node.data;
-            }
-
-            return null;
-        }
-
-        pub fn peek(self: *Queue) ?Entry {
-            return if (self.queue.first) |node| node.data else null;
-        }
-
-        pub fn revert(self: *Queue, entry: Entry) !void {
-            const node = try self.allocator.create(std.TailQueue(Entry).Node);
-
-            node.data = entry;
-            self.queue.prepend(node);
-        }
-
-        pub fn hasMore(self: Queue) bool {
-            return self.queue.first != null;
-        }
-
-        pub fn count(self: Queue) usize {
-            return self.queue.len;
-        }
-    };
-}
 
 pub const EventDispatcher = struct {
     const DispatchFn = *const fn (dispatcher: *EventDispatcher) anyerror!?Entry;
@@ -296,26 +236,26 @@ pub const EventDispatcher = struct {
     }
 
     pub fn deinit(self: *EventDispatcher) void {
-        self.send_queue.deinit(self.allocator);
-        self.receive_queue.deinit(self.allocator);
-        self.receive_pending.deinit(self.allocator);
+        self.send_queue.deinit();
+        self.receive_queue.deinit();
+        self.receive_pending.deinit();
         self.polling.deinit();
         self.* = undefined;
     }
 
     pub fn post(self: *EventDispatcher, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
-            .allocator = self.allocator, 
             .kind = .post,
-            .socket = self.send_socket, .event = try event.clone(self.allocator)
+            // .socket = self.send_socket, .event = try event.clone(self.allocator)
+            .socket = self.send_socket, .event = event
         });
     }
 
     pub fn reply(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
-            .allocator = self.allocator, 
             .kind = .reply,
-            .socket = socket, .event = try event.clone(self.allocator)
+            // .socket = socket, .event = try event.clone(self.allocator)
+            .socket = socket, .event = event
         });
     }
 
@@ -348,13 +288,12 @@ pub const EventDispatcher = struct {
     }
 
     pub const Entry = struct {
-        allocator: std.mem.Allocator,
         socket: *zmq.ZSocket,
         kind: enum { post, reply, response },
         event: types.Event,
 
         pub fn deinit(self: @This()) void {
-            self.event.deinit(self.allocator);
+            self.event.deinit();
         }
     };
 };

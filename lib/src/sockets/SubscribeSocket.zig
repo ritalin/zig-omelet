@@ -31,7 +31,7 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn connect(self: *Self) !void {
-    return self.socket.connect(types.CMD_S2C_END_POINT);
+    return self.socket.connect(types.CMD_S2C_CONN_PORT);
 }
 
 pub fn addFilters(self: *Self, filters: types.EventTypes) !void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const Runner = @import("./Runner.zig");
 
+// const traceLog = std.log;
 const traceLog = core.Logger.Server.traceLog;
 
 const default_log_level = .debug;
@@ -13,13 +14,18 @@ const std_options = .{
 };
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
+   
+    // const arena = try std.heap.page_allocator.create(std.heap.ArenaAllocator);
+    // defer arena.child_allocator.destroy(arena);
+    // arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // defer arena.deinit();
 
     const allocator = arena.allocator();
 
-    var channel_root = try core.makeIpcChannelRoot();
-    defer channel_root.deinit();
+    try core.makeIpcChannelRoot();
 
     var runner = try Runner.init(allocator);
 
@@ -64,4 +70,8 @@ fn launchStage(allocator: std.mem.Allocator, app_dir: std.fs.Dir, stage_name: []
     _ = try stage_process.spawn();
 
     return stage_process;
+}
+
+test "main" {
+    std.testing.refAllDecls(@This());
 }

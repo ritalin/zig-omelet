@@ -8,10 +8,11 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/zzmq.zig"),
     });
 
-    const prefix = b.option([]const u8, "prefix", "zmq installed path");
+    const prefix = b.option([]const u8, "zmq_prefix", "zmq installed path");
     
     if (prefix) |p| {
         mod_zmq.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/include" }) } );
+        mod_zmq.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/lib" }) });
     }
 
 

@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
-    const dep_zzmq = b.dependency("zzmq", .{ .prefix = @as([]const u8, zmq_prefix) });
+    const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
 
     const mod = b.addModule("core", .{
         .root_source_file = b.path("src/root.zig"),
@@ -68,33 +68,33 @@ pub fn build(b: *std.Build) void {
 
 // ===================
 
-//     const exe = b.addExecutable(.{
-//         .name = "lib-main",
-//         .root_source_file = b.path("src/main.zig"),
-//         .target = target,
-//         .optimize = optimize,
-//     });
-//     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-//     exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
-//     exe.linkSystemLibrary("zmq");
-//     exe.linkLibCpp();
-//     exe.linkLibC();
+    const exe = b.addExecutable(.{
+        .name = "lib-main",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+    exe.linkSystemLibrary("zmq");
+    exe.linkLibCpp();
+    exe.linkLibC();
 
-//     exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/include"})});
-//     exe.addCSourceFiles(.{
-//         .root = .{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/src/"}) },
-//         .files = &.{
-//             "encoder.c",
-//             "common.c",
-//             "decoder.c",
-//             "parser.c",
-//             "ieee754.c",
-//         }
-//     });
+    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/include"})});
+    exe.addCSourceFiles(.{
+        .root = .{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/src/"}) },
+        .files = &.{
+            "encoder.c",
+            "common.c",
+            "decoder.c",
+            "parser.c",
+            "ieee754.c",
+        }
+    });
 
-//     b.installArtifact(exe);
-//     const run_exe = b.addRunArtifact(exe);
-//     run_exe.step.dependOn(b.getInstallStep());
-//     const run_step = b.step("run", "Run exe");
-//     run_step.dependOn(&run_exe.step);
+    b.installArtifact(exe);
+    const run_exe = b.addRunArtifact(exe);
+    run_exe.step.dependOn(b.getInstallStep());
+    const run_step = b.step("run", "Run exe");
+    run_step.dependOn(&run_exe.step);
 }

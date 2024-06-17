@@ -23,7 +23,7 @@ pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }
 
     var connection = try core.sockets.Connection.Client.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
-        .begin_session = true,
+        .begin_watch_path = true,
         .quit = true,
     });
     try connection.connect();
@@ -42,15 +42,20 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self) !void {
+    std.debug.print("[MEM#1] {*}\n", .{self.allocator.vtable.free});
     try self.logger.log(.info, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
 
     launch: {
-        try self.connection.dispatcher.post(.{.launched = .{.stage_name = APP_CONTEXT} });
+        try self.connection.dispatcher.post(.{
+            .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+        });
         break :launch;
     }
 
      while (self.connection.dispatcher.isReady()) {
+    std.debug.print("[MEM#2] {*}\n", .{self.allocator.vtable.free});
+
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
             error.InvalidResponse => {
                 try self.logger.log(.warn, "Unexpected data received", .{});
@@ -63,17 +68,22 @@ pub fn run(self: *Self) !void {
             defer item.deinit();
             
             switch (item.event) {
-                .begin_session => {
+                .begin_watch_path => {
                     try self.sendAllFiles();
-                    try self.connection.dispatcher.post(.finished);
+                    try self.connection.dispatcher.post(.end_watch_path);
                 },
                 .quit_all => {
-                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+                    try self.connection.dispatcher.post(.{
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                    });
                     try self.connection.dispatcher.done();
                 },
                 .quit => {
                     try self.connection.dispatcher.approve();
-                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+
+                    try self.connection.dispatcher.post(.{
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                    });
                     try self.connection.dispatcher.done();
                 },
                 else => {
@@ -93,9 +103,9 @@ fn sendAllFiles(self: *Self) !void {
 
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
-        .source = .{
-            .name = name, .path = PATH, .hash = hash
-        }
+        .source_path = try core.EventPayload.SourcePath.init(
+            self.allocator, name, PATH, hash
+        ),
     });
 }
 

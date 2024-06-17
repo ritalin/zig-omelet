@@ -5,6 +5,10 @@ const core = @import("core");
 const APP_CONTEXT = "exctract-ph";
 const Self = @This();
 
+// const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
+const SQL = "select $1, $2 from foo where kind = $3";
+const PH = "[{\"field\":\"id\", \"type_name\": \"bigint\"}, (cont)...]";
+
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
 connection: *core.sockets.Connection.Client,
@@ -15,8 +19,10 @@ pub fn init(allocator: std.mem.Allocator) !Self {
 
     var connection = try core.sockets.Connection.Client.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
-        .begin_topic = true,
-        .source = true,
+        .request_topic = true,
+        .source_path = true,
+        .end_watch_path = true,
+        .quit_all = true,
         .quit = true,
     });
     try connection.connect();
@@ -39,9 +45,14 @@ pub fn run(self: *Self) !void {
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
 
     launch: {
-        try self.connection.dispatcher.post(.{.launched = .{.stage_name = APP_CONTEXT} });
+        try self.connection.dispatcher.post(.{
+            .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+        });
         break :launch;
     }
+
+    var topic_queue = core.Queue(core.EventPayload.TopicBody).init(self.allocator);
+    defer topic_queue.deinit();
 
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
@@ -56,39 +67,45 @@ pub fn run(self: *Self) !void {
             defer item.deinit();
             
             switch (item.event) {
-                .begin_topic => {
+                .request_topic => {
+                    const topic = try core.EventPayload.Topic.init(
+                        self.allocator, &.{"query", "placeholder"}
+                    );
+                    
                     topics: {
-                        try self.connection.dispatcher.post(.{.topic = .{ .name = "query"}});
-                        try self.connection.dispatcher.post(.{.topic = .{ .name = "name"}});
-                        try self.connection.dispatcher.post(.{.topic = .{ .name = "placeholder"}});
+                        try self.connection.dispatcher.post(.{.topic = topic});
                         break :topics;
                     }
-                    ack_topics: {
-                        try self.connection.dispatcher.post(.end_topic);
-                        break :ack_topics;
-                    }
                 },
-                .source => {
-                    try self.logger.log(.err, "Not implemented... (.source)", .{});
+                .source_path => |path| {
+                    try self.logger.log(.err, "SQL parse not implemented... (.source)", .{});
                     // TODO
-                    parse_result: {
-                        try self.connection.dispatcher.post(.{.topic_payload = .{ .topic = "query", .content = "xxxxxx"}});
-                        try self.connection.dispatcher.post(.{.topic_payload = .{ .topic = "name", .content = "yyyyyy"}});
-                        try self.connection.dispatcher.post(.{.topic_payload = .{ .topic = "placeholder", .content = "zzzzzz"}});
-                        break :parse_result;
-                    }
-                    parse_finished: {
-                        try self.connection.dispatcher.post(.finished);
-                        break :parse_finished;
-                    }
+                    const query = SQL;
+                    const placeholder = PH;
+
+                    const topic_body = try core.EventPayload.TopicBody.init(
+                        self.allocator,
+                        path,
+                        &.{.{"query", query}, .{"placeholder", placeholder}}
+                    );
+
+                    try self.connection.dispatcher.post(.{.topic_body = topic_body});
+                },
+                .end_watch_path => {
+                    // TODO 次のパース
+                    try self.connection.dispatcher.post(.finish_topic_body);
                 },
                 .quit_all => {
-                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+                    try self.connection.dispatcher.post(.{
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                    });
                     try self.connection.dispatcher.done();
                 },
                 .quit => {
                     try self.connection.dispatcher.approve();
-                    try self.connection.dispatcher.post(.{.quit_accept = .{ .stage_name = APP_CONTEXT }});
+                    try self.connection.dispatcher.post(.{
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                    });
                     try self.connection.dispatcher.done();
                 },
                 else => {

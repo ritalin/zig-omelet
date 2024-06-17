@@ -20,7 +20,7 @@ const ZMessageType = enum {
 };
 
 const ZMessageImpl = union(ZMessageType) {
-    Internal: ZMessageInternal,
+    Internal: *ZMessageInternal,
     External: ZMessageExternal,
 };
 
@@ -31,8 +31,10 @@ pub const ZMessage = struct {
     ///
     /// The data is being copied into the message.
     pub fn init(allocator: std.mem.Allocator, d: []const u8) !ZMessage {
+        const impl = try allocator.create(ZMessageInternal);
+        impl.* = try ZMessageInternal.init(allocator, d);
         return .{ .impl_ = .{
-            .Internal = try ZMessageInternal.init(allocator, d),
+            .Internal = impl,
         } };
     }
 
@@ -43,7 +45,7 @@ pub const ZMessage = struct {
     /// freeing the memory at some point.
     pub fn initUnmanaged(d: []const u8, allocator: ?std.mem.Allocator) !ZMessage {
         return .{ .impl_ = .{
-            .Internal = try ZMessageInternal.initUnmanaged(d, allocator),
+            .InternalUM = try ZMessageInternal.initUnmanaged(d, allocator),
         } };
     }
 
@@ -129,7 +131,7 @@ const ZMessageInternal = struct {
     /// If an allocator is provided, it will be used to free
     /// the provided data. If not, the caller is responsible for
     /// freeing the memory at some point.
-    pub fn initUnmanaged(d: []const u8, allocator: ?std.mem.Allocator) !ZMessageInternal {
+    fn initUnmanaged(d: []const u8, allocator: ?std.mem.Allocator) !ZMessageInternal {
         return .{
             .data_ = d,
             .allocator_ = allocator,
@@ -155,7 +157,9 @@ const ZMessageInternal = struct {
                 return error.FrameInitFailed;
             }
         } else {
-            const result = c.zmq_msg_init_data(&message, @constCast(&self.data_[0]), self.data_.len, &allocExternalFree, self);
+            // std.debug.print("[DEBUG] Sending data: {s}, adrs#1: {*}, adrs#2: {*}\n", .{self.data_, self.data_.ptr, &self.data_[0]});
+            // const result = c.zmq_msg_init_data(&message, @constCast(&self.data_[0]), self.data_.len, &allocExternalFree, self);
+            const result = c.zmq_msg_init_data(&message, @constCast(self.data_.ptr), self.data_.len, &allocExternalFree, self);
             if (result < 0) {
                 return error.FrameInitFailed;
             }
@@ -185,7 +189,10 @@ const ZMessageInternal = struct {
 
         if (prev == 1) { // it's now zero
             if (self.allocator_) |a| {
+                const p = prev;
+                _ = p;
                 a.free(self.data_);
+                a.destroy(self);
             }
         }
     }

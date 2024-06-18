@@ -62,16 +62,6 @@ fn sendPayloadInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, paylo
     try socket.send(&msg, .{.more = has_more});
 }
 
-// /// Send event type + payload(s)
-// pub fn sendEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.EventType, payloads: []const types.Symbol) !void {    
-//     try sendEventInternal(allocator, socket, ev, payloads.len > 0);
-    
-//     for (payloads, 1..) |payload, i| {
-//         try sendPayloadInternal(allocator, socket, payload, i < payloads.len);
-//     }
-//     // std.time.sleep(WAIT_TIME);
-// }
-
 /// Receive event type only
 pub fn receiveEventType(socket: *zmq.ZSocket) !types.EventType {
     var frame = try socket.receive(.{});

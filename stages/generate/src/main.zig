@@ -7,7 +7,7 @@ pub fn main() !void {
     defer arena.deinit();
 
     // _ = try core.makeIpcChannelRoot();
-    
+
     var stage = try Stage.init(arena.allocator());
     defer stage.deinit();
 
@@ -16,3 +16,6 @@ pub fn main() !void {
     std.time.sleep(100_000);
 }
 
+test "main" {
+    std.testing.refAllDecls(@This());
+}

@@ -2,8 +2,12 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
+const CodeBuilder = @import("./CodeBuilder.zig");
+
 const APP_CONTEXT = "generate-ts";
 const Self = @This();
+
+const PREFIX = "./_dump/ts";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
@@ -69,10 +73,32 @@ pub fn run(self: *Self) !void {
                     try self.logger.log(.err, "Ready for generating", .{});
                     try self.connection.dispatcher.post(.ready_generate);
                 },
-                .topic_body => |_| {
-                    // TODO コード生成
+                .topic_body => |source| {
                     try self.connection.dispatcher.approve();
-                    try self.logger.log(.err, "Code generation not implemented", .{});
+
+                    var output_dir = try std.fs.cwd().makeOpenPath(PREFIX, .{});
+                    defer output_dir.close();
+
+                    var builder = try CodeBuilder.init(self.allocator, output_dir, source.header.name);
+                    defer builder.deinit();
+
+                    var walker = try CodeBuilder.Parser.beginParse(self.allocator, source.bodies);
+                    defer walker.deinit();
+
+                    while (try walker.walk()) |target| switch (target) {
+                        .query => |q| {
+                            try builder.applyQuery(q);
+                        },
+                        .parameter => |placeholder| {
+                            try builder.applyPlaceholder(placeholder);
+                        },
+                        .result_set => |field_types| {
+                            try builder.applyResultSets(field_types);
+                        },
+                    };
+
+                    try builder.build();
+
                     try self.connection.dispatcher.post(.ready_generate);
                 },
                 .quit_all => {

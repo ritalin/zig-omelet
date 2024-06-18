@@ -7,7 +7,7 @@ const Self = @This();
 
 // const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
 const SQL = "select $1, $2 from foo where kind = $3";
-const PH = "[{\"field\":\"id\", \"type_name\": \"bigint\"}, (cont)...]";
+const PH = "[{\"field_name\":\"id\", \"field_type\": \"bigint\"}]";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,

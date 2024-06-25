@@ -9,14 +9,14 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 app_context: Symbol,
-connection: *Connection.Client,
+dispatcher: *Connection.EventDispatcher,
 stand_alone: bool,
 
-pub fn init(allocator: std.mem.Allocator, app_context: Symbol, connection: *Connection.Client, stand_alone: bool) Self {
+pub fn init(allocator: std.mem.Allocator, app_context: Symbol, dispatcher: *Connection.EventDispatcher, stand_alone: bool) Self {
     return .{
         .allocator = allocator,
         .app_context = app_context,
-        .connection = connection,
+        .dispatcher = dispatcher,
         .stand_alone = stand_alone,
     };
 }
@@ -39,7 +39,7 @@ pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, arg
     else {
         Server.log(log_level, log_message);
 
-        try self.connection.dispatcher.post(.{
+        try self.dispatcher.post(.{
             .log = try types.EventPayload.Log.init(
                 self.allocator, log_level, log_message
             )

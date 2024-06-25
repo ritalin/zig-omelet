@@ -79,7 +79,7 @@ pub fn build(self: Self) !void {
     }
 
     types: {
-        var file = try self.output_dir.createFile("types.sql", .{});
+        var file = try self.output_dir.createFile("types.ts", .{});
         defer file.close();
         var writer = file.writer();
 

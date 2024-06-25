@@ -4,16 +4,15 @@ const core = @import("core");
 
 const Symbol = core.Symbol;
 
-const SOURCE_NAME = "/sql/master/Foo.sql";
-const SOURCE_PREFIX = "/sql";
-const PATH = "/path/to/sql/master/Foo.sql";
+const SOURCE_PREFIX = "../../_sql-examples";
+const PATH = "../../_sql-examples/Foo.sql";
 const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
 
 const APP_CONTEXT = "watch-files";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.Connection.Client,
+connection: *core.sockets.Connection.Client(void),
 logger: core.Logger,
 
 const Self = @This();
@@ -21,7 +20,7 @@ const Self = @This();
 pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.Connection.Client.init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Client(void).init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
         .begin_watch_path = true,
         .quit = true,
@@ -32,7 +31,7 @@ pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection, settings.stand_alone),
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, settings.stand_alone),
     };
 }
 
@@ -42,7 +41,6 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self) !void {
-    std.debug.print("[MEM#1] {*}\n", .{self.allocator.vtable.free});
     try self.logger.log(.info, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
 
@@ -53,9 +51,7 @@ pub fn run(self: *Self) !void {
         break :launch;
     }
 
-     while (self.connection.dispatcher.isReady()) {
-    std.debug.print("[MEM#2] {*}\n", .{self.allocator.vtable.free});
-
+    while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
             error.InvalidResponse => {
                 try self.logger.log(.warn, "Unexpected data received", .{});
@@ -95,16 +91,18 @@ pub fn run(self: *Self) !void {
 }
 
 fn sendAllFiles(self: *Self) !void {
-    const name = try std.fs.path.relative(self.allocator, SOURCE_PREFIX, SOURCE_NAME);
+    const name = try std.fs.path.relative(self.allocator, SOURCE_PREFIX, PATH);
     defer self.allocator.free(name);
+    const path_abs = try std.fs.cwd().realpathAlloc(self.allocator, PATH);
+    defer self.allocator.free(path_abs);
     const hash = try makeHash(self.allocator, name, SQL);
     defer self.allocator.free(hash);
-    // std.debug.print("[DEBUG] Generated hash: {s}\n", .{hash});
+    std.debug.print("[DEBUG] name: {s}\n", .{name});
 
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
         .source_path = try core.EventPayload.SourcePath.init(
-            self.allocator, name, PATH, hash
+            self.allocator, name, path_abs, hash, 1
         ),
     });
 }

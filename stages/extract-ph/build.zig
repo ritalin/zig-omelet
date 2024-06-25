@@ -16,10 +16,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
-    const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
-
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
-    
+    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
+
+    const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_core = b.dependency("lib_core", .{});
 
     const exe = b.addExecutable(.{
@@ -29,21 +29,31 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.addCSourceFiles(.{ .files = &[_][]const u8{
-        "src/c/parser.cpp",
-        "src/c/dump.cpp",
-    } });
-    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {duckdb_prefix, "duckdb/include" }) });
-    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {duckdb_prefix, "duckdb/lib"}) });
+    exe.addIncludePath(b.path("../../vendor/cbor/include"));
+    exe.addIncludePath(b.path("src/c"));
+    exe.addCSourceFiles(.{ 
+        .root = b.path("src/c"),
+        .files = &.{
+            "parser.cpp",
+            // "dump.cpp",
+            "cbor_encode.cpp",
+        },
+        .flags = &.{"-std=c++20"}
+    });
+    exe.defineCMacro("DISABLE_CATCH2_TEST", "1");
+    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
+    exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
     exe.linkSystemLibrary("duckdb");
 
-    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 {zmq_prefix, "zmq/include" }) });
+    exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/include" }) });
     exe.linkSystemLibrary("zmq");
 
     exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
     exe.addIncludePath(b.path("../../vendor/json/include"));
     exe.linkLibCpp();
     exe.linkLibC();
+
+    exe.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
 
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe.root_module.addImport("core", dep_core.module("core"));
@@ -81,6 +91,34 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_unit_tests.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
+    exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
+    exe_unit_tests.linkSystemLibrary("duckdb");
+
+    exe_unit_tests.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/include" }) });
+    exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "zmq/lib"}) });
+    exe_unit_tests.linkSystemLibrary("zmq");
+
+    exe_unit_tests.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/lib"})});
+    exe_unit_tests.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
+    exe_unit_tests.linkSystemLibrary("catch2");
+    
+    exe_unit_tests.addIncludePath(b.path("src/c"));
+    exe_unit_tests.addCSourceFiles(.{
+        .root = b.path("src/c"),
+        .files = &.{
+            "catch2_session_run.cpp",
+            "parser.cpp",
+            "cbor_encode.cpp",
+        },
+        .flags = &.{"-std=c++20"}
+    });
+    exe_unit_tests.defineCMacro("CATCH2_TEST", "1");
+
+    exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
+    exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
+    exe_unit_tests.linkLibCpp();
+
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

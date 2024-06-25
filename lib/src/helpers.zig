@@ -97,9 +97,8 @@ fn receivePayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Sym
 /// Receive event
 pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Event {    
     const event_type = try receiveEventType(socket);
-    _ = event_type;
     const data = try receivePayload(allocator, socket);
     _ = try receivePayload(allocator, socket);
 
-    return decodeEvent(allocator, data);
+    return decodeEvent(allocator, event_type, data);
 }

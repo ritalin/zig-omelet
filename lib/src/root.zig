@@ -13,6 +13,7 @@ pub const Queue = @import("./Queue.zig").Queue;
 pub const Logger = @import("./Logger.zig");
 
 pub const CborStream = @import("./CborStream.zig");
+pub usingnamespace @import("./decode_event_cbor.zig");
 
 test "All tests" {
     testing.refAllDecls(@This());

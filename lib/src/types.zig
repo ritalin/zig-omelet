@@ -71,6 +71,8 @@ pub const EventType = enum (u8) {
     // Generation event
     ready_generate,
     finish_generate,
+    // worker event
+    worker_result,
     // Finish event
     quit_all,
     quit,
@@ -128,6 +130,7 @@ pub const EventPayload = struct {
     pub const TopicBody = struct {
         arena: *std.heap.ArenaAllocator,
         header: EventPayload.SourcePath, 
+        index: usize,
         bodies: []const Item,
 
         pub fn init(allocator: std.mem.Allocator, path: SourcePath, items: []const Item.Values) !@This() {
@@ -143,8 +146,15 @@ pub const EventPayload = struct {
             return .{
                 .arena = arena,
                 .header = try path.clone(a),
+                .index = 1,
                 .bodies = new_bodies,
             };
+        }
+        pub fn withNewIndex(self: *@This(), new_index: usize, new_count: usize) @This() {
+            self.index = new_index;
+            self.header.item_count = new_count;
+
+            return self.*;
         }
         pub fn deinit(self: @This()) void {
             self.arena.deinit();
@@ -163,6 +173,7 @@ pub const EventPayload = struct {
             return .{
                 .arena = arena,
                 .header = try self.header.clone(a),
+                .index = self.index,
                 .bodies = new_bodies,
             };                
         }
@@ -196,13 +207,15 @@ pub const EventPayload = struct {
         name: Symbol, 
         path: Symbol, 
         hash: Symbol,
+        item_count: usize,
 
-        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: Symbol, hash: Symbol) !@This() {
+        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: Symbol, hash: Symbol, item_count: usize) !@This() {
             return .{
                 .allocator = allocator,
                 .name = try allocator.dupe(u8, name),
                 .path = try allocator.dupe(u8, path),
                 .hash = try allocator.dupe(u8, hash),
+                .item_count = item_count,
             };
         }
         pub fn deinit(self: @This()) void {
@@ -211,24 +224,28 @@ pub const EventPayload = struct {
             self.allocator.free(self.hash);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return SourcePath.init(allocator, self.name, self.path, self.hash);
+            return SourcePath.init(
+                allocator, 
+                self.name, self.path, self.hash, 
+                self.item_count
+            );
         }
     };
-    pub const SourceBody = struct {
+    pub const WorkerResult = struct {
         allocator: std.mem.Allocator,
-        topic: Symbol, 
         content: Symbol,
 
+        pub fn init(allocator: std.mem.Allocator, content: Symbol) !@This() {
+            return .{
+                .allocator = allocator,
+                .content = try allocator.dupe(u8, content),
+            };
+        }
         pub fn deinit(self: @This()) void {
-            self.allocator.free(self.topic);
             self.allocator.free(self.content);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return .{
-                .allocator = allocator,
-                .topic = try allocator.dupe(u8, self.topic),
-                .content = try allocator.dupe(u8, self.content),
-            };
+            return init(allocator, self.content);
         }
     };
     pub const Log = struct {
@@ -272,6 +289,8 @@ pub const Event = union(EventType) {
     // Generation events
     ready_generate: void,
     finish_generate: void,
+    // worker event
+    worker_result: EventPayload.WorkerResult,
     // Finish events
     quit_all: void,
     quit: void,
@@ -286,6 +305,7 @@ pub const Event = union(EventType) {
             .source_path => |payload| payload.deinit(),
             .topic_body => |payload| payload.deinit(),
             .quit_accept => |payload| payload.deinit(),
+            .worker_result => |payload| payload.deinit(),
             .log => |payload| payload.deinit(),
             .ack,
             .nack,
@@ -323,6 +343,11 @@ pub const Event = union(EventType) {
                 .topic_body => |payload| {
                     return .{
                         .topic_body = try payload.clone(allocator),
+                    };
+                },
+                .worker_result => |payload| {
+                    return .{
+                        .worker_result = try payload.clone(allocator),
                     };
                 },
                 .quit_accept => |payload| {

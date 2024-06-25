@@ -18,7 +18,7 @@ pub fn encodeEvent(allocator: std.mem.Allocator, event: types.Event) ![]const u8
 }
 
 fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer, event: types.Event) !void {
-    _ = try writer.writeEnum(types.EventType, std.meta.activeTag(event));
+    // _ = try writer.writeEnum(types.EventType, std.meta.activeTag(event));
 
     switch (event) {
         .ack => {},
@@ -35,6 +35,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
             _ = try writer.writeString(payload.name);
             _ = try writer.writeString(payload.path);
             _ = try writer.writeString(payload.hash);
+            _ = try writer.writeUInt(usize, payload.item_count); 
         },
         .end_watch_path => {},
         // Topic body event
@@ -42,6 +43,8 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
             _ = try writer.writeString(payload.header.name);
             _ = try writer.writeString(payload.header.path);
             _ = try writer.writeString(payload.header.hash);
+            _ = try writer.writeUInt(usize, payload.header.item_count); 
+            _ = try writer.writeUInt(usize, payload.index); 
 
             const TopicBodyItem = types.EventPayload.TopicBody.Item.Values;
             var bodies = try std.ArrayList(TopicBodyItem).initCapacity(allocator, payload.bodies.len);
@@ -56,6 +59,10 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         // Generation event
         .ready_generate => {},
         .finish_generate => {},
+        // worker event
+        .worker_result => |payload| {
+            _ = try writer.writeString(payload.content);
+        },
         // Finish event
         .quit_all => {},
         .quit_accept => |payload| {
@@ -69,13 +76,13 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
     }
 }
 
-pub fn decodeEvent(allocator: std.mem.Allocator, data: []const u8) !types.Event {
+pub fn decodeEvent(allocator: std.mem.Allocator, event_type: types.EventType, data: []const u8) !types.Event {
     var reader = CborStream.Reader.init(data);
-    return decodeEventInternal(allocator, &reader);
+    return decodeEventInternal(allocator, event_type, &reader);
 }
 
-fn decodeEventInternal(allocator: std.mem.Allocator, reader: *CborStream.Reader) !types.Event {
-    switch (try reader.readEnum(types.EventType)) {
+fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType, reader: *CborStream.Reader) !types.Event {
+    switch (event_type) {
         .ack => return .ack,
         .nack => return .nack,
         .launched => {
@@ -98,10 +105,11 @@ fn decodeEventInternal(allocator: std.mem.Allocator, reader: *CborStream.Reader)
             const name = try reader.readString();
             const path = try reader.readString();
             const hash = try reader.readString();
+            const item_count = try reader.readUInt(usize);
 
             return .{
                 .source_path = try types.EventPayload.SourcePath.init(
-                    allocator, name, path, hash
+                    allocator, name, path, hash, item_count
                 ),
             };
         },
@@ -111,21 +119,33 @@ fn decodeEventInternal(allocator: std.mem.Allocator, reader: *CborStream.Reader)
             const name = try reader.readString();
             const path = try reader.readString();
             const hash = try reader.readString();
+            const item_count = try reader.readUInt(usize);
+            const item_index = try reader.readUInt(usize);
 
             const TopicBodyItem = types.EventPayload.TopicBody.Item.Values;
             const bodies = try reader.readSlice(allocator, TopicBodyItem);
             defer allocator.free(bodies);
             
+            var payload = try types.EventPayload.TopicBody.init(
+                allocator, 
+                try types.EventPayload.SourcePath.init(allocator, name, path, hash, 1),
+                bodies
+            );
+
             return .{
-                .topic_body = try types.EventPayload.TopicBody.init(
-                    allocator, 
-                    try types.EventPayload.SourcePath.init(allocator, name, path, hash),
-                    bodies,
-                ),
+                .topic_body = payload.withNewIndex(item_index, item_count),
             };
         },
         .ready_topic_body => return .ready_topic_body,
         .finish_topic_body => return .finish_topic_body,
+        // worker event
+        .worker_result => {
+            const content = try reader.readString();
+
+            return .{
+                .worker_result = try types.EventPayload.WorkerResult.init(allocator, content),
+            };
+        },
         // Generation event
         .ready_generate => return .ready_generate,
         .finish_generate => return .finish_generate,
@@ -183,7 +203,7 @@ test "Encode/Decode event" {
     defer launched.deinit();
     const topic = try types.EventPayload.Topic.init(allocator, &.{"topic_a", "topic_b", "topic_c"});
     defer topic.deinit();
-    const source_path = try types.EventPayload.SourcePath.init(allocator, "Some-name", "Some-path", "Some-content");
+    const source_path = try types.EventPayload.SourcePath.init(allocator, "Some-name", "Some-path", "Some-content", 1);
     defer source_path.deinit();
     const topic_body = try types.EventPayload.TopicBody.init(allocator, source_path, &.{
         .{ "topic_a", "topic_a_content" },
@@ -207,7 +227,6 @@ test "Encode/Decode event" {
     try encodeEventInternal(allocator, &writer, .ready_topic_body);
     try encodeEventInternal(allocator, &writer, .ready_generate);
     try encodeEventInternal(allocator, &writer, .end_watch_path);
-    try encodeEventInternal(allocator, &writer, .finished);
     try encodeEventInternal(allocator, &writer, .quit_all);
     try encodeEventInternal(allocator, &writer, .quit);
     try encodeEventInternal(allocator, &writer, .{.quit_accept = quit_accept});
@@ -219,51 +238,48 @@ test "Encode/Decode event" {
     var reader = CborStream.Reader.init(encoded);
     var event: types.Event = undefined;
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .ack, &reader);
     try std.testing.expectEqual(.ack, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .nack, &reader);
     try std.testing.expectEqual(.nack, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .launched, &reader);
     try std.testing.expectEqualStrings(launched.stage_name, event.launched.stage_name);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .request_topic, &reader);
     try std.testing.expectEqual(.request_topic, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .topic, &reader);
     try std.testing.expectEqualDeep(topic, event.topic);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .begin_watch_path, &reader);
     try std.testing.expectEqual(.begin_watch_path, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .source_path, &reader);
     try std.testing.expectEqualDeep(source_path, event.source_path);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .topic_body, &reader);
     try std.testing.expectEqualDeep(try TopicBodyView.from(allocator, topic_body), try TopicBodyView.from(allocator, event.topic_body));
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .ready_topic_body, &reader);
     try std.testing.expectEqual(.ready_topic_body, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .ready_generate, &reader);
     try std.testing.expectEqual(.ready_generate, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .end_watch_path, &reader);
     try std.testing.expectEqual(.end_watch_path, event);
 
-    event = try decodeEventInternal(allocator, &reader);
-    try std.testing.expectEqual(.finished, event);
-
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .quit_all, &reader);
     try std.testing.expectEqual(.quit_all, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .quit, &reader);
     try std.testing.expectEqual(.quit, event);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .quit_accept, &reader);
     try std.testing.expectEqualStrings(quit_accept.stage_name, event.quit_accept.stage_name);
 
-    event = try decodeEventInternal(allocator, &reader);
+    event = try decodeEventInternal(allocator, .log, &reader);
     try std.testing.expectEqualDeep(log, event.log);
 }

@@ -10,118 +10,130 @@ const zmq = @import("zmq");
 const types = @import("../types.zig");
 const helpers = @import("../helpers.zig");
 const SubscribeSocket = @import("./SubscribeSocket.zig");
+const PullSinkSocket = @import("./PullSinkSocket.zig");
 const Logger = @import("../Logger.zig");
 const EventQueue = @import("../Queue.zig").Queue;
 
-pub const Client = struct {
-    const Self = @This();
+pub fn Client(comptime WorkerType: type) type {
+    return struct {
+        const Self = @This();
 
-    allocator: std.mem.Allocator,
-    request_socket: *zmq.ZSocket,
-    subscribe_socket: *SubscribeSocket,
-    dispatcher: EventDispatcher,
+        allocator: std.mem.Allocator,
+        request_socket: *zmq.ZSocket,
+        subscribe_socket: *SubscribeSocket,
+        pull_sink_socket: *PullSinkSocket.Worker(WorkerType),
+        dispatcher: *EventDispatcher,
 
-    pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
-        const request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
-        const subscribe_socket = try SubscribeSocket.init(allocator, context);
+        pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
+            const request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
+            const subscribe_socket = try SubscribeSocket.init(allocator, context);
+            const pull_sink_socket = try PullSinkSocket.Worker(WorkerType).init(allocator, context);
 
-        const self = try allocator.create(Self);
-        self.* = .{
-            .allocator = allocator,
-            .request_socket = request_socket,
-            .subscribe_socket = subscribe_socket,
-            .dispatcher = try EventDispatcher.init(
-                allocator, request_socket, 
-                &.{request_socket, subscribe_socket.socket},
-                onDispatch
-            ),
-        };
+            const self = try allocator.create(Self);
+            self.* = .{
+                .allocator = allocator,
+                .request_socket = request_socket,
+                .subscribe_socket = subscribe_socket,
+                .pull_sink_socket = pull_sink_socket,
+                .dispatcher = try EventDispatcher.init(
+                    allocator, request_socket, 
+                    &.{request_socket, subscribe_socket.socket, pull_sink_socket.socket},
+                    onDispatch
+                ),
+            };
 
-        return self;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.dispatcher.deinit();
-        self.request_socket.deinit();
-        self.subscribe_socket.deinit();
-        self.allocator.destroy(self);
-        self.* = undefined;
-    }
-
-    /// Connect owned sockets
-    pub fn connect(self: Self) !void {
-        try self.request_socket.connect(types.REQ_C2S_CONN_PORT);
-        try self.subscribe_socket.connect();
-    }
-
-    fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
-        while (true) {
-            while (dispatcher.receive_queue.dequeue()) |*entry| {
-                switch (entry.event) {
-                    .ack => {
-                        defer entry.deinit();
-                        Logger.Server.traceLog.debug("Received 'ack'", .{});
-                        try dispatcher.approve();
-                    },
-                    .nack => {
-                        defer entry.deinit();
-                        try dispatcher.revertFromPending();
-                    },
-                    else => {
-                        Logger.Server.traceLog.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
-
-                        return .{ 
-                            .socket = entry.socket, 
-                            .kind = .post,
-                            .event = entry.event
-                        };
-                    }
-                }
-            }
-
-            if (!dispatcher.receive_pending.hasMore()) {
-                if (dispatcher.send_queue.dequeue()) |entry| {
-                    Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
-                    try dispatcher.receive_pending.enqueue(entry);
-
-                    helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
-                        else => {
-                            Logger.Server.traceLog.debug("Unexpected error on sending: {}", .{err});
-                            return err;
-                        }
-                    };
-                }
-                else if (dispatcher.receive_queue.hasMore()) {
-                    continue;
-                }
-                else if (dispatcher.state == .done) {
-                    break;
-                }
-            }
-
-            var it = try dispatcher.polling.poll();
-            defer it.deinit();
-
-            while (it.next()) |item| {
-                const event = try helpers.receiveEventWithPayload(dispatcher.allocator, item.socket);
-                defer event.deinit();
-
-                try dispatcher.receive_queue.enqueue(.{
-                    .kind = .response,
-                    .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
-                });
-            }
+            return self;
         }
 
-        return null;
-    }
-};
+        pub fn deinit(self: *Self) void {
+            self.dispatcher.deinit();
+            self.allocator.destroy(self.dispatcher);
+
+            self.request_socket.deinit();
+            self.subscribe_socket.deinit();
+            
+            self.pull_sink_socket.deinit();
+            
+            self.allocator.destroy(self);
+            self.* = undefined;
+        }
+
+        /// Connect owned sockets
+        pub fn connect(self: Self) !void {
+            try self.request_socket.connect(types.REQ_C2S_CONN_PORT);
+            try self.subscribe_socket.connect();
+            try self.pull_sink_socket.connect();
+        }
+
+        fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
+            while (true) {
+                while (dispatcher.receive_queue.dequeue()) |*entry| {
+                    switch (entry.event) {
+                        .ack => {
+                            defer entry.deinit();
+                            Logger.Server.traceLog.debug("Received 'ack'", .{});
+                            try dispatcher.approve();
+                        },
+                        .nack => {
+                            defer entry.deinit();
+                            try dispatcher.revertFromPending();
+                        },
+                        else => {
+                            Logger.Server.traceLog.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
+
+                            return .{ 
+                                .socket = entry.socket, 
+                                .kind = .post,
+                                .event = entry.event
+                            };
+                        }
+                    }
+                }
+
+                if (!dispatcher.receive_pending.hasMore()) {
+                    if (dispatcher.send_queue.dequeue()) |entry| {
+                        Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
+                        try dispatcher.receive_pending.enqueue(entry);
+
+                        helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
+                            else => {
+                                Logger.Server.traceLog.debug("Unexpected error on sending: {}", .{err});
+                                return err;
+                            }
+                        };
+                    }
+                    else if (dispatcher.receive_queue.hasMore()) {
+                        continue;
+                    }
+                    else if (dispatcher.state == .done) {
+                        break;
+                    }
+                }
+
+                var it = try dispatcher.polling.poll();
+                defer it.deinit();
+
+                while (it.next()) |item| {
+                    const event = try helpers.receiveEventWithPayload(dispatcher.allocator, item.socket);
+                    defer event.deinit();
+
+                    try dispatcher.receive_queue.enqueue(.{
+                        .kind = .response,
+                        .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
+                    });
+                }
+            }
+
+            return null;
+        }
+    };
+}
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
     send_socket: *zmq.ZSocket,
     reply_socket: *zmq.ZSocket,
-    dispatcher: EventDispatcher,
+    dispatcher: *EventDispatcher,
 
     const Self = @This();
 
@@ -215,15 +227,16 @@ pub const EventDispatcher = struct {
     on_dispatch: DispatchFn,
     state: enum { ready, done},
 
-    pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !EventDispatcher {
+    pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !*EventDispatcher {
         const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
         defer allocator.free(polling_sockets);
 
         for (receive_sockets, 0..) |socket, i| {
             polling_sockets[i] = zmq.ZPolling.Item.fromSocket(socket, .{ .PollIn = true });
         }
-        
-        return .{
+
+        const self = try allocator.create(EventDispatcher);
+        self.* = .{
             .allocator = allocator,
             .send_queue = EventQueue(Entry).init(allocator),
             .receive_queue = EventQueue(Entry).init(allocator),
@@ -233,6 +246,8 @@ pub const EventDispatcher = struct {
             .on_dispatch = on_dispatch,
             .state = .ready,
         };
+
+        return self;
     }
 
     pub fn deinit(self: *EventDispatcher) void {
@@ -246,7 +261,6 @@ pub const EventDispatcher = struct {
     pub fn post(self: *EventDispatcher, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
             .kind = .post,
-            // .socket = self.send_socket, .event = try event.clone(self.allocator)
             .socket = self.send_socket, .event = event
         });
     }
@@ -254,7 +268,6 @@ pub const EventDispatcher = struct {
     pub fn reply(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
             .kind = .reply,
-            // .socket = socket, .event = try event.clone(self.allocator)
             .socket = socket, .event = event
         });
     }
@@ -289,7 +302,7 @@ pub const EventDispatcher = struct {
 
     pub const Entry = struct {
         socket: *zmq.ZSocket,
-        kind: enum { post, reply, response },
+        kind: enum { post, reply, response},
         event: types.Event,
 
         pub fn deinit(self: @This()) void {

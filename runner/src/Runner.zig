@@ -129,13 +129,21 @@ pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, gene
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
-                .end_watch_path, .finish_topic_body => {
+                .end_watch_path => {
                     traceLog.debug("[{s}] Received finished somewhere", .{APP_CONTEXT});
                     if (oneshot) {
                         try self.connection.dispatcher.reply(item.socket, .quit);
                         state = .terminating;
 
-                        try self.connection.dispatcher.post(item.event);
+                        try self.connection.dispatcher.post(.end_watch_path);
+                    }
+                    else {
+                        try self.connection.dispatcher.reply(item.socket, .ack);
+                    }
+                },
+                .finish_topic_body => {
+                    if (state == .terminating) {
+                        try self.connection.dispatcher.reply(item.socket, .quit);
                     }
                     else {
                         try self.connection.dispatcher.reply(item.socket, .ack);

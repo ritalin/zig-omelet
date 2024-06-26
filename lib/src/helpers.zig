@@ -16,6 +16,44 @@ pub fn makeIpcChannelRoot() !void {
     };
 }
 
+const AVAILABLE_PROROCOLS = std.StaticStringMap(void).initComptime(.{
+    .{"tcp://"}, .{"udp://"}
+});
+
+pub fn resolveConnectPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
+    if (std.mem.startsWith(u8, channel_root, "ipc://")) {
+        return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ channel_root, port_name });
+    }
+
+    for (AVAILABLE_PROROCOLS.keys()) |k| {
+        if (std.mem.startsWith(u8, channel_root, k)) {
+            const port_index = std.mem.lastIndexOf(u8, channel_root, ":");
+            if (port_index == null) return error.ChannelPort;
+
+            return channel_root;
+        }
+    }
+
+    return error.ChannelProtocl;
+}
+
+pub fn resolveBindPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
+    if (std.mem.startsWith(u8, channel_root, "ipc://")) {
+        return std.fs.path.join(allocator, &.{ channel_root, port_name });
+    }
+
+    for (AVAILABLE_PROROCOLS.keys()) |k| {
+        if (std.mem.startsWith(u8, channel_root, k)) {
+            const port_index = std.mem.lastIndexOf(u8, channel_root, ":");
+            if (port_index == null) return error.ChannelPort;
+
+            return try std.fmt.allocPrint(allocator, "{s}*{s}", .{k, channel_root[port_index.?..]});
+        }
+    }
+
+    return error.ChannelProtocl;
+}
+
 pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !void {
     var it = std.enums.EnumSet(types.EventType).init(events).iterator();
 

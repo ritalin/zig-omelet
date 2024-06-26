@@ -2,11 +2,9 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
-const Symbol = core.Symbol;
+const Setting = @import("./Setting.zig");
 
-const SOURCE_PREFIX = "../../_sql-examples";
-const PATH = "../../_sql-examples/Foo.sql";
-const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
+const Symbol = core.Symbol;
 
 const APP_CONTEXT = "watch-files";
 
@@ -17,7 +15,7 @@ logger: core.Logger,
 
 const Self = @This();
 
-pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }) !Self {
+pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
     var connection = try core.sockets.Connection.Client(void).init(allocator, &ctx);
@@ -25,13 +23,13 @@ pub fn init(allocator: std.mem.Allocator, settings: struct { stand_alone: bool }
         .begin_watch_path = true,
         .quit = true,
     });
-    try connection.connect();
+    try connection.connect(setting.endpoints);
 
     return .{
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, settings.stand_alone),
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, false),
     };
 }
 
@@ -40,9 +38,20 @@ pub fn deinit(self: *Self) void {
     self.context.deinit();
 }
 
-pub fn run(self: *Self) !void {
+pub fn run(self: *Self, setting: Setting) !void {
     try self.logger.log(.info, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
+
+    dump_setting: {
+        try self.logger.log(.debug, "CLI: Req/Rep Channel = {s}", .{setting.endpoints.req_rep});
+        try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{setting.endpoints.pub_sub});
+
+        for (setting.sources, 1..) |src, i| {
+            try self.logger.log(.debug, "CLI: sources[{}] = {s}", .{i, src.dir_path});
+        }
+        try self.logger.log(.debug, "CLI: Watch mode = {}", .{setting.watch});
+        break :dump_setting;
+    }
 
     launch: {
         try self.connection.dispatcher.post(.{
@@ -65,7 +74,7 @@ pub fn run(self: *Self) !void {
             
             switch (item.event) {
                 .begin_watch_path => {
-                    try self.sendAllFiles();
+                    try self.sendAllFiles(setting.sources);
                     try self.connection.dispatcher.post(.end_watch_path);
                 },
                 .quit_all => {
@@ -90,39 +99,67 @@ pub fn run(self: *Self) !void {
     }
 }
 
-fn sendAllFiles(self: *Self) !void {
-    const name = try std.fs.path.relative(self.allocator, SOURCE_PREFIX, PATH);
+fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir) !void {
+    for (sources) |src| {
+        const file_stat = try std.fs.cwd().statFile(src.dir_path);
+        if (file_stat.kind == .file) {
+            try self.sendFile(src.dir_path, src.prefix);
+        }
+        else if (file_stat.kind == .directory) {
+            try self.sendFiledOfDir(src.dir_path, src.prefix);
+        }
+    }
+}
+
+fn sendFiledOfDir(self: *Self, dir_path: core.FilePath, prefix: core.FilePath) !void {
+    var dir = try std.fs.cwd().openDir(dir_path, .{});
+    defer dir.close();
+
+    var iter = try dir.walk(self.allocator);
+
+    while (try iter.next()) |entry| {
+        if (entry.kind == .file) {
+            try self.sendFile(entry.path, prefix);
+        }
+    }
+}
+
+fn sendFile(self: *Self, file_path: core.FilePath, prefix: core.FilePath) !void {
+    try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path});
+
+    const name = try std.fs.path.relative(self.allocator, prefix, file_path);
     defer self.allocator.free(name);
-    const path_abs = try std.fs.cwd().realpathAlloc(self.allocator, PATH);
-    defer self.allocator.free(path_abs);
-    const hash = try makeHash(self.allocator, name, SQL);
+
+    var file = try std.fs.openFileAbsolute(file_path, .{});
+    defer file.close();
+
+    const hash = try makeHash(self.allocator, name, file);
     defer self.allocator.free(hash);
     std.debug.print("[DEBUG] name: {s}\n", .{name});
 
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
         .source_path = try core.EventPayload.SourcePath.init(
-            self.allocator, name, path_abs, hash, 1
+            self.allocator, name, file_path, hash, 1
         ),
     });
 }
 
 const Hasher = std.crypto.hash.sha2.Sha256;
 
-fn makeHash(allocator: std.mem.Allocator, file_path: []const u8, content: []const u8) !Symbol {
+fn makeHash(allocator: std.mem.Allocator, file_path: []const u8, file: std.fs.File) !Symbol {
     var hasher = Hasher.init(.{});
 
     hasher.update(file_path);
 
-    // var buf: [8192]u8 = undefined;
+    var buf: [8192]u8 = undefined;
 
-    // while (true) {
-        // const read_size = try file.read(&buf);
-        // if (read_size == 0) break;
+    while (true) {
+        const read_size = try file.read(&buf);
+        if (read_size == 0) break;
 
-        // hasher.update(buf[0..read_size]);
-        hasher.update(content);
-    // }
+        hasher.update(buf[0..read_size]);
+    }
 
     return bytesToHexAlloc(allocator, &hasher.finalResult());
 }

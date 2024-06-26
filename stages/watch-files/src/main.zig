@@ -1,22 +1,23 @@
 const std = @import("std");
 const core = @import("core");
+const Setting = @import("./Setting.zig");
 const Stage = @import("./Stage.zig");
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
+    const allocator = arena.allocator();
 
-    // _ = try core.makeIpcChannelRoot();
-    
+    var setting = Setting.loadFromArgs(allocator) catch {
+        try Setting.showUsage(std.io.getStdErr().writer());
+        std.process.exit(1);
+    };
+    defer setting.deinit();     
 
-    const cmd_args = try std.process.argsAlloc(arena.allocator());
-    const stand_alone =(cmd_args.len > 1) and std.mem.eql(u8, cmd_args[1], "standalone");
-
-    var stage = try Stage.init(arena.allocator(), .{.stand_alone = stand_alone});
+    var stage = try Stage.init(allocator, setting);
     defer stage.deinit();
 
-    std.time.sleep(100_000);
-    try stage.run();
-    std.time.sleep(100_000);
+    try stage.run(setting);
 }
 

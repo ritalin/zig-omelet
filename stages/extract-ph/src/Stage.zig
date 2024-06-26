@@ -2,22 +2,20 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
+const Setting = @import("./Setting.zig");
+
 const Symbol = core.Symbol;
 const ExtractWorker = @import("./ExtractWorker.zig");
 
 const APP_CONTEXT = "exctract-ph";
 const Self = @This();
 
-// const SQL_BARE = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
-// const SQL = "select $1, $2 from foo where kind = $3";
-// const PH = "[{\"field_name\":\"id\", \"field_type\": \"bigint\"}]";
-
 allocator: std.mem.Allocator,
 context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む
 connection: *core.sockets.Connection.Client(ExtractWorker),
 logger: core.Logger,
 
-pub fn init(allocator: std.mem.Allocator) !Self {
+pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);
     ctx.* = try zmq.ZContext.init(allocator);
 
@@ -29,7 +27,7 @@ pub fn init(allocator: std.mem.Allocator) !Self {
         .quit_all = true,
         .quit = true,
     });
-    try connection.connect();
+    try connection.connect(setting.endpoints);
 
     return .{
         .allocator = allocator,
@@ -45,9 +43,15 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self.context);
 }
 
-pub fn run(self: *Self) !void {
+pub fn run(self: *Self, setting: Setting) !void {
     try self.logger.log(.info, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
+
+    dump_setting: {
+        try self.logger.log(.debug, "CLI: Req/Rep Channel = {s}", .{setting.endpoints.req_rep});
+        try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{setting.endpoints.pub_sub});
+        break :dump_setting;
+    }
 
     launch: {
         try self.connection.dispatcher.post(.{

@@ -2,6 +2,7 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
+const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
 
 const APP_CONTEXT = "generate-ts";
@@ -15,7 +16,7 @@ context: zmq.ZContext,
 connection: *core.sockets.Connection.Client(void),
 logger: core.Logger,
 
-pub fn init(allocator: std.mem.Allocator) !Self {
+pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
     var connection = try core.sockets.Connection.Client(void).init(allocator, &ctx);
@@ -25,7 +26,7 @@ pub fn init(allocator: std.mem.Allocator) !Self {
         .quit_all = true,
         .quit = true,
     });
-    try connection.connect();
+    try connection.connect(setting.endpoints);
 
     return .{
         .allocator = allocator,
@@ -40,9 +41,15 @@ pub fn deinit(self: *Self) void {
     self.context.deinit();
 }
 
-pub fn run(self: *Self) !void {
+pub fn run(self: *Self, setting: Setting) !void {
     try self.logger.log(.info, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
+
+    dump_setting: {
+        try self.logger.log(.debug, "CLI: Req/Rep Channel = {s}", .{setting.endpoints.req_rep});
+        try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{setting.endpoints.pub_sub});
+        break :dump_setting;
+    }
 
     launch: {
         try self.connection.dispatcher.post(.{

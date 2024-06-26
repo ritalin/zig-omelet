@@ -87,6 +87,9 @@ pub fn run(self: *Self, setting: Setting) !void {
                     }
                 },
                 .source_path => |path| {
+                    try self.logger.log(.debug, "Accept source path: {s}", .{path.path});
+                    try self.logger.log(.trace, "Begin worker process", .{});
+
                     const p1 = try path.clone(self.allocator);
                     try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0});
 
@@ -95,6 +98,8 @@ pub fn run(self: *Self, setting: Setting) !void {
                 },
                 .worker_result => |result| {
                     try self.processWorkerResult(result.content, &body_lookup);
+
+                    try self.logger.log(.trace, "End worker process", .{});
 
                     if (body_lookup.count() == 0) {
                         try self.connection.dispatcher.post(.finish_topic_body);
@@ -105,18 +110,10 @@ pub fn run(self: *Self, setting: Setting) !void {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                 },
-                .quit_all => {
+                .quit, .quit_all => {
                     try self.connection.dispatcher.post(.{
                         .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
                     });
-                    try self.connection.dispatcher.done();
-                },
-                .quit => {
-                    try self.connection.dispatcher.approve();
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
-                    });
-                    try self.connection.dispatcher.done();
                 },
                 .log => |log| {
                     try self.logger.log(log.level, "{s}", .{log.content});

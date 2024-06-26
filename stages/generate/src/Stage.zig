@@ -84,6 +84,9 @@ pub fn run(self: *Self, setting: Setting) !void {
                 .topic_body => |source| {
                     try self.connection.dispatcher.approve();
 
+                    try self.logger.log(.trace, "Accept source: `{s}`", .{source.header.path});
+                    try self.logger.log(.trace, "Begin generate: `{s}`", .{source.header.name});
+
                     var output_dir = try std.fs.cwd().makeOpenPath(PREFIX, .{});
                     defer output_dir.close();
 
@@ -106,21 +109,14 @@ pub fn run(self: *Self, setting: Setting) !void {
                     };
 
                     try builder.build();
+                    try self.logger.log(.trace, "End generate: `{s}`", .{source.header.name});
 
                     try self.connection.dispatcher.post(.ready_generate);
                 },
-                .quit_all => {
+                .quit, .quit_all => {
                     try self.connection.dispatcher.post(.{
                         .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
                     });
-                    try self.connection.dispatcher.done();
-                },
-                .quit => {
-                    try self.connection.dispatcher.approve();
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
-                    });
-                    try self.connection.dispatcher.done();
                 },
                 else => {
                     try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});

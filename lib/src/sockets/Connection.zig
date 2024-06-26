@@ -81,6 +81,15 @@ pub fn Client(comptime WorkerType: type) type {
                         else => {
                             Logger.Server.traceLog.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
 
+                            if (entry.event.tag() == .quit) {
+                                try dispatcher.approve();
+                                try dispatcher.readyQuit();
+                            }
+                            else if (entry.event.tag() == .quit_all) {
+                                // TODO terminate worker thread
+                                try dispatcher.readyQuit();
+                            }
+
                             return .{ 
                                 .socket = entry.socket, 
                                 .kind = .post,
@@ -92,6 +101,11 @@ pub fn Client(comptime WorkerType: type) type {
 
                 if (!dispatcher.receive_pending.hasMore()) {
                     if (dispatcher.send_queue.dequeue()) |entry| {
+                        if (entry.event.tag() == .quit_accept) {
+                            if (dispatcher.state == .done) continue;
+
+                            try dispatcher.done();
+                        }
                         Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
                         try dispatcher.receive_pending.enqueue(entry);
 
@@ -225,7 +239,7 @@ pub const EventDispatcher = struct {
     polling: zmq.ZPolling,
     send_socket: *zmq.ZSocket,
     on_dispatch: DispatchFn,
-    state: enum { ready, done},
+    state: enum { ready, quitting, done},
 
     pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !*EventDispatcher {
         const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
@@ -282,6 +296,10 @@ pub const EventDispatcher = struct {
         if (self.receive_pending.dequeue()) |entry| {
             try self.send_queue.revert(entry);
         }
+    }
+
+    pub fn readyQuit(self: *EventDispatcher) !void {
+        self.state = .quitting;
     }
 
     pub fn done(self: *EventDispatcher) !void {

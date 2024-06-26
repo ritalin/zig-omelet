@@ -30,8 +30,8 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-pub fn connect(self: *Self) !void {
-    return self.socket.connect(types.CMD_S2C_CONN_PORT);
+pub fn connect(self: *Self, endpoint_channel: types.Symbol) !void {
+    return self.socket.connect(endpoint_channel);
 }
 
 pub fn addFilters(self: *Self, filters: types.EventTypes) !void {

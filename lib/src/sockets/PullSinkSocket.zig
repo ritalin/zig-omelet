@@ -2,12 +2,11 @@ const std = @import("std");
 const zmq = @import("zmq");
 const types = @import("../types.zig");
 
-const WORKER_CHANNEL_ROOT = std.fmt.comptimePrint("inproc://{s}workers", .{types.CHANNEL_ROOT});
+const WORKER_CHANNEL_ROOT = std.fmt.comptimePrint("inproc://workers", .{});
 
 pub fn Worker(comptime WorkerType: type) type {
     return struct {
         const Self = @This();
-        // TODO Need to resolve at runtime
         const SinkEndpoint = std.fmt.comptimePrint("{s}_{s}", .{WORKER_CHANNEL_ROOT, @typeName(WorkerType)});
 
         allocator: std.mem.Allocator, 

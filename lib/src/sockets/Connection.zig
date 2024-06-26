@@ -53,15 +53,15 @@ pub fn Client(comptime WorkerType: type) type {
             self.subscribe_socket.deinit();
             
             self.pull_sink_socket.deinit();
-            
+
             self.allocator.destroy(self);
             self.* = undefined;
         }
 
         /// Connect owned sockets
-        pub fn connect(self: Self) !void {
-            try self.request_socket.connect(types.REQ_C2S_CONN_PORT);
-            try self.subscribe_socket.connect();
+        pub fn connect(self: Self, endpoints: types.Endpoints) !void {
+            try self.request_socket.connect(endpoints.req_rep);
+            try self.subscribe_socket.connect(endpoints.pub_sub);
             try self.pull_sink_socket.connect();
         }
 
@@ -159,9 +159,9 @@ pub const Server = struct {
         self.* = undefined;
     }
 
-    pub fn bind(self: *Self) !void {
-        try self.send_socket.bind(types.CMD_S2C_BIND_PORT);
-        try self.reply_socket.bind(types.REQ_C2S_BIND_PORT);
+    pub fn bind(self: *Self, endpoints: types.Endpoints) !void {
+        try self.send_socket.bind(endpoints.pub_sub);
+        try self.reply_socket.bind(endpoints.req_rep);
     }
 
     fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {

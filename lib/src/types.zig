@@ -1,17 +1,18 @@
 const std = @import("std");
 
+// IPC channel root directory
+pub const CHANNEL_ROOT = "/tmp/duckdb-ext-ph";
+
 //
 // Channel endpoints
 //
+pub const REQ_PORT = "req_c2s";
+pub const PUBSUB_PORT = "cmd_s2c";
 
-pub const CHANNEL_ROOT = "/tmp/duckdb-ext-ph/";
-
-// /// (control) Server -> Client
-pub const CMD_S2C_BIND_PORT = std.fmt.comptimePrint("ipc://{s}cmd_s2c", .{CHANNEL_ROOT});
-pub const CMD_S2C_CONN_PORT = std.fmt.comptimePrint("ipc://{s}cmd_s2c", .{CHANNEL_ROOT});
-// /// (source) Client -> Server
-pub const REQ_C2S_BIND_PORT = std.fmt.comptimePrint("ipc://{s}req_c2s", .{CHANNEL_ROOT});
-pub const REQ_C2S_CONN_PORT = std.fmt.comptimePrint("ipc://{s}req_c2s", .{CHANNEL_ROOT});
+pub const Endpoints = struct {
+    req_rep: Symbol,
+    pub_sub: Symbol,
+};
 
 pub const StageState = enum {booting, ready, terminating};
 
@@ -51,6 +52,7 @@ pub const ChannelType = enum {
     channel_generate,
 };
 
+pub const FilePath = []const u8;
 pub const Symbol = []const u8;
 
 /// Event types
@@ -205,11 +207,11 @@ pub const EventPayload = struct {
     pub const SourcePath = struct {
         allocator: std.mem.Allocator,
         name: Symbol, 
-        path: Symbol, 
+        path: FilePath, 
         hash: Symbol,
         item_count: usize,
 
-        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: Symbol, hash: Symbol, item_count: usize) !@This() {
+        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: FilePath, hash: Symbol, item_count: usize) !@This() {
             return .{
                 .allocator = allocator,
                 .name = try allocator.dupe(u8, name),

@@ -2,6 +2,9 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
+const Setting = @import("./Setting.zig");
+const StageCount = @import("./Config.zig").StageCount;
+
 const Symbol = core.Symbol;
 const systemLog = core.Logger.Server.systemLog;
 const traceLog = core.Logger.Server.traceLog;
@@ -14,11 +17,11 @@ allocator: std.mem.Allocator,
 context: zmq.ZContext,
 connection: *core.sockets.Connection.Server,
 
-pub fn init(allocator: std.mem.Allocator) !Self {
+pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
     var connection = try core.sockets.Connection.Server.init(allocator, &ctx);
-    try connection.bind();
+    try connection.bind(setting.runner_endpoints);
 
     return .{
         .allocator = allocator,
@@ -32,13 +35,21 @@ pub fn deinit(self: *Self) void {
     self.context.deinit();
 }
 
-pub fn run(self: *Self, stage_count: struct { watch: usize, extract: usize, generate: usize }) !void {
+pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     systemLog.debug("[{s}] Launched", .{APP_CONTEXT});
 
+    dump_setting: {
+        systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.runner_endpoints.req_rep});
+        systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.runner_endpoints.pub_sub});
+        systemLog.debug("CLI: Watch mode = {}", .{setting.watch});
+        break :dump_setting;
+    }
+
+    // const oneshot = (!setting.watch);
     const oneshot = true;
-    var left_launching = stage_count.watch + stage_count.extract + stage_count.generate;
-    var left_topic_stage = stage_count.extract;
-    var left_launched = stage_count.watch + stage_count.extract + stage_count.generate;
+    var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
+    var left_topic_stage = stage_count.stage_extract;
+    var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
 
     var source_cache = try PayloadCacheManager.init(self.allocator);
     defer source_cache.deinit();

@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
 
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
+    const dep_clap = b.dependency("clap", .{});
 
     const dep_core = b.dependency("lib_core", .{});
 
@@ -27,6 +28,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("clap", dep_clap.module("clap"));
     exe.root_module.addImport("core", dep_core.module("core"));
 
     exe.linkSystemLibrary("zmq");
@@ -54,6 +56,9 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+
+    // Apply zmq communication cannel
+    try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`

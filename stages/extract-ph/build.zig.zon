@@ -45,6 +45,7 @@
         //},
         .zzmq = .{ .path = "../../vendor/zzmq" },
         .lib_core = .{ .path = "../../lib" },
+        .clap = .{ .path = "../../vendor/zig-clap"},
     },
 
     .paths = .{

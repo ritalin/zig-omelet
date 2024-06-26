@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
+    const dep_clap = b.dependency("clap", .{});
     const dep_core = b.dependency("lib_core", .{});
 
     const exe = b.addExecutable(.{
@@ -56,6 +57,7 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
 
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("clap", dep_clap.module("clap"));
     exe.root_module.addImport("core", dep_core.module("core"));
 
     // This declares intent for the executable to be installed into the
@@ -79,6 +81,9 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+
+    // Apply zmq communication cannel
+    try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`
@@ -115,10 +120,12 @@ pub fn build(b: *std.Build) void {
     });
     exe_unit_tests.defineCMacro("CATCH2_TEST", "1");
 
+    exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
     exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
     exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
     exe_unit_tests.linkLibCpp();
 
+    exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

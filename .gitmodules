@@ -7,3 +7,6 @@
 [submodule "vendor/cbor"]
 	path = vendor/cbor
 	url = https://github.com/libmcu/cbor.git
+[submodule "vendor/zig-clap"]
+	path = vendor/zig-clap
+	url = https://github.com/Hejsil/zig-clap.git

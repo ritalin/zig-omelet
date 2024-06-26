@@ -44,9 +44,6 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     _ = c.initCollector(self.path.ptr, self.path.len, socket.socket_, &handle);
     defer c.deinitCollector(handle);
 
-        const path_abs = try std.fs.cwd().realpathAlloc(self.allocator, self.path);
-        _ = path_abs;
-
     var file = std.fs.cwd().openFile(self.path, .{}) catch |err| {
         const message = switch (err) {
             error.FileNotFound => try std.fmt.allocPrint(self.allocator, "File not found: {s}", .{self.path}),

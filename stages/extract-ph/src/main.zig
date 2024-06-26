@@ -18,16 +18,6 @@ pub fn main() !void {
     var stage = try Stage.init(arena.allocator(), setting);
     defer stage.deinit();
 
-    // プレースホルダは、?, $<N> と $<NAME>を混在できない
-    // duckdb::NotImplementedExceptionが送出される
-    // const que・ry = null;
-    // const que・ry = "select $name::varchar as name, xyz, 123 from Foo";
-    // const que・ry = "select $name::varchar as name, xyz, 123 from read_json($path::varchar) t(id, v, v2) where v = $value::int and v2 = $value2::bigint";
-    // const que・ry = "select $2 as name, xyz, 123 from Foo where v = $1";
-    // const que・ry = "SELCT a, b, c";
-
-    // duckDbParseSQL(query.ptr, query.len, null);
-
     try stage.run(setting);
 }
 

@@ -14,7 +14,8 @@ query: ?Symbol,
 parameters: ?Symbol,
 
 pub fn init(allocator: std.mem.Allocator, prefix_dir: std.fs.Dir, dest_dir: Symbol) !Self {
-    const dir = try prefix_dir.makeOpenPath(dest_dir, .{});
+    const dir_name = trimExtension(dest_dir);
+    const dir = try if (dir_name.len > 0) prefix_dir.makeOpenPath(dir_name, .{}) else prefix_dir;
 
     return .{
         .allocator = allocator,
@@ -29,6 +30,16 @@ pub fn deinit(self: *Self) void {
 
     if (self.query) |x| self.allocator.free(x);
     if (self.parameters) |x| self.allocator.free(x);
+}
+
+fn trimExtension(name: core.Symbol) core.Symbol {
+    const ext = std.fs.path.extension(name);
+    if (std.mem.lastIndexOf(u8, name, ext)) |i| {
+        return name[0..i];
+    }
+    else {
+        return name;
+    }
 }
 
 pub fn applyQuery(self: *Self, query: Symbol) !void {

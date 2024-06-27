@@ -52,11 +52,11 @@ pub fn Worker(comptime WorkerType: type) type {
                 try self.pool.init(.{.allocator = self.allocator});
             }
 
-            const worker_socket = try zmq.ZSocket.init(.Push, self.context);
-            try self.pool.spawn(runWorker, .{worker, worker_socket, self.endpoint});
+            try self.pool.spawn(runWorker, .{self, worker, self.endpoint});
         }
 
-        fn runWorker(worker: *WorkerType, socket: *zmq.ZSocket, endpoint: types.Symbol) void {
+        fn runWorker(self: *Self, worker: *WorkerType, endpoint: types.Symbol) void {
+            var socket = zmq.ZSocket.init(.Push, self.context) catch @panic("Failed to create Push socket");
             socket.connect(endpoint) catch @panic("Connection failed");
             defer socket.deinit();
             defer worker.deinit();

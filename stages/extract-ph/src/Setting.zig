@@ -24,7 +24,6 @@ pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
 pub fn deinit(self: *Setting) void {
     self.arena.deinit();
     self.arena.child_allocator.destroy(self.arena);
-    self.* = undefined;
 }
 
 pub fn showUsage(writer: anytype) !void {

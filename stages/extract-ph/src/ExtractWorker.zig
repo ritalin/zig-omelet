@@ -36,6 +36,7 @@ pub fn init(allocator: std.mem.Allocator, file_path: core.Symbol) !*Self {
 
 pub fn deinit(self: *Self) void {
     self.allocator.free(self.path);
+    self.allocator.destroy(self);
     self.* = undefined;
 }
 
@@ -62,6 +63,7 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     var meta = try file.metadata();
 
     const query = try file.readToEndAlloc(self.allocator, meta.size());
+    defer self.allocator.free(query);
 
     c.parseDuckDbSQL(handle, query.ptr, query.len);
 

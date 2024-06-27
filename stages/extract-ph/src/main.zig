@@ -4,10 +4,11 @@ const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
 pub fn main() !void {
-    var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    var gpa = (std.heap.GeneralPurposeAllocator(.{.stack_trace_frames = 6, .thread_safe = true, .safety = true}){});
+    defer {
+        std.debug.print("Leak? {}\n", .{gpa.deinit()});
+    }
+    const allocator = gpa.allocator();
 
     var setting = Setting.loadFromArgs(allocator) catch {
         try Setting.showUsage(std.io.getStdErr().writer());
@@ -15,10 +16,12 @@ pub fn main() !void {
     };
     defer setting.deinit();    
 
-    var stage = try Stage.init(arena.allocator(), setting);
+    var stage = try Stage.init(allocator, setting);
     defer stage.deinit();
 
     try stage.run(setting);
+
+    std.debug.print("Finished\n", .{});
 }
 
 test "main" {

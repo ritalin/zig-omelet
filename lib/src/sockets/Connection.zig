@@ -55,7 +55,6 @@ pub fn Client(comptime WorkerType: type) type {
             self.pull_sink_socket.deinit();
 
             self.allocator.destroy(self);
-            self.* = undefined;
         }
 
         /// Connect owned sockets

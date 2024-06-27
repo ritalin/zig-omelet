@@ -77,8 +77,7 @@ pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.E
 
 fn sendEventTypeInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.EventType, has_more: bool) !void {
     // std.debug.print("[DEBUG] Sending event: '{}' (more: {})\n", .{ev, has_more});
-    _ = allocator;
-    var msg = try zmq.ZMessage.init(std.heap.c_allocator, @tagName(ev));
+    var msg = try zmq.ZMessage.init(allocator, @tagName(ev));
     defer {
         // std.debug.print("[DEBUG] Begin dealoc sending event\n", .{});
         std.time.sleep(WAIT_TIME);
@@ -136,7 +135,9 @@ fn receivePayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Sym
 pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Event {    
     const event_type = try receiveEventType(socket);
     const data = try receivePayload(allocator, socket);
-    _ = try receivePayload(allocator, socket);
+    defer allocator.free(data);
+    const term = try receivePayload(allocator, socket);
+    defer allocator.free(term);
 
     return decodeEvent(allocator, event_type, data);
 }

@@ -163,9 +163,10 @@ const ZMessageInternal = struct {
             if (result < 0) {
                 return error.FrameInitFailed;
             }
+            self.refAdd(); // increase reference count
         }
 
-        self.refAdd(); // increase reference count
+        // self.refAdd(); // increase reference count
 
         return try ZMessageExternal.init(&message);
     }
@@ -189,8 +190,6 @@ const ZMessageInternal = struct {
 
         if (prev == 1) { // it's now zero
             if (self.allocator_) |a| {
-                const p = prev;
-                _ = p;
                 a.free(self.data_);
                 a.destroy(self);
             }

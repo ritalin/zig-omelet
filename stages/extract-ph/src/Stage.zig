@@ -63,6 +63,8 @@ pub fn run(self: *Self, setting: Setting) !void {
     var body_lookup = std.StringHashMap(LookupEntry).init(self.allocator);
     defer body_lookup.deinit();
 
+    var state: core.StageState = .ready;
+
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
             error.InvalidResponse => {
@@ -91,23 +93,27 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.logger.log(.trace, "Begin worker process", .{});
 
                     const p1 = try path.clone(self.allocator);
-                    try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0});
+                    try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0, .item_count = 1});
 
                     const worker = try ExtractWorker.init(self.allocator, path.path);
                     try self.connection.pull_sink_socket.spawn(worker);
                 },
                 .worker_result => |result| {
-                    try self.processWorkerResult(result.content, &body_lookup);
+                    const event = try self.processWorkerResult(result.content, &body_lookup);
+                    try self.connection.dispatcher.post(event);
 
                     try self.logger.log(.trace, "End worker process", .{});
 
-                    if (body_lookup.count() == 0) {
+                    if ((state == .terminating) and (body_lookup.count() == 0)) {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                 },
                 .end_watch_path => {
                     if (body_lookup.count() == 0) {
                         try self.connection.dispatcher.post(.finish_topic_body);
+                    }
+                    else {
+                        state = .terminating;
                     }
                 },
                 .quit, .quit_all => {
@@ -126,39 +132,81 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 }
 
-fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !void {
+const WorkerResultTags = std.StaticStringMap(core.EventType).initComptime(.{
+    .{"topic_body", .topic_body}, 
+    .{"log", .log},
+});
+
+fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !core.Event {
     var reader = core.CborStream.Reader.init(result_content);
 
-    const item_count = try reader.readUInt(u32);
-    const item_index = try reader.readUInt(u32);
+    const event_tag = try reader.readString();
+    const source_path = try reader.readString();
 
-    const result = try reader.readSlice(self.allocator, core.EventPayload.TopicBody.Item.Values);
-    defer self.allocator.free(result);
-
-    const lookup_key = result[0][1];
-
-    if (lookup.getPtr(lookup_key)) |entry| {
-        const path = entry.path;
-
+    if (lookup.getPtr(source_path)) |entry| {
         defer {
-            if (entry.ref_count == item_count) {
-                const ss = lookup.remove(lookup_key);
-                std.debug.assert(ss);
+            if (entry.ref_count == entry.item_count) {
+                var path = entry.path;
+                _ = lookup.remove(source_path);
                 path.deinit();
             }
         }
         defer entry.ref_count += 1;
 
-        var topic_body = try core.EventPayload.TopicBody.init(self.allocator, path, result);
-        const event: core.Event = .{
-            .topic_body = topic_body.withNewIndex(item_index, item_count),
-        };
+        if (WorkerResultTags.get(event_tag)) |tag| {
+            switch (tag) {
+                .topic_body => {
+                    return try processParseResult(self.allocator, &reader, entry);
+                },
+                .log => {
+                    return try processLogResult(self.allocator, &reader);
+                },
+                else => {},
+            }
+        }
+    }
 
-        try self.connection.dispatcher.post(event);
-    } 
+    return .{
+        .log = try core.EventPayload.Log.init(self.allocator, .warn, "Unknown worker result"),
+    };
+}
+
+fn processParseResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+    const item_count = try reader.readUInt(u32);
+    const item_index = try reader.readUInt(u32);
+
+    defer entry.item_count = item_count;
+
+    const result = try reader.readSlice(allocator, core.EventPayload.TopicBody.Item.Values);
+    defer allocator.free(result);
+
+    var topic_body = try core.EventPayload.TopicBody.init(allocator, entry.path, result);
+    return .{
+        .topic_body = topic_body.withNewIndex(item_index, item_count),
+    };
+}
+
+fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader) !core.Event {
+    const log_level = try reader.readString();
+    const content = try reader.readString();
+
+    return .{
+        .log = try core.EventPayload.Log.init(allocator, stringToLogLevel(log_level), content),
+    };
+}
+
+fn stringToLogLevel(s: core.Symbol) core.LogLevel {
+    inline for (comptime std.meta.fields(core.LogLevel)) |f| {
+        if (std.mem.eql(u8, s, f.name)) {
+            return @enumFromInt(f.value);
+        }
+    }
+
+    return .err;
 }
 
 const LookupEntry = struct {
     path: core.EventPayload.SourcePath,
     ref_count: usize,
+    item_count: usize,
 };

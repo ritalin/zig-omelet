@@ -11,8 +11,6 @@ extern "C" {
 #define TOPIC_OFFSET "offset"
 #define TOPIC_QUERY "query"
 #define TOPIC_PH "placeholder"
-#define TOPIC_LOGLEVEL "log"
-#define TOPIC_CONTENT "content"
 
 typedef struct Collector *CollectorRef;
 

@@ -331,45 +331,38 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
     }
     payload: {
         std::vector<char> buf;
-        auto inserter = std::back_inserter(buf);
 
         const size_t STMT_OFFSET = 1;
         const size_t STMT_COUNT = 1;
 
+        CborEncoder payload_encoder;
+        result_tag: {
+            payload_encoder.addString("topic_body");
+        }
+        source_path: {
+            payload_encoder.addString(result.id);
+        }
         stmt_count: {
-            auto data = std::move(CborEncoder::encodeUInt(STMT_COUNT));
-            inserter = std::move(data.begin(), data.end(), inserter);
+            payload_encoder.addUInt(STMT_COUNT);
         }
         stmt_offset: {
-            auto data = std::move(CborEncoder::encodeUInt(STMT_OFFSET));
-            inserter = std::move(data.begin(), data.end(), inserter);
+            payload_encoder.addUInt(STMT_OFFSET);
         }
         topic_body: {
             CborEncoder encoder;
-            encoder.addArrayHeader(3);
-            send_id: {
-                encoder.addStringPair(TOPIC_ID, result.id);
-            }
+            encoder.addArrayHeader(2);
             send_query: {
                 encoder.addStringPair(TOPIC_QUERY, result.query);
             }
-            send_place_holder: {
+            send_placeholder: {
                 auto ph = serializePlaceHolder(result.placeholders());
                 encoder.addStringPair(TOPIC_PH, ph);
             }
 
-            auto data = std::move(encoder.build());
-            inserter = std::move(data.begin(), data.end(), inserter);
+            payload_encoder.concatBinary(encoder);
         }
-        CborEncoder payload_encoder;
-        payload_encoder.addBinary(buf);
 
         auto encode_result = payload_encoder.build();
-
-        {
-std::cout << "encode_result: " << encode_result.length() << std::endl;
-std::cout << "payload: " << buf.size() << std::endl;
-        }
 
         zmq_send(socket, encode_result.data(), encode_result.length(), ZMQ_SNDMORE);
         zmq_send(socket, "", 0, 0);    
@@ -384,23 +377,26 @@ auto PlaceholderCollector::err(const std::string msg) -> void {
         auto socket = this->socket.value();
 
         event_type: {
-            auto event_type = std::string("log");
-            zmq_send(socket, event_type.c_str(), event_type.length(), ZMQ_SNDMORE);    
+            auto event_type = std::string("worker_result");
+            zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
         }
         payload: {
-            CborEncoder result_encoder;
-            result_encoder.addArrayHeader(2);
+            CborEncoder payload_encoder;
+
+            event_tag: {
+                payload_encoder.addString("log");
+            }
+            source_path: {
+                payload_encoder.addString(this->id);
+            }
             log_level: {
-                result_encoder.addStringPair(TOPIC_LOGLEVEL, "err");
+                payload_encoder.addString("err");
             }
             log_content: {
-                result_encoder.addStringPair(TOPIC_CONTENT, msg);
+                payload_encoder.addString(msg);
             }
 
-            // CborEncoder payload_encoder;
-            // payload_encoder.addString(result_encoder.build());
-
-            auto encode_result = result_encoder.build();
+            auto encode_result = payload_encoder.build();
             zmq_send(socket, encode_result.c_str(), encode_result.length(), ZMQ_SNDMORE);    
             zmq_send(socket, "", 0, 0);    
         }

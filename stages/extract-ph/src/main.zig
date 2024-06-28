@@ -21,7 +21,7 @@ pub fn main() !void {
 
     try stage.run(setting);
 
-    std.debug.print("Finished\n", .{});
+    // std.debug.print("Finished\n", .{});
 }
 
 test "main" {

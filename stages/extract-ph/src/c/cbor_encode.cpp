@@ -1,5 +1,3 @@
-#include <iomanip>
-
 #include "cbor_encode.hpp"
 #include "cbor/encoder.h"
 
@@ -42,18 +40,24 @@ auto CborEncoder::addUInt(uint64_t value) -> void {
     std::move(data.begin(), data.end(), std::back_inserter(this->buf));
 }
 
+auto CborEncoder::addString(std::string value) -> void {
+    auto inserter = std::back_inserter(this->buf);
+    header: {
+        auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
+        inserter = std::move(header.begin(), header.end(), inserter);
+    }
+    payload: {
+        inserter = std::copy(value.begin(), value.end(), inserter);
+    }
+}
+
 auto CborEncoder::addArrayHeader(size_t len) -> void {
     auto header = std::move(cborHeader(CborTypes::ARRAY, len));
     std::move(header.begin(), header.end(), std::back_inserter(this->buf));
 }
 
-auto CborEncoder::addBinary(const std::vector<char>& payload) -> void {
-    auto inserter = std::back_inserter(this->buf);
-    binary: {
-        auto header = std::move(cborHeader(CborTypes::STRING, payload.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::move(payload.begin(), payload.end(), inserter);
-    }
+auto CborEncoder::concatBinary(const CborEncoder& encoder) -> void {
+    std::copy(encoder.buf.begin(), encoder.buf.end(), std::back_inserter(this->buf));
 }
 
 auto CborEncoder::addStringPair(const std::string& key, const std::string& value) -> void {
@@ -65,12 +69,12 @@ auto CborEncoder::addStringPair(const std::string& key, const std::string& value
     key: {
         auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
         inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::move(key.begin(), key.end(), inserter);
+        inserter = std::copy(key.begin(), key.end(), inserter);
     }
     value: {
         auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
         inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::move(value.begin(), value.end(), inserter);
+        inserter = std::copy(value.begin(), value.end(), inserter);
     }
 }
 
@@ -83,7 +87,7 @@ auto CborEncoder::addUIntPair(const std::string& key, uint64_t value) -> void {
     key: {
         auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
         inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::move(key.begin(), key.end(), inserter);
+        inserter = std::copy(key.begin(), key.end(), inserter);
     }
     value: {
         auto data = std::move(CborEncoder::encodeUInt(value));
@@ -91,6 +95,19 @@ auto CborEncoder::addUIntPair(const std::string& key, uint64_t value) -> void {
     }
 }
 
-auto CborEncoder::build() const -> std::string {
+auto CborEncoder::rawBuffer() const -> std::string {
     return std::string(this->buf.begin(), this->buf.end());
+}
+auto CborEncoder::build() const -> std::string {
+    CborEncoder encoder;
+    auto inserter = std::back_inserter(encoder.buf);
+    header: {
+        auto header = std::move(cborHeader(CborTypes::STRING, this->buf.size()));
+        inserter = std::copy(header.begin(), header.end(), inserter);
+    }
+    payload: {
+        inserter = std::copy(this->buf.begin(), this->buf.end(), inserter);
+    }
+
+    return encoder.rawBuffer();
 }

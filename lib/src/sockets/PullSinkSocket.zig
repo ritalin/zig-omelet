@@ -39,7 +39,6 @@ pub fn Worker(comptime WorkerType: type) type {
             self.pool.deinit();
             self.socket.deinit();
             self.allocator.destroy(self);
-            self.* = undefined;
         }
 
         pub fn connect(self: *Self) !void {

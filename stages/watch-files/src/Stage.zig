@@ -107,6 +107,7 @@ fn sendFiledOfDir(self: *Self, dir_path: core.FilePath, prefix: core.FilePath) !
     defer dir.close();
 
     var iter = try dir.walk(self.allocator);
+    defer iter.deinit();
 
     while (try iter.next()) |entry| {
         if (entry.kind == .file) {

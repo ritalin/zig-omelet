@@ -27,7 +27,6 @@ pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
 pub fn deinit(self: *Self) void {
     self.socket.deinit();
     self.allocator.destroy(self);
-    self.* = undefined;
 }
 
 pub fn connect(self: *Self, endpoint_channel: types.Symbol) !void {

@@ -22,7 +22,7 @@ const core = @import("core");
 const Self = @This();
 
 allocator: std.mem.Allocator,
-path: []const u8,
+path: [:0]const u8,
 
 pub fn init(allocator: std.mem.Allocator, file_path: core.Symbol) !*Self {
     const self = try allocator.create(Self);
@@ -37,7 +37,6 @@ pub fn init(allocator: std.mem.Allocator, file_path: core.Symbol) !*Self {
 pub fn deinit(self: *Self) void {
     self.allocator.free(self.path);
     self.allocator.destroy(self);
-    self.* = undefined;
 }
 
 pub fn run(self: *Self, socket: *zmq.ZSocket) !void {

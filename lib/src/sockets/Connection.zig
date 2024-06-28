@@ -47,7 +47,6 @@ pub fn Client(comptime WorkerType: type) type {
 
         pub fn deinit(self: *Self) void {
             self.dispatcher.deinit();
-            self.allocator.destroy(self.dispatcher);
 
             self.request_socket.deinit();
             self.subscribe_socket.deinit();
@@ -167,9 +166,9 @@ pub const Server = struct {
 
     pub fn deinit(self: *Self) void {
         self.reply_socket.deinit();
-        self.send_socket.deinit();        
+        self.send_socket.deinit();
+        self.dispatcher.deinit();     
         self.allocator.destroy(self);
-        self.* = undefined;
     }
 
     pub fn bind(self: *Self, endpoints: types.Endpoints) !void {
@@ -268,7 +267,7 @@ pub const EventDispatcher = struct {
         self.receive_queue.deinit();
         self.receive_pending.deinit();
         self.polling.deinit();
-        self.* = undefined;
+        self.allocator.destroy(self);
     }
 
     pub fn post(self: *EventDispatcher, event: types.Event) !void {

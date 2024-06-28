@@ -95,6 +95,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
         .request_topic => return .request_topic,
         .topic => {
             const topic_names = try reader.readSlice(allocator, Symbol);
+            defer allocator.free(topic_names);
 
             return .{
                 .topic = try types.EventPayload.Topic.init(allocator, topic_names),
@@ -191,10 +192,7 @@ const TopicBodyView = struct {
 };
 
 test "Encode/Decode event" {
-    const test_allocator = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(test_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = std.testing.allocator;
 
     var writer = try CborStream.Writer.init(allocator);
     defer writer.deinit();

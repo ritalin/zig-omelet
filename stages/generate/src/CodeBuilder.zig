@@ -62,7 +62,14 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
     // `  1: number | null`,
     for (parameters) |p| {
         const field = try std.ascii.allocLowerString(temp_allocator, p.field_name);
-        const key = try std.ascii.allocUpperString(temp_allocator, p.field_type);
+        const key = key: {
+            if (p.field_type) |t| {
+                break :key try std.ascii.allocUpperString(temp_allocator, t);
+            }
+            else {
+                break :key "ANY";
+            }
+        };
 
         const ts_type = TypeMappingRules.get(key) orelse {
             return error.UnsupportedDbType;
@@ -113,7 +120,7 @@ pub const Target = union(enum) {
 
 pub const FieldTypePair = struct {
     field_name: Symbol,
-    field_type: Symbol,
+    field_type: ?Symbol = null,
 };
 
 pub const Parser = struct {
@@ -280,6 +287,8 @@ const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
     .{"BPCHAR", "string"}, 
     .{"TEXT", "string"}, 
     .{"STRING", "string"}, 
+    // Other
+    .{"ANY", "any"},
 });
 
 test "parse parameter" {
@@ -303,6 +312,44 @@ test "parse parameter" {
         const expect: []const FieldTypePair = &.{
             .{.field_name = "id", .field_type = "bigint"},
             .{.field_name = "name", .field_type = "varchar"},
+        };
+
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.parameter, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expect, result.parameter);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
+
+test "parse parameter with any type" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const source_bodies: []const core.EventPayload.TopicBody.Item = &.{.{
+        .topic = "placeholder",
+        .content = "[{\"field_name\":\"id\", \"field_type\":\"bigint\"}, {\"field_name\":\"name\"}]"
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const expect: []const FieldTypePair = &.{
+            .{.field_name = "id", .field_type = "bigint"},
+            .{.field_name = "name", .field_type = null},
         };
 
         const walk_result = try iter.walk();
@@ -413,6 +460,37 @@ test "generate name parameter code from lower-case" {
     try std.testing.expectEqualStrings(expect, result);
 }
 
+test "generate name parameter code with any type" {
+    const allocator = std.testing.allocator;
+
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "id", .field_type = null},
+        .{.field_name = "name", .field_type = null},
+    };
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    var builder = try Self.init(allocator, dir.dir, "foo");
+    defer builder.deinit();
+
+    try builder.applyPlaceholder(parameters);
+
+    const apply_result = builder.parameters;
+    try std.testing.expect(apply_result != null);
+
+    const result = apply_result.?;
+
+    const expect = 
+        \\export type Parameter = {
+        \\  id: any | null,
+        \\  name: any | null,
+        \\}
+    ;
+
+    try std.testing.expectEqualStrings(expect, result);
+}
+
 test "generate positional parameter code" {
     const allocator = std.testing.allocator;
 
@@ -438,6 +516,37 @@ test "generate positional parameter code" {
         \\export type Parameter = {
         \\  1: number | null,
         \\  2: string | null,
+        \\}
+    ;
+
+    try std.testing.expectEqualStrings(expect, result);
+}
+
+test "generate positional parameter code with any type" {
+    const allocator = std.testing.allocator;
+
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "1", .field_type = null},
+        .{.field_name = "2", .field_type = null},
+    };
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    var builder = try Self.init(allocator, dir.dir, "foo");
+    defer builder.deinit();
+
+    try builder.applyPlaceholder(parameters);
+
+    const apply_result = builder.parameters;
+    try std.testing.expect(apply_result != null);
+
+    const result = apply_result.?;
+
+    const expect = 
+        \\export type Parameter = {
+        \\  1: any | null,
+        \\  2: any | null,
         \\}
     ;
 
@@ -474,7 +583,7 @@ test "Output build result" {
         break :query;
     }
     placeholder: {
-        var file = try output_dir.dir.openFile("foo/types.sql", .{});
+        var file = try output_dir.dir.openFile("foo/types.ts", .{});
         defer file.close();
 
         const meta = try file.metadata();

@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
     exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
 
     exe_unit_tests.linkSystemLibrary("zmq");

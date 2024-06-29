@@ -23,6 +23,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     try connection.subscribe_socket.addFilters(.{
         .ready_topic_body = true,
         .topic_body = true,
+        .finish_topic_body = true,
         .quit_all = true,
         .quit = true,
     });
@@ -60,6 +61,11 @@ pub fn run(self: *Self, setting: Setting) !void {
 
     var current_source: ?Source = null;
 
+    var lookup = std.BufSet.init(self.allocator);
+    defer lookup.deinit();
+
+    var state: core.StageState = .ready;
+
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
             error.InvalidResponse => {
@@ -83,9 +89,11 @@ pub fn run(self: *Self, setting: Setting) !void {
                 },
                 .topic_body => |source| {
                     try self.connection.dispatcher.approve();
-
                     try self.logger.log(.trace, "Accept source: `{s}`", .{source.header.path});
                     try self.logger.log(.trace, "Begin generate: `{s}`", .{source.header.name});
+
+                    try lookup.insert(source.header.path);
+                    defer lookup.remove(source.header.path);
 
                     var output_dir = try std.fs.cwd().makeOpenPath(PREFIX, .{});
                     defer output_dir.close();
@@ -112,6 +120,13 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.logger.log(.trace, "End generate: `{s}`", .{source.header.name});
 
                     try self.connection.dispatcher.post(.ready_generate);
+                },
+                .finish_topic_body => {
+                    state = .terminating;
+
+                    if (lookup.count() == 0) {
+                        try self.connection.dispatcher.post(.ready_generate);
+                    }
                 },
                 .quit, .quit_all => {
                     try self.connection.dispatcher.post(.{

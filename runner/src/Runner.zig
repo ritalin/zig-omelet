@@ -102,10 +102,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .source_path => |path| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
-                    try source_cache.addNewEntry(path);
-                    traceLog.debug("[{s}] Received source name: {s}, path: {s}, hash: {s}", .{APP_CONTEXT, path.name, path.path, path.hash});
-
-                    try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
+                    if (try source_cache.addNewEntry(path)) {
+                        traceLog.debug("[{s}] Received source name: {s}, path: {s}, hash: {s}", .{APP_CONTEXT, path.name, path.path, path.hash});
+                        try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
+                    }
                 },
                 .topic_body => |payload| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
@@ -125,18 +125,34 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         },
                     }
                 },
+                .invalid_topic_body => |payload| {
+                    log(payload.log_level, payload.log_content);
+
+                    try source_cache.dismiss(payload.header);
+
+                    if ((state == .terminating) and (source_cache.cache.count() == 0)) {
+                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
+                        try self.connection.dispatcher.reply(item.socket, .quit);
+    
+                        try self.connection.dispatcher.post(.finish_topic_body);
+                    }
+                    else {
+                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
+                        try self.connection.dispatcher.reply(item.socket, .ack);
+                    }
+                },
                 .ready_generate => {
                     if (source_cache.ready_queue.dequeue()) |source| {
                         defer source.deinit();
-                        traceLog.debug("[{s}] Send source: {s}", .{APP_CONTEXT, source.header.name});                     
+                        traceLog.debug("[{s}] Send source: {s}", .{APP_CONTEXT, source.header.name});
                         try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
                     }
                     else if ((state == .terminating) and (source_cache.cache.count() == 0)) {
-                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});                     
+                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .quit);
                     }
                     else {
-                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});                     
+                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
@@ -155,6 +171,8 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .finish_topic_body => {
                     if (state == .terminating) {
                         try self.connection.dispatcher.reply(item.socket, .quit);
+    
+                        try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
                         try self.connection.dispatcher.reply(item.socket, .ack);
@@ -165,7 +183,9 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     left_launched -= 1;
                     traceLog.debug("[{s}] Quit acceptrd: {s} (left: {})", .{APP_CONTEXT, payload.stage_name, left_launched});
+
                     if (left_launched <= 0) {
+                        traceLog.debug("[{s}] All Quit acceptrd", .{APP_CONTEXT});
                         try self.connection.dispatcher.done();
                     }
                 },
@@ -206,9 +226,13 @@ fn dumpTopics(allocator: std.mem.Allocator, topics: std.BufSet) !void {
 
 const PayloadCacheManager = struct {
     arena: *std.heap.ArenaAllocator,
-    cache: std.StringHashMap(Entry),
+    cache: std.StringHashMap(*Entry),
     topics: std.BufSet,
     ready_queue: core.Queue(core.EventPayload.TopicBody),
+
+    pub const CacheStatus = enum {
+        expired, missing, fulfil
+    };
 
     pub fn init(allocator: std.mem.Allocator) !PayloadCacheManager {
         const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -218,7 +242,7 @@ const PayloadCacheManager = struct {
         return .{
             .arena = arena,
             .topics = std.BufSet.init(managed_allocator),
-            .cache = std.StringHashMap(Entry).init(managed_allocator),
+            .cache = std.StringHashMap(*Entry).init(managed_allocator),
             .ready_queue = core.Queue(core.EventPayload.TopicBody).init(managed_allocator),
         };
     }
@@ -234,45 +258,47 @@ const PayloadCacheManager = struct {
         child.destroy(self.arena);
     }
 
-    fn addNewEntry(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !void {
-        const a = self.arena.allocator();
+    fn addNewEntry(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !bool {
         const entry = try self.cache.getOrPut(path.path);
 
         if (entry.found_existing) {
-            if (entry.value_ptr.isExpired(path.hash)) {
-                entry.value_ptr.deinit();
-                entry.value_ptr.* = try Entry.init(a, path, self.topics);
-            }
+
+            if (entry.value_ptr.*.isExpired(path.hash)) return false;
+
+            entry.value_ptr.*.deinit();
         }
-        else {
-            entry.key_ptr.* = try a.dupe(u8, path.path);
-            entry.value_ptr.* = try Entry.init(a, path, self.topics);
-        }
+        
+        entry.value_ptr.* = try Entry.init(self.arena.allocator(), path, self.topics);
+        entry.key_ptr.* = entry.value_ptr.*.path.path;
+
+        return true;
     }
 
     pub fn update(self: *PayloadCacheManager, topic_body: core.EventPayload.TopicBody) !CacheStatus {
-        var entry = try self.cache.getOrPut(topic_body.header.path);
+        const entry = try self.cache.getOrPut(topic_body.header.path);
 
         if (entry.found_existing) {
-            if (entry.value_ptr.isExpired(topic_body.header.hash)) return .expired;
+            if (entry.value_ptr.*.isExpired(topic_body.header.hash)) return .expired;
         }
         else {
-            const a = self.arena.allocator();
-            entry.key_ptr.* = try a.dupe(u8, topic_body.header.path);
-            entry.value_ptr.* = try Entry.init(a, topic_body.header, self.topics);
+            entry.value_ptr.* = try Entry.init(self.arena.allocator(), topic_body.header, self.topics);
+            entry.key_ptr.* = entry.value_ptr.*.path.path;
         }
 
-        return entry.value_ptr.update(topic_body.bodies);
+        return entry.value_ptr.*.update(topic_body.bodies);
     }
 
     pub fn ready(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !bool {
         if (self.cache.fetchRemove(path.path)) |kv| {
+            var entry: *Entry = kv.value;
+            defer entry.deinit();
+
             const a = self.arena.allocator();
 
-            const bodies = try a.alloc(core.EventPayload.TopicBody.Item.Values, kv.value.contents.count());
+            const bodies = try a.alloc(core.EventPayload.TopicBody.Item.Values, entry.contents.count());
             defer a.free(bodies);
             
-            var it = kv.value.contents.iterator();
+            var it = entry.contents.iterator();
             var i: usize = 0;
 
             while (it.next()) |content| {
@@ -281,42 +307,50 @@ const PayloadCacheManager = struct {
             }
 
             try self.ready_queue.enqueue(
-                try core.EventPayload.TopicBody.init(a, kv.value.path, bodies)
+                try core.EventPayload.TopicBody.init(a, entry.path.name, entry.path.path, entry.path.hash, bodies)
             );
-            return true;
+
+            // return self.cache.fetchRemove(path.path) != null;
         }
 
         return false;
     }
 
-    pub const CacheStatus = enum {
-        expired, missing, fulfil
-    };
+    pub fn dismiss(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !void {
+        if (self.cache.fetchRemove(path.path)) |kv| {
+            var entry = kv.value;
+            defer entry.deinit();
+            // _ = self.cache.fetchRemove(path.path);
+        }
+    }
 
-    pub const Entry = struct {
-        allocator: std.mem.Allocator,
+    const Entry = struct {
+        allocator: std.mem.Allocator, 
         path: core.EventPayload.SourcePath,
         left_topics: std.BufSet,
         contents: std.BufMap,
 
-        pub fn init(allocator: std.mem.Allocator, path: core.EventPayload.SourcePath, topics: std.BufSet) !Entry {
-            const new_path = try path.clone(allocator);
-            
-            return .{
+        pub fn init(allocator: std.mem.Allocator, path: core.EventPayload.SourcePath, topics: std.BufSet) !*Entry {
+            const self = try allocator.create(Entry);
+            self.* =  .{
                 .allocator = allocator,
-                .path = new_path,
+                .path = try path.clone(allocator),
                 .left_topics = try topics.cloneWithAllocator(allocator),
                 .contents = std.BufMap.init(allocator),
             };
+
+            return self;
         }
 
         pub fn deinit(self: *Entry) void {
             self.contents.deinit();
             self.left_topics.deinit();
             self.path.deinit();
+            self.allocator.destroy(self);
+            self.* = undefined;
         }
 
-        pub fn isExpired(self: Entry, hash: Symbol) bool {
+        pub fn isExpired(self: *Entry, hash: Symbol) bool {
             return ! std.mem.eql(u8, self.path.hash, hash);
         }
 

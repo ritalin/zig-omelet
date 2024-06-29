@@ -17,11 +17,11 @@ const std_options = .{
 
 pub fn main() !void {
     var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
+    defer {
+        std.debug.print("Leak? {}\n", .{gpa.deinit()});
+    }
+    const allocator = gpa.allocator();
 
-    const allocator = arena.allocator();
-    
     const config: Config = .{
         .stage_watch = .{
             .path = "stage-watch-files",
@@ -46,18 +46,23 @@ pub fn main() !void {
 
     const channel_root = "ipc:///tmp/duckdb-ext-ph";
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const setting_allocator = arena.allocator();
     const setting: Setting = .{
         .arena = &arena,
         .runner_endpoints = .{
-            .req_rep = try core.resolveBindPort(allocator, channel_root, core.REQ_PORT),
-            .pub_sub = try core.resolveBindPort(allocator, channel_root, core.PUBSUB_PORT),
+            .req_rep = try core.resolveBindPort(setting_allocator, channel_root, core.REQ_PORT),
+            .pub_sub = try core.resolveBindPort(setting_allocator, channel_root, core.PUBSUB_PORT),
         },
         .stage_endpoints = .{
-            .req_rep = try core.resolveConnectPort(allocator, channel_root, core.REQ_PORT),
-            .pub_sub = try core.resolveConnectPort(allocator, channel_root, core.PUBSUB_PORT),
+            .req_rep = try core.resolveConnectPort(setting_allocator, channel_root, core.REQ_PORT),
+            .pub_sub = try core.resolveConnectPort(setting_allocator, channel_root, core.PUBSUB_PORT),
         },
         // .source_dir = &.{try std.fs.cwd().realpathAlloc(allocator, "../_sql-examples/Foo.sql")},
-        .source_dir = &.{try std.fs.cwd().realpathAlloc(allocator, "../_sql-examples")},
+        // .source_dir = &.{try std.fs.cwd().realpathAlloc(allocator, "../_sql-examples")},
+        .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
         .watch = false,
     };
 
@@ -66,6 +71,7 @@ pub fn main() !void {
     var runner = try Runner.init(allocator, setting);
 
     const app_dir_path = try std.fs.selfExeDirPathAlloc(allocator);
+    defer allocator.free(app_dir_path);
     var app_dir = try std.fs.openDirAbsolute(app_dir_path, .{});
     defer app_dir.close();
     traceLog.debug("Runner/dir: {s}", .{app_dir_path});
@@ -74,7 +80,7 @@ pub fn main() !void {
     var stage_watcher: ?std.process.Child = stage: {
         if (config.stage_watch.managed) {
             break :stage try launchStage(
-                arena.child_allocator, 
+                allocator, 
                 app_dir, "stage-watch-files",
                 &.{
                     "--request-channel", setting.stage_endpoints.req_rep,
@@ -92,7 +98,7 @@ pub fn main() !void {
     var stage_extract_ph: ?std.process.Child = stage: {
         if (config.stage_extract[0].managed) {
             break :stage try launchStage(
-                arena.child_allocator, 
+                allocator, 
                 app_dir, "stage-extract-ph", 
                 &.{
                     "--request-channel", setting.stage_endpoints.req_rep,
@@ -107,7 +113,7 @@ pub fn main() !void {
     var stage_generate_ts: ?std.process.Child = stage: {
         if (config.stage_generate[0].managed) {
             break :stage try launchStage(
-                arena.child_allocator, 
+                allocator, 
                 app_dir, "stage-generate-ts",
                 &.{
                     "--request-channel", setting.stage_endpoints.req_rep,

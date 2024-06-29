@@ -6,6 +6,7 @@ const Setting = @This();
 
 arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
+standalone: bool,
 
 pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
     var arena = try allocator.create(std.heap.ArenaAllocator);
@@ -39,6 +40,7 @@ const ArgUsages = std.StaticStringMap(struct { desc: []const u8, value: []const 
 const ArgId = enum {
     request_channel,
     subscribe_channel,
+    standalone,
 
     pub fn description(self: ArgId) []const u8 {
         const usage = ArgUsages.get(@tagName(self)) orelse return "";
@@ -53,6 +55,7 @@ const ArgId = enum {
 const ParamDecls: []const clap.Param(ArgId) = &.{
     .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
     .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
+    .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
     // .{.id = ., .names = , .takes_value = },
 };
 
@@ -75,6 +78,9 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .subscribe_channel => {
                 if (arg.value) |v| builder.subscribe_channel = v;
             },
+            .standalone => {
+                builder.standalone = true;
+            }
         }
     }
 
@@ -84,11 +90,13 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
 const Builder = struct {
     request_channel: ?core.Symbol,
     subscribe_channel: ?core.Symbol,
+    standalone: bool,
 
     pub fn init() Builder {
         return .{
             .request_channel = null,
             .subscribe_channel = null,
+            .standalone = false,
         };
     }
 
@@ -114,6 +122,7 @@ const Builder = struct {
                 .req_rep = try allocator.dupe(u8, self.request_channel.?),
                 .pub_sub = try allocator.dupe(u8, self.subscribe_channel.?),
             },
+            .standalone = self.standalone,
         };
     }
 };

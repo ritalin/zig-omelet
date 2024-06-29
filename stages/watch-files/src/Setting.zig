@@ -8,6 +8,7 @@ arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
 sources: []const SourceDir,
 watch: bool,
+standalone: bool,
 
 pub const SourceDir = struct {
     dir_path: core.FilePath, 
@@ -50,6 +51,7 @@ const ArgId = enum {
     subscribe_channel,
     source_dir,
     watch,
+    standalone,
 
     pub fn description(self: ArgId) []const u8 {
         const usage = ArgUsages.get(@tagName(self)) orelse return "";
@@ -66,6 +68,7 @@ const ParamDecls: []const clap.Param(ArgId) = &.{
     .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
     .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .one},
     .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
+    .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
     // .{.id = ., .names = , .takes_value = },
 };
 
@@ -93,6 +96,9 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .watch => {
                 builder.watch = true;
             },
+            .standalone => {
+                builder.standalone = true;
+            }
         }
     }
 
@@ -104,6 +110,7 @@ const Builder = struct {
     subscribe_channel: ?core.Symbol,
     sources: std.ArrayList(core.FilePath),
     watch: bool,
+    standalone: bool,
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
@@ -111,6 +118,7 @@ const Builder = struct {
             .subscribe_channel = null,
             .sources = std.ArrayList(core.FilePath).init(allocator),
             .watch = false,
+            .standalone = false,
         };
     }
 
@@ -161,6 +169,7 @@ const Builder = struct {
             },
             .sources = try sources.toOwnedSlice(),
             .watch = self.watch,
+            .standalone = self.standalone,
         };
     }
 };

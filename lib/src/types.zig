@@ -68,6 +68,7 @@ pub const EventType = enum (u8) {
     end_watch_path,
     // Topic body event
     topic_body,
+    invalid_topic_body,
     ready_topic_body,
     finish_topic_body,
     // Generation event
@@ -135,7 +136,7 @@ pub const EventPayload = struct {
         index: usize,
         bodies: []const Item,
 
-        pub fn init(allocator: std.mem.Allocator, path: SourcePath, items: []const Item.Values) !@This() {
+        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: FilePath, hash: Symbol, items: []const Item.Values) !@This() {
             var arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             const a = arena.allocator();
@@ -147,7 +148,7 @@ pub const EventPayload = struct {
         
             return .{
                 .arena = arena,
-                .header = try path.clone(a),
+                .header = try SourcePath.init(a, name, path, hash, 1),
                 .index = 1,
                 .bodies = new_bodies,
             };
@@ -203,6 +204,32 @@ pub const EventPayload = struct {
                 return .{self.topic, self.content};
             }
         };
+    };
+    pub const InvalidTopicBody = struct {
+        allocator: std.mem.Allocator,
+        header: EventPayload.SourcePath, 
+        log_level: LogLevel,
+        log_content: Symbol,
+
+        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: FilePath, hash: Symbol, log_level: LogLevel, log_content: Symbol) !@This() {
+            return .{
+                .allocator = allocator,
+                .header = try SourcePath.init(allocator, name, path, hash, 1),
+                .log_level = log_level,
+                .log_content = try allocator.dupe(u8, log_content),
+            };
+        }
+        pub fn deinit(self: @This()) void {
+            self.header.deinit();
+            self.allocator.free(self.log_content);
+        }
+        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
+            return init(
+                allocator, 
+                self.header.name, self.header.path, self.header.hash, 
+                self.log_level, self.log_content
+            );
+        }
     };
     pub const SourcePath = struct {
         allocator: std.mem.Allocator,
@@ -286,6 +313,7 @@ pub const Event = union(EventType) {
     end_watch_path: void,
     // Topic body events
     topic_body: EventPayload.TopicBody,
+    invalid_topic_body: EventPayload.InvalidTopicBody,
     ready_topic_body: void,
     finish_topic_body: void,
     // Generation events
@@ -306,6 +334,7 @@ pub const Event = union(EventType) {
             .topic => |payload| payload.deinit(),
             .source_path => |payload| payload.deinit(),
             .topic_body => |payload| payload.deinit(),
+            .invalid_topic_body => |payload| payload.deinit(),
             .quit_accept => |payload| payload.deinit(),
             .worker_result => |payload| payload.deinit(),
             .log => |payload| payload.deinit(),
@@ -345,6 +374,11 @@ pub const Event = union(EventType) {
                 .topic_body => |payload| {
                     return .{
                         .topic_body = try payload.clone(allocator),
+                    };
+                },
+                .invalid_topic_body => |payload| {
+                    return .{
+                        .invalid_topic_body = try payload.clone(allocator),
                     };
                 },
                 .worker_result => |payload| {

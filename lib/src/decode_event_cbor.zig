@@ -54,6 +54,13 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
             }
             _ = try writer.writeSlice(TopicBodyItem, bodies.items);
         },
+        .invalid_topic_body => |payload| {
+            _ = try writer.writeString(payload.header.name);
+            _ = try writer.writeString(payload.header.path);
+            _ = try writer.writeString(payload.header.hash);
+            _ = try writer.writeEnum(types.LogLevel, payload.log_level);
+            _ = try writer.writeString(payload.log_content);
+        },
         .ready_topic_body => {},
         .finish_topic_body => {},
         // Generation event
@@ -129,12 +136,26 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
             
             var payload = try types.EventPayload.TopicBody.init(
                 allocator, 
-                try types.EventPayload.SourcePath.init(allocator, name, path, hash, 1),
-                bodies
+                name, path, hash, bodies
             );
 
             return .{
                 .topic_body = payload.withNewIndex(item_index, item_count),
+            };
+        },
+        .invalid_topic_body => {
+            const name = try reader.readString();
+            const path = try reader.readString();
+            const hash = try reader.readString();
+            const level = try reader.readEnum(types.LogLevel);
+            const content = try reader.readString();
+
+            return .{
+                .invalid_topic_body = try types.EventPayload.InvalidTopicBody.init(
+                    allocator,
+                    name, path, hash,
+                    level, content
+                ),
             };
         },
         .ready_topic_body => return .ready_topic_body,

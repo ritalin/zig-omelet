@@ -1,0 +1,1 @@
+SELCT a, b, c

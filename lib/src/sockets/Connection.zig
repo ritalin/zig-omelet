@@ -248,7 +248,7 @@ pub const EventDispatcher = struct {
         pub fn ready(self: *State) !void {
             self.level.ready = true;
         }
-        pub fn requestTerminate(self: *State) !void {
+        pub fn receiveTerminate(self: *State) !void {
             self.level.terminating = true;
         }
         pub fn readyQuit(self: *State) !void {
@@ -300,6 +300,13 @@ pub const EventDispatcher = struct {
     pub fn reply(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
         try self.send_queue.enqueue(.{ 
             .kind = .reply,
+            .socket = socket, .event = event
+        });
+    }
+
+    pub fn delay(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
+        try self.receive_queue.revert(.{
+            .kind = .response,
             .socket = socket, .event = event
         });
     }

@@ -122,7 +122,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.connection.dispatcher.post(.ready_generate);
                 },
                 .finish_topic_body => {
-                    try self.connection.dispatcher.state.requestTerminate();
+                    try self.connection.dispatcher.state.receiveTerminate();
 
                     if (lookup.count() == 0) {
                         try self.connection.dispatcher.post(.ready_generate);

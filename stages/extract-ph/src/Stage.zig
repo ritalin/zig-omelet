@@ -113,7 +113,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
-                        try self.connection.dispatcher.state.requestTerminate();
+                        try self.connection.dispatcher.state.receiveTerminate();
                     }
                 },
                 .quit, .quit_all => {

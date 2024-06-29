@@ -127,15 +127,16 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     log(payload.log_level, payload.log_content);
 
                     try source_cache.dismiss(payload.header);
-
-                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
-                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
+                    try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
+                },
+                .end_watch_path => {
+                    traceLog.debug("[{s}] Received finished somewhere", .{APP_CONTEXT});
+                    if (oneshot) {
+                        try self.connection.dispatcher.state.receiveTerminate();
                         try self.connection.dispatcher.reply(item.socket, .quit);
-    
-                        try self.connection.dispatcher.post(.finish_topic_body);
+                        try self.connection.dispatcher.post(.end_watch_path);
                     }
                     else {
-                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
@@ -145,34 +146,19 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         traceLog.debug("[{s}] Send source: {s}", .{APP_CONTEXT, source.header.name});
                         try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
                     }
-                    else if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
-                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
-                        try self.connection.dispatcher.reply(item.socket, .quit);
-                    }
                     else {
-                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
-                        try self.connection.dispatcher.reply(item.socket, .ack);
-                    }
-                },
-                .end_watch_path => {
-                    traceLog.debug("[{s}] Received finished somewhere", .{APP_CONTEXT});
-                    if (oneshot) {
-                        try self.connection.dispatcher.reply(item.socket, .quit);
-                        try self.connection.dispatcher.state.requestTerminate();
-
-                        try self.connection.dispatcher.post(.end_watch_path);
-                    }
-                    else {
-                        try self.connection.dispatcher.reply(item.socket, .ack);
+                        try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
                     }
                 },
                 .finish_topic_body => {
-                    if (self.connection.dispatcher.state.level.terminating) {
+                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
+                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .quit);
     
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
+                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },

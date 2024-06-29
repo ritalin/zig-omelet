@@ -54,7 +54,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     var source_cache = try PayloadCacheManager.init(self.allocator);
     defer source_cache.deinit();
 
-    var state: core.StageState = .booting;
+    try self.connection.dispatcher.state.ready();
     
     while (self.connection.dispatcher.isReady()) {
         const _item = try self.connection.dispatcher.dispatch();
@@ -95,8 +95,6 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     if (left_topic_stage <= 0) {
                         try dumpTopics(self.allocator, source_cache.topics);
                         try self.connection.dispatcher.post(.begin_watch_path);
-
-                        state = .ready;
                     }
                 },
                 .source_path => |path| {
@@ -130,7 +128,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     try source_cache.dismiss(payload.header);
 
-                    if ((state == .terminating) and (source_cache.cache.count() == 0)) {
+                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
                         traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .quit);
     
@@ -147,7 +145,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         traceLog.debug("[{s}] Send source: {s}", .{APP_CONTEXT, source.header.name});
                         try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
                     }
-                    else if ((state == .terminating) and (source_cache.cache.count() == 0)) {
+                    else if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
                         traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
                         try self.connection.dispatcher.reply(item.socket, .quit);
                     }
@@ -160,7 +158,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     traceLog.debug("[{s}] Received finished somewhere", .{APP_CONTEXT});
                     if (oneshot) {
                         try self.connection.dispatcher.reply(item.socket, .quit);
-                        state = .terminating;
+                        try self.connection.dispatcher.state.requestTerminate();
 
                         try self.connection.dispatcher.post(.end_watch_path);
                     }
@@ -169,7 +167,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .finish_topic_body => {
-                    if (state == .terminating) {
+                    if (self.connection.dispatcher.state.level.terminating) {
                         try self.connection.dispatcher.reply(item.socket, .quit);
     
                         try self.connection.dispatcher.post(.finish_topic_body);
@@ -186,7 +184,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     if (left_launched <= 0) {
                         traceLog.debug("[{s}] All Quit acceptrd", .{APP_CONTEXT});
-                        try self.connection.dispatcher.done();
+                        try self.connection.dispatcher.state.done();
                     }
                 },
                 .log => |payload| {

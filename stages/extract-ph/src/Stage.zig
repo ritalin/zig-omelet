@@ -63,7 +63,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     var body_lookup = std.StringHashMap(LookupEntry).init(self.allocator);
     defer body_lookup.deinit();
 
-    var state: core.StageState = .ready;
+    try self.connection.dispatcher.state.ready();
 
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
@@ -104,7 +104,7 @@ pub fn run(self: *Self, setting: Setting) !void {
 
                     try self.logger.log(.trace, "End worker process", .{});
 
-                    if ((state == .terminating) and (body_lookup.count() == 0)) {
+                    if ((self.connection.dispatcher.state.level.terminating) and (body_lookup.count() == 0)) {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                 },
@@ -113,7 +113,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
-                        state = .terminating;
+                        try self.connection.dispatcher.state.requestTerminate();
                     }
                 },
                 .quit, .quit_all => {

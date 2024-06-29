@@ -14,7 +14,7 @@ pub const Endpoints = struct {
     pub_sub: Symbol,
 };
 
-pub const StageState = enum {booting, ready, terminating};
+// pub const StageState = enum {booting, ready, terminating};
 
 pub const LogScope = enum {
     trace, default,

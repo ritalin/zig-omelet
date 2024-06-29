@@ -60,9 +60,9 @@ pub fn main() !void {
             .req_rep = try core.resolveConnectPort(setting_allocator, channel_root, core.REQ_PORT),
             .pub_sub = try core.resolveConnectPort(setting_allocator, channel_root, core.PUBSUB_PORT),
         },
-        // .source_dir = &.{try std.fs.cwd().realpathAlloc(allocator, "../_sql-examples/Foo.sql")},
-        // .source_dir = &.{try std.fs.cwd().realpathAlloc(allocator, "../_sql-examples")},
-        .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
+        // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples/Foo.sql")},
+        .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples")}, 
+        // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
         .watch = false,
     };
 

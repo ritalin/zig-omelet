@@ -64,7 +64,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     var lookup = std.BufSet.init(self.allocator);
     defer lookup.deinit();
 
-    var state: core.StageState = .ready;
+    try self.connection.dispatcher.state.ready();
 
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
@@ -122,7 +122,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.connection.dispatcher.post(.ready_generate);
                 },
                 .finish_topic_body => {
-                    state = .terminating;
+                    try self.connection.dispatcher.state.requestTerminate();
 
                     if (lookup.count() == 0) {
                         try self.connection.dispatcher.post(.ready_generate);

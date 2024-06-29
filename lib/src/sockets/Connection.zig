@@ -81,11 +81,11 @@ pub fn Client(comptime WorkerType: type) type {
 
                             if (entry.event.tag() == .quit) {
                                 try dispatcher.approve();
-                                try dispatcher.readyQuit();
+                                try dispatcher.state.readyQuit();
                             }
                             else if (entry.event.tag() == .quit_all) {
                                 // TODO terminate worker thread
-                                try dispatcher.readyQuit();
+                                try dispatcher.state.readyQuit();
                             }
 
                             return .{ 
@@ -99,13 +99,13 @@ pub fn Client(comptime WorkerType: type) type {
 
                 if (!dispatcher.receive_pending.hasMore()) {
                     if (dispatcher.send_queue.dequeue()) |entry| {
-                        if (dispatcher.state == .done) {
+                        if (dispatcher.state.level.done) {
                             defer entry.deinit();
                             continue;
                         }
 
                         if (entry.event.tag() == .quit_accept) {
-                            try dispatcher.done();
+                            try dispatcher.state.done();
                         }
                         Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
                         try dispatcher.receive_pending.enqueue(entry);
@@ -120,7 +120,7 @@ pub fn Client(comptime WorkerType: type) type {
                     else if (dispatcher.receive_queue.hasMore()) {
                         continue;
                     }
-                    else if (dispatcher.state == .done) {
+                    else if (dispatcher.state.level.done) {
                         break;
                     }
                 }
@@ -202,7 +202,7 @@ pub const Server = struct {
             else if (dispatcher.receive_queue.hasMore()) {
                 continue;
             }
-            else if (dispatcher.state == .done) {
+            else if (dispatcher.state.level.done) {
                 break;
             }
 
@@ -240,7 +240,24 @@ pub const EventDispatcher = struct {
     polling: zmq.ZPolling,
     send_socket: *zmq.ZSocket,
     on_dispatch: DispatchFn,
-    state: enum { ready, quitting, done},
+    state: State,
+
+    pub const State = struct {
+        level: std.enums.EnumFieldStruct(enum {booting, ready, terminating, quitting, done}, bool, false),
+
+        pub fn ready(self: *State) !void {
+            self.level.ready = true;
+        }
+        pub fn requestTerminate(self: *State) !void {
+            self.level.terminating = true;
+        }
+        pub fn readyQuit(self: *State) !void {
+            self.level.quitting = true;
+        }
+        pub fn done(self: *State) !void {
+            self.level.done = true;
+        }
+    };
 
     pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !*EventDispatcher {
         const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
@@ -259,7 +276,7 @@ pub const EventDispatcher = struct {
             .polling = try zmq.ZPolling.init(allocator, polling_sockets, .{}), 
             .send_socket = send_socket, 
             .on_dispatch = on_dispatch,
-            .state = .ready,
+            .state = .{ .level = .{.booting = true} },
         };
 
         return self;
@@ -299,20 +316,11 @@ pub const EventDispatcher = struct {
         }
     }
 
-    pub fn readyQuit(self: *EventDispatcher) !void {
-        self.state = .quitting;
-    }
-
-    pub fn done(self: *EventDispatcher) !void {
-        self.state = .done;
-    }
-
     pub fn isReady(self: *EventDispatcher) bool {
         if (self.receive_queue.hasMore()) return true;
         if (self.send_queue.hasMore()) return true;
-        if (self.state == .ready) return true;
 
-        return false;
+        return ! self.state.level.done;
     }
 
     pub fn dispatch(self: *EventDispatcher) !?Entry {

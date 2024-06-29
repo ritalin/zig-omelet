@@ -60,6 +60,8 @@ pub fn run(self: *Self, setting: Setting) !void {
         break :launch;
     }
 
+    try self.connection.dispatcher.state.ready();
+
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
             error.InvalidResponse => {

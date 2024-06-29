@@ -5,20 +5,21 @@ const core = @import("core");
 const Setting = @import("./Setting.zig");
 
 const Symbol = core.Symbol;
-
-const APP_CONTEXT = "watch-files";
+const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.Connection.Client(void),
+connection: *Connection,
 logger: core.Logger,
 
 const Self = @This();
 
+pub const APP_CONTEXT = "watch-files";
+
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.Connection.Client(void).init(allocator, &ctx);
+    var connection = try Connection.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
         .begin_watch_path = true,
         .quit = true,
@@ -29,7 +30,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, false),
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, setting.standalone),
     };
 }
 
@@ -132,7 +133,6 @@ fn sendFile(self: *Self, base_dir: std.fs.Dir, file_path: core.FilePath, prefix:
 
     const hash = try makeHash(self.allocator, name, file);
     defer self.allocator.free(hash);
-    std.debug.print("[DEBUG] name: {s}\n", .{name});
 
     // Send path, content, hash
     try self.connection.dispatcher.post(.{

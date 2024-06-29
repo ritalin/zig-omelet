@@ -6,11 +6,11 @@ const Setting = @import("./Setting.zig");
 const StageCount = @import("./Config.zig").StageCount;
 
 const Symbol = core.Symbol;
-const systemLog = core.Logger.Server.systemLog;
-const traceLog = core.Logger.Server.traceLog;
-const log = core.Logger.Server.log;
+const systemLog = core.Logger.SystemDirect(APP_CONTEXT);
+const traceLog = core.Logger.TraceDirect(APP_CONTEXT);
+const log = core.Logger.Stage.log;
 
-const APP_CONTEXT = "runner";
+pub const APP_CONTEXT = "runner";
 const Self = @This();
 
 allocator: std.mem.Allocator,
@@ -36,7 +36,7 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
-    systemLog.debug("[{s}] Launched", .{APP_CONTEXT});
+    systemLog.debug("Launched", .{});
 
     dump_setting: {
         systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.runner_endpoints.req_rep});
@@ -62,7 +62,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
         if (_item) |*item| {
             defer item.deinit();
 
-            traceLog.debug("[{s}] Received command: {}", .{APP_CONTEXT, std.meta.activeTag(item.event)});
+            traceLog.debug("Received command: {}", .{std.meta.activeTag(item.event)});
 
             switch (item.event) {
                 .launched => |payload| {
@@ -90,7 +90,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
 
                     left_topic_stage -= 1;
-                    traceLog.debug("[{s}] Receive 'topic' ({})", .{APP_CONTEXT, left_topic_stage});
+                    traceLog.debug("Receive 'topic' ({})", .{left_topic_stage});
 
                     if (left_topic_stage <= 0) {
                         try dumpTopics(self.allocator, source_cache.topics);
@@ -101,7 +101,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
                     if (try source_cache.addNewEntry(path)) {
-                        traceLog.debug("[{s}] Received source name: {s}, path: {s}, hash: {s}", .{APP_CONTEXT, path.name, path.path, path.hash});
+                        traceLog.debug("Received source name: {s}, path: {s}, hash: {s}", .{path.name, path.path, path.hash});
                         try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
                     }
                 },
@@ -110,13 +110,13 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     switch (try source_cache.update(payload)) {
                         .expired => {
-                            traceLog.debug("[{s}] Content expired: {s}", .{APP_CONTEXT, payload.header.path});
+                            traceLog.debug("Content expired: {s}", .{payload.header.path});
                         },
                         .missing => {
-                            traceLog.debug("[{s}] Waiting left content: {s}", .{APP_CONTEXT, payload.header.path});
+                            traceLog.debug("Waiting left content: {s}", .{payload.header.path});
                         },
                         .fulfil => {
-                            traceLog.debug("[{s}] Source is ready: {s}", .{APP_CONTEXT, payload.header.name});
+                            traceLog.debug("Source is ready: {s}", .{payload.header.name});
                             if (try source_cache.ready(payload.header)) {
                                 try self.connection.dispatcher.post(.ready_topic_body);
                             }
@@ -124,13 +124,13 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .invalid_topic_body => |payload| {
-                    log(payload.log_level, payload.log_content);
+                    log(payload.log_level, "????", payload.log_content);
 
                     try source_cache.dismiss(payload.header);
                     try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
                 },
                 .end_watch_path => {
-                    traceLog.debug("[{s}] Received finished somewhere", .{APP_CONTEXT});
+                    traceLog.debug("Received finished somewhere", .{});
                     if (oneshot) {
                         try self.connection.dispatcher.state.receiveTerminate();
                         try self.connection.dispatcher.reply(item.socket, .quit);
@@ -143,7 +143,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .ready_generate => {
                     if (source_cache.ready_queue.dequeue()) |source| {
                         defer source.deinit();
-                        traceLog.debug("[{s}] Send source: {s}", .{APP_CONTEXT, source.header.name});
+                        traceLog.debug("Send source: {s}", .{source.header.name});
                         try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
                     }
                     else {
@@ -152,13 +152,13 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 },
                 .finish_topic_body => {
                     if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
-                        traceLog.debug("[{s}] No more sources", .{APP_CONTEXT});
+                        traceLog.debug("No more sources", .{});
                         try self.connection.dispatcher.reply(item.socket, .quit);
     
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
-                        traceLog.debug("[{s}] Wait receive next source", .{APP_CONTEXT});
+                        traceLog.debug("Wait receive next source", .{});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
@@ -166,26 +166,26 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
                     left_launched -= 1;
-                    traceLog.debug("[{s}] Quit acceptrd: {s} (left: {})", .{APP_CONTEXT, payload.stage_name, left_launched});
+                    traceLog.debug("Quit acceptrd: {s} (left: {})", .{payload.stage_name, left_launched});
 
                     if (left_launched <= 0) {
-                        traceLog.debug("[{s}] All Quit acceptrd", .{APP_CONTEXT});
+                        traceLog.debug("All Quit acceptrd", .{});
                         try self.connection.dispatcher.state.done();
                     }
                 },
                 .log => |payload| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
-                    log(payload.level, payload.content);
+                    log(payload.level, "????", payload.content);
                 },
                 else => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
-                    systemLog.debug("[{s}] Discard command: {}", .{APP_CONTEXT, std.meta.activeTag(item.event)});
+                    systemLog.debug("Discard command: {}", .{std.meta.activeTag(item.event)});
                 },
             }
         }
     }
 
-    systemLog.debug("[{s}] terminated", .{APP_CONTEXT});
+    systemLog.debug("terminated", .{});
 }
 
 fn dumpTopics(allocator: std.mem.Allocator, topics: std.BufSet) !void {

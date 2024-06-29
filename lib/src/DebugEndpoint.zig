@@ -25,4 +25,6 @@ pub fn applyStageChannel(runner: *std.Build.Step.Run) !void {
             runner.addArg(StageChannel.get(k).?);
         }
     }
+
+    runner.addArg("--standalone");
 }

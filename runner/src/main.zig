@@ -5,7 +5,7 @@ const Setting = @import("./Setting.zig");
 const Config = @import("./Config.zig");
 
 // const traceLog = std.log;
-const traceLog = core.Logger.Server.traceLog;
+const traceLog = core.Logger.TraceDirect(Runner.APP_CONTEXT);
 
 const default_log_level = .debug;
 const std_options = .{
@@ -18,7 +18,7 @@ const std_options = .{
 pub fn main() !void {
     var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
     defer {
-        std.debug.print("Leak? {}\n", .{gpa.deinit()});
+        traceLog.debug("Leak? {}\n", .{gpa.deinit()});
     }
     const allocator = gpa.allocator();
 

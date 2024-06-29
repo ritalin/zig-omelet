@@ -2,11 +2,12 @@ const std = @import("std");
 const core = @import("core");
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
+const Logger = core.Logger.TraceDirect(Stage.APP_CONTEXT);
 
 pub fn main() !void {
     var gpa = (std.heap.GeneralPurposeAllocator(.{.stack_trace_frames = 6, .thread_safe = true, .safety = true}){});
     defer {
-        std.debug.print("Leak? {}\n", .{gpa.deinit()});
+        Logger.debug("Leak? {}", .{gpa.deinit()});
     }
     const allocator = gpa.allocator();
 
@@ -21,7 +22,7 @@ pub fn main() !void {
 
     try stage.run(setting);
 
-    // std.debug.print("Finished\n", .{});
+    Logger.debug("Finished\n", .{});
 }
 
 test "main" {

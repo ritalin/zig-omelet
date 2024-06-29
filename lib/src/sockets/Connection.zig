@@ -14,7 +14,9 @@ const PullSinkSocket = @import("./PullSinkSocket.zig");
 const Logger = @import("../Logger.zig");
 const EventQueue = @import("../Queue.zig").Queue;
 
-pub fn Client(comptime WorkerType: type) type {
+pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
+    const Trace = Logger.TraceDirect(stage_name);
+
     return struct {
         const Self = @This();
 
@@ -69,7 +71,7 @@ pub fn Client(comptime WorkerType: type) type {
                     switch (entry.event) {
                         .ack => {
                             defer entry.deinit();
-                            Logger.Server.traceLog.debug("Received 'ack'", .{});
+                            Trace.debug("Received 'ack'", .{});
                             try dispatcher.approve();
                         },
                         .nack => {
@@ -77,7 +79,7 @@ pub fn Client(comptime WorkerType: type) type {
                             try dispatcher.revertFromPending();
                         },
                         else => {
-                            Logger.Server.traceLog.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
+                            Trace.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
 
                             if (entry.event.tag() == .quit) {
                                 try dispatcher.approve();
@@ -107,12 +109,12 @@ pub fn Client(comptime WorkerType: type) type {
                         if (entry.event.tag() == .quit_accept) {
                             try dispatcher.state.done();
                         }
-                        Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
+                        Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
                         try dispatcher.receive_pending.enqueue(entry);
 
                         helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
                             else => {
-                                Logger.Server.traceLog.debug("Unexpected error on sending: {}", .{err});
+                                Trace.debug("Unexpected error on sending: {}", .{err});
                                 return err;
                             }
                         };

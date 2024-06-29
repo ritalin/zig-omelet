@@ -5,7 +5,8 @@ const core = @import("core");
 const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
 
-const APP_CONTEXT = "generate-ts";
+const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
+
 const Self = @This();
 
 // TODO provide from CLI args
@@ -13,13 +14,15 @@ const PREFIX = "./_dump/ts";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.Connection.Client(void),
+connection: *Connection,
 logger: core.Logger,
+
+pub const APP_CONTEXT = "generate-ts";
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.Connection.Client(void).init(allocator, &ctx);
+    var connection = try Connection.init(allocator, &ctx);
     try connection.subscribe_socket.addFilters(.{
         .ready_topic_body = true,
         .topic_body = true,
@@ -33,7 +36,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, false),
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, setting.standalone),
     };
 }
 

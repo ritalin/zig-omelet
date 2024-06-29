@@ -5,21 +5,23 @@ const core = @import("core");
 const Setting = @import("./Setting.zig");
 
 const Symbol = core.Symbol;
+const Connection = core.sockets.Connection.Client(APP_CONTEXT, ExtractWorker);
 const ExtractWorker = @import("./ExtractWorker.zig");
 
-const APP_CONTEXT = "exctract-ph";
 const Self = @This();
 
 allocator: std.mem.Allocator,
 context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む
-connection: *core.sockets.Connection.Client(ExtractWorker),
+connection: *Connection,
 logger: core.Logger,
+
+pub const APP_CONTEXT = "exctract-ph";
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);
     ctx.* = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.Connection.Client(ExtractWorker).init(allocator, ctx);
+    var connection = try Connection.init(allocator, ctx);
     try connection.subscribe_socket.addFilters(.{
         .request_topic = true,
         .source_path = true,
@@ -33,7 +35,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, false),
+        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, setting.standalone),
     };
 }
 

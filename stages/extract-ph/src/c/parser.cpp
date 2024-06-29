@@ -429,6 +429,7 @@ auto deinitCollector(CollectorRef handle) -> void {
 auto parseDuckDbSQL(CollectorRef handle, const char *query, size_t query_len) -> void {
     auto collector = reinterpret_cast<PlaceholderCollector *>(handle);
     
+    std::string err_msg;
     try {
         auto parser = duckdb::Parser();
         parser.ParseQuery(std::string(query, query_len));
@@ -438,10 +439,13 @@ auto parseDuckDbSQL(CollectorRef handle, const char *query, size_t query_len) ->
 
             collector->finish(result);            
         }
+        return;
     }
     catch (const duckdb::ParserException& ex) {
-        collector->err(ex.what());
+        err_msg = ex.what();
     }
+
+    collector->err(err_msg);
 }
 
 auto duckDbParseSQL(const char *id, const char *query, uint32_t len, void *socket) -> void {

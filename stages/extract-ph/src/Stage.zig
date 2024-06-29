@@ -159,9 +159,9 @@ fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringH
                     return try processParseResult(self.allocator, &reader, entry);
                 },
                 .log => {
-                    return try processLogResult(self.allocator, &reader);
+                    return try processLogResult(self.allocator, &reader, entry);
                 },
-                else => {},
+                else => unreachable,
             }
         }
     }
@@ -180,18 +180,21 @@ fn processParseResult(allocator: std.mem.Allocator, reader: *core.CborStream.Rea
     const result = try reader.readSlice(allocator, core.EventPayload.TopicBody.Item.Values);
     defer allocator.free(result);
 
-    var topic_body = try core.EventPayload.TopicBody.init(allocator, entry.path, result);
+    var topic_body = try core.EventPayload.TopicBody.init(allocator, entry.path.name, entry.path.path, entry.path.hash, result);
     return .{
         .topic_body = topic_body.withNewIndex(item_index, item_count),
     };
 }
 
-fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader) !core.Event {
+fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
     const log_level = try reader.readString();
     const content = try reader.readString();
 
     return .{
-        .log = try core.EventPayload.Log.init(allocator, stringToLogLevel(log_level), content),
+        .invalid_topic_body = try core.EventPayload.InvalidTopicBody.init(allocator, 
+            entry.path.name, entry.path.path, entry.path.hash,
+            stringToLogLevel(log_level), content
+        ),
     };
 }
 

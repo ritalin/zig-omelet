@@ -99,9 +99,12 @@ pub fn Client(comptime WorkerType: type) type {
 
                 if (!dispatcher.receive_pending.hasMore()) {
                     if (dispatcher.send_queue.dequeue()) |entry| {
-                        if (entry.event.tag() == .quit_accept) {
-                            if (dispatcher.state == .done) continue;
+                        if (dispatcher.state == .done) {
+                            defer entry.deinit();
+                            continue;
+                        }
 
+                        if (entry.event.tag() == .quit_accept) {
                             try dispatcher.done();
                         }
                         Logger.Server.traceLog.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});

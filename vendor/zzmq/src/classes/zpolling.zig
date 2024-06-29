@@ -72,6 +72,10 @@ pub const ZPolling = struct {
             };
         }
 
+        return self.pollWithTimeoutInternal(raw_items, timeout_ms, 1);
+    }
+
+    fn pollWithTimeoutInternal(self: ZPolling, raw_items: []c.zmq_pollitem_t, timeout_ms: c_int, retry_left: usize) !Iterator {
         const result = c.zmq_poll(raw_items.ptr, @as(c_int, @intCast(raw_items.len)), timeout_ms);
         if (result == 0) {
             return error.PollingTimeout;
@@ -82,7 +86,12 @@ pub const ZPolling = struct {
             return switch (err_no) {
                 c.ETERM => error.SocketClosed,
                 c.EFAULT => error.InvalidPollingItems,
-                c.EINTR => error.InvalidInterrupted,
+                c.EINTR => {
+                    if (retry_left > 0) {
+                        return self.pollWithTimeoutInternal(raw_items, timeout_ms, retry_left-1);
+                    }
+                    return error.InvalidInterrupted;
+                },
                 else => error.PollingFailed,
             };
         }

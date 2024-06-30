@@ -59,6 +59,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
             _ = try writer.writeString(payload.header.path);
             _ = try writer.writeString(payload.header.hash);
             _ = try writer.writeEnum(types.LogLevel, payload.log_level);
+            _ = try writer.writeString(payload.log_from);
             _ = try writer.writeString(payload.log_content);
         },
         .ready_topic_body => {},
@@ -78,6 +79,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         .quit => {},
         .log => |payload| {
             _ = try writer.writeEnum(types.LogLevel, payload.level);
+            _ = try writer.writeString(payload.from);
             _ = try writer.writeString(payload.content);
         }
     }
@@ -148,13 +150,14 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
             const path = try reader.readString();
             const hash = try reader.readString();
             const level = try reader.readEnum(types.LogLevel);
+            const from = try reader.readString();
             const content = try reader.readString();
 
             return .{
                 .invalid_topic_body = try types.EventPayload.InvalidTopicBody.init(
                     allocator,
                     name, path, hash,
-                    level, content
+                    level, from, content
                 ),
             };
         },
@@ -183,11 +186,12 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
         },
         .log => {
             const level = try reader.readEnum(types.LogLevel);
+            const from = try reader.readString();
             const content = try reader.readString();
 
             return .{
                 .log = try types.EventPayload.Log.init(
-                    allocator, level, content
+                    allocator, level, from, content
                 ),
             };
         }

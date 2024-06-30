@@ -169,7 +169,7 @@ fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringH
     }
 
     return .{
-        .log = try core.EventPayload.Log.init(self.allocator, .warn, "Unknown worker result"),
+        .log = try core.EventPayload.Log.init(self.allocator, .warn, APP_CONTEXT, "Unknown worker result"),
     };
 }
 
@@ -190,24 +190,29 @@ fn processParseResult(allocator: std.mem.Allocator, reader: *core.CborStream.Rea
 
 fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
     const log_level = try reader.readString();
+    const from = try reader.readString();
     const content = try reader.readString();
+    
+    const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{APP_CONTEXT, from});
+    defer allocator.free(full_from);
 
     return .{
         .invalid_topic_body = try core.EventPayload.InvalidTopicBody.init(allocator, 
             entry.path.name, entry.path.path, entry.path.hash,
-            stringToLogLevel(log_level), content
+            stringToLogLevel(log_level), full_from, content
         ),
     };
 }
 
 fn stringToLogLevel(s: core.Symbol) core.LogLevel {
-    inline for (comptime std.meta.fields(core.LogLevel)) |f| {
-        if (std.mem.eql(u8, s, f.name)) {
-            return @enumFromInt(f.value);
-        }
-    }
+    return std.meta.stringToEnum(core.LogLevel, s) orelse .err;
+    // inline for (comptime std.meta.fields(core.LogLevel)) |f| {
+    //     if (std.mem.eql(u8, s, f.name)) {
+    //         return @enumFromInt(f.value);
+    //     }
+    // }
 
-    return .err;
+    // return .err;
 }
 
 const LookupEntry = struct {

@@ -124,7 +124,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .invalid_topic_body => |payload| {
-                    log(payload.log_level, "????", payload.log_content);
+                    log(payload.log_level, payload.log_from, payload.log_content);
 
                     try source_cache.dismiss(payload.header);
                     try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
@@ -175,7 +175,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 },
                 .log => |payload| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
-                    log(payload.level, "????", payload.content);
+                    log(payload.level, payload.from, payload.content);
                 },
                 else => {
                     try self.connection.dispatcher.reply(item.socket, .ack);

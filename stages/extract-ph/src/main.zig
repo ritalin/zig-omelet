@@ -22,7 +22,7 @@ pub fn main() !void {
 
     try stage.run(setting);
 
-    Logger.debug("Finished\n", .{});
+    Logger.debug("Finished", .{});
 }
 
 test "main" {

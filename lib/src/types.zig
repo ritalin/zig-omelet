@@ -209,25 +209,28 @@ pub const EventPayload = struct {
         allocator: std.mem.Allocator,
         header: EventPayload.SourcePath, 
         log_level: LogLevel,
+        log_from: Symbol,
         log_content: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: FilePath, hash: Symbol, log_level: LogLevel, log_content: Symbol) !@This() {
+        pub fn init(allocator: std.mem.Allocator, name: Symbol, path: FilePath, hash: Symbol, log_level: LogLevel, log_from: Symbol, log_content: Symbol) !@This() {
             return .{
                 .allocator = allocator,
                 .header = try SourcePath.init(allocator, name, path, hash, 1),
                 .log_level = log_level,
+                .log_from = try allocator.dupe(u8, log_from),
                 .log_content = try allocator.dupe(u8, log_content),
             };
         }
         pub fn deinit(self: @This()) void {
             self.header.deinit();
+            self.allocator.free(self.log_from);
             self.allocator.free(self.log_content);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
             return init(
                 allocator, 
                 self.header.name, self.header.path, self.header.hash, 
-                self.log_level, self.log_content
+                self.log_level, self.log_from, self.log_content
             );
         }
     };
@@ -279,21 +282,24 @@ pub const EventPayload = struct {
     };
     pub const Log = struct {
         allocator: std.mem.Allocator,
-        level: LogLevel, 
+        level: LogLevel,
+        from: Symbol,
         content: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, level: LogLevel, content: Symbol) !@This() {
+        pub fn init(allocator: std.mem.Allocator, level: LogLevel, from: Symbol, content: Symbol) !@This() {
             return .{
                 .allocator = allocator,
                 .level = level,
+                .from = try allocator.dupe(u8, from),
                 .content = try allocator.dupe(u8, content),
             };
         }
         pub fn deinit(self: @This()) void {
+            self.allocator.free(self.from);
             self.allocator.free(self.content);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.level, self.content);
+            return init(allocator, self.level, self.from, self.content);
         }
     };
 };

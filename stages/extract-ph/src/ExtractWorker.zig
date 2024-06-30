@@ -16,9 +16,6 @@ pub const Topics = struct {
 
 const core = @import("core");
 
-// const PATH = "/path/to/sql/master/Foo.sql";
-// const SQL = "select $id::bigint, $name::varchar from foo where kind = $kind::int";
-
 const Self = @This();
 
 allocator: std.mem.Allocator,
@@ -52,7 +49,7 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         defer self.allocator.free(message);
 
         const log: core.Event = .{
-            .log = try core.EventPayload.Log.init(self.allocator, .err, message),
+            .log = try core.EventPayload.Log.init(self.allocator, .err, "task", message),
         };
         defer log.deinit();
         try core.sendEvent(self.allocator, socket, log);
@@ -65,14 +62,4 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     defer self.allocator.free(query);
 
     c.parseDuckDbSQL(handle, query.ptr, query.len);
-
-    // const message = try std.fmt.allocPrint(self.allocator, "Worker finished = {s}", .{self.path});
-    // defer self.allocator.free(message);
-    // std.debug.print("{s}\n", .{message});
-
-    // const log: core.Event = .{
-    //     .log = try core.EventPayload.Log.init(self.allocator, .info, message),
-    // };
-    // defer log.deinit();
-    // try core.sendEvent(self.allocator, socket, log);
 }

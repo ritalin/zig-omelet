@@ -1,5 +1,6 @@
 #include <iostream>
 #include <charconv>
+#include <format>
 
 #include <duckdb/parser/parser.hpp>
 #include <duckdb/parser/query_node/select_node.hpp>
@@ -392,8 +393,11 @@ auto PlaceholderCollector::err(const std::string msg) -> void {
             log_level: {
                 payload_encoder.addString("err");
             }
+            log_from: {
+                payload_encoder.addString("task");
+            }
             log_content: {
-                payload_encoder.addString(msg);
+                payload_encoder.addString(std::format("{} ({})", msg, this->id));
             }
 
             auto encode_result = payload_encoder.build();

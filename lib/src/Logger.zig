@@ -26,7 +26,6 @@ pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, arg
     defer buf.deinit();
     const writer = buf.writer();
 
-    try std.fmt.format(writer, "[{s}] ", .{self.app_context});
     try std.fmt.format(writer, content, args);
 
     // const log_message = try buf.toOwnedSlice();
@@ -39,7 +38,7 @@ pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, arg
 
     try self.dispatcher.post(.{
         .log = try types.EventPayload.Log.init(
-            self.allocator, log_level, log_message
+            self.allocator, log_level, self.app_context, log_message
         )
     });
 }
@@ -110,15 +109,6 @@ fn Direct(comptime stage_name: types.Symbol, comptime scope: @Type(.EnumLiteral)
         }
         pub fn debug(comptime message: []const u8, args: anytype) void {
             S.debug("[{s}] " ++ message, directLogArgs(stage_name, args));
-        }
-
-        pub fn log(level: types.LogLevel, message: []const u8) void {
-            const log_level = level.toStdLevel();
-            
-            switch (level.ofScope()) {
-                .trace => Scoped(.trace).log(log_level, stage_name, message),
-                else => Scoped(.default).log(log_level, stage_name, message),
-            }
         }
     };
 }

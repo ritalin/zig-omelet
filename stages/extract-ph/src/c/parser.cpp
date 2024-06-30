@@ -12,6 +12,7 @@
 #define MAGIC_ENUM_RANGE_MAX (std::numeric_limits<uint8_t>::max())
 
 #include <zmq.h>
+#include <magic_enum/magic_enum.hpp>
 #include <magic_enum/magic_enum_iostream.hpp>
 #include <nlohmann/json.hpp>
 
@@ -49,6 +50,7 @@ public:
     auto with_type_hint(std::string param_key, duckdb::LogicalType ty) -> void;
 public:
     auto finish(const WalkResult& result) -> void;
+    auto warn(const std::string msg) -> void;
     auto err(const std::string msg) -> void;
 };
 
@@ -147,7 +149,10 @@ auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::
             }
             break;
         default:
-            std::cout << "[Todo] unsupported expr: " << expr->type << "(class: " << expr->expression_class << ")" << std::endl;
+            collector->warn(std::format("[TODO] unsupported expr: {}, class: {}", 
+                magic_enum::enum_name(expr->type), 
+                magic_enum::enum_name(expr->expression_class)
+            ));
             break;
         }
     }
@@ -182,7 +187,7 @@ auto walkTableRef(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::Ta
         // empty 
         break;
     default:
-        std::cout << "[Todo] unsupported table ref: " << table_ref->type << std::endl;
+        collector->warn(std::format("[TODO] unsupported table ref: {}", magic_enum::enum_name(table_ref->type)));
         break;
     }
 }
@@ -207,7 +212,7 @@ auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatemen
         walkSelectStatementNode(collector, node->Cast<duckdb::SelectNode>());
         break;
     default:
-        std::cout << "[Todo] unsupported select stmt node: " << node->type << std::endl;
+        collector->warn(std::format("[TODO] unsupported select stmt node: {}", magic_enum::enum_name(node->type)));
         break;
     }
 }
@@ -215,7 +220,6 @@ auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatemen
 namespace ns {
     auto to_json(const PlaceholderCollector::Entry& entry) -> nlohmann::json {
         auto j = nlohmann::json {
-            // { "index", entry.index },
             { "field_name", entry.field_name },
         };
 
@@ -225,17 +229,6 @@ namespace ns {
 
         return j;
     }
-
-    // auto from_json(const nlohmann::json& j, PlaceholderCollector::Entry& entry) -> void {
-    //     j.at("index").get_to(entry.index);
-    //     j.at("name").get_to(entry.name);
-
-    //     if (j.contains("type-name")) {
-    //         std::string ty;
-    //         j.at("type-name").get_to(ty);
-    //         entry.type_name = ty;
-    //     }
-    // }
 }
 
 auto serializePlaceHolder(const std::vector<PlaceholderCollector::WalkResult::Placeholder>& entries) -> std::string {
@@ -259,15 +252,6 @@ auto PlaceholderCollector::WalkResult::placeholders() const -> std::vector<Place
 }
 
 auto PlaceholderCollector::walk(duckdb::unique_ptr<duckdb::SQLStatement> &stmt) -> WalkResult {
-    // auto topic_before = std::string("query:before");
-    // zmq_send(this->socket, topic_before.c_str(), topic_before.length(), ZMQ_SNDMORE);
-    // auto query = stmt->ToString();
-    // auto len = zmq_send(this->socket, query.c_str(), query.length(), 0);
-    // std::cout << "Send:byte: " << len << std::endl;
-
-    // std::cout << std::endl << "[Before]" << std::endl;
-    // std::cout << stmt->ToString() << std::endl << std::endl;
-
     this->max_index = 0;
     this->lookup = {};
 
@@ -276,13 +260,10 @@ auto PlaceholderCollector::walk(duckdb::unique_ptr<duckdb::SQLStatement> &stmt) 
         {
             auto& sel_stmt = stmt->Cast<duckdb::SelectStatement>();
             walkSelectStatement(this, sel_stmt);
-            
-            // std::cout << std::endl << "[After]" << std::endl;
-            // std::cout << stmt->ToString() << std::endl << std::endl;
         }
         break;
     default:
-        std::cout << "[Todo] unsupported statement: " << stmt->type << std::endl;
+        this->warn(std::format("[TODO] unsupported statement: {}", magic_enum::enum_name(stmt->type)));
         break;
     }
 
@@ -370,43 +351,53 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
     }
 }
 
-auto PlaceholderCollector::err(const std::string msg) -> void {
-    if (! this->socket) {
-        std::cout << "[ERROR] " << msg << std::endl;
+auto sendLog(void *socket, const std::string& id, const std::string& log_level, const std::string msg) -> void {
+    event_type: {
+        auto event_type = std::string("worker_result");
+        zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
-    else {
-        auto socket = this->socket.value();
+    payload: {
+        CborEncoder payload_encoder;
 
-        event_type: {
-            auto event_type = std::string("worker_result");
-            zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+        event_tag: {
+            payload_encoder.addString("log");
         }
-        payload: {
-            CborEncoder payload_encoder;
-
-            event_tag: {
-                payload_encoder.addString("log");
-            }
-            source_path: {
-                payload_encoder.addString(this->id);
-            }
-            log_level: {
-                payload_encoder.addString("err");
-            }
-            log_from: {
-                payload_encoder.addString("task");
-            }
-            log_content: {
-                payload_encoder.addString(std::format("{} ({})", msg, this->id));
-            }
-
-            auto encode_result = payload_encoder.build();
-            zmq_send(socket, encode_result.c_str(), encode_result.length(), ZMQ_SNDMORE);    
-            zmq_send(socket, "", 0, 0);    
+        source_path: {
+            payload_encoder.addString(id);
         }
+        log_level: {
+            payload_encoder.addString(log_level);
+        }
+        log_from: {
+            payload_encoder.addString("task");
+        }
+        log_content: {
+            payload_encoder.addString(std::format("{} ({})", msg, id));
+        }
+
+        auto encode_result = payload_encoder.build();
+        zmq_send(socket, encode_result.c_str(), encode_result.length(), ZMQ_SNDMORE);    
+        zmq_send(socket, "", 0, 0);    
     }
 }
 
+auto PlaceholderCollector::warn(const std::string msg) -> void {
+    if (this->socket) {
+        sendLog(this->socket.value(), this->id, "warn", msg);
+    }
+    else {
+        std::cout << std::format("warn: {}", msg);
+    }
+}
+
+auto PlaceholderCollector::err(const std::string msg) -> void {
+    if (this->socket) {
+        sendLog(this->socket.value(), this->id, "err", msg);
+    }
+    else {
+        std::cout << std::format("err: {}", msg);
+    }
+}
 
 auto operator==(const PlaceholderCollector::Entry& lhs, const PlaceholderCollector::Entry& rhs) -> bool {
     if (lhs.index != rhs.index) return false;
@@ -450,25 +441,6 @@ auto parseDuckDbSQL(CollectorRef handle, const char *query, size_t query_len) ->
     }
 
     collector->err(err_msg);
-}
-
-auto duckDbParseSQL(const char *id, const char *query, uint32_t len, void *socket) -> void {
-    try {
-        auto parser = duckdb::Parser();
-        parser.ParseQuery(std::string(query, len));
-
-        if (parser.statements.size() > 0) {
-            PlaceholderCollector collector(std::string(id), socket);
-            auto result = collector.walk(parser.statements[0]);
-
-            collector.finish(result);            
-        }
-    }
-    catch (const duckdb::ParserException& ex) {
-        std::cout << "[ERROR] " << ex.what() << std::endl;
-        PlaceholderCollector collector(std::string(id), socket);
-        collector.err(ex.what());
-    }
 }
 
 }

@@ -10,7 +10,7 @@ const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
 const Self = @This();
 
 // TODO provide from CLI args
-const PREFIX = "./_dump/ts";
+// const PREFIX = "./_dump/ts";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
@@ -98,7 +98,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try lookup.insert(source.header.path);
                     defer lookup.remove(source.header.path);
 
-                    var output_dir = try std.fs.cwd().makeOpenPath(PREFIX, .{});
+                    var output_dir = try std.fs.cwd().makeOpenPath(setting.output_dir_path, .{});
                     defer output_dir.close();
 
                     var builder = try CodeBuilder.init(self.allocator, output_dir, source.header.name);

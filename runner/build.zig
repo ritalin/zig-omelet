@@ -111,7 +111,7 @@ pub fn build(b: *std.Build) void {
     test_fright_cmd.addArgs(&.{
         "generate",
         "--source-dir=../_sql-examples",
-        "--output-dir=../_dump",
+        "--output-dir=../_dump/ts",
     });
     const test_fright_step = b.step("test-run", "Run the app as test frighting");
     test_fright_step.dependOn(&test_fright_cmd.step);

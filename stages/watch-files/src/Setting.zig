@@ -61,7 +61,7 @@ const ArgId = enum {
     pub const Decls: []const clap.Param(ArgId) = &.{
         .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
-        .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .one},
+        .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },

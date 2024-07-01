@@ -105,7 +105,7 @@ pub fn main() !void {
                 &.{
                     "--request-channel", setting.general.stage_endpoints.req_rep,
                     "--subscribe-channel", setting.general.stage_endpoints.pub_sub,
-                    // "--output-dir", setting.command.generate.output_dir_path,
+                    "--output-dir", setting.command.generate.output_dir_path,
                 }, 
                 false
             );

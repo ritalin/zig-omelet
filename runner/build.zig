@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
 
     const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
+    const dep_clap = b.dependency("clap", .{});
 
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
 
@@ -34,44 +35,45 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe.root_module.addImport("clap", dep_clap.module("clap"));
     exe.root_module.addImport("core", dep_core.module("core"));
 
     b.installArtifact(exe);
 
-    // watch-files stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_watch_files", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-watch-files");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
-    // extract-ph stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_extract_ph", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-            .duckdb_prefix = duckdb_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-extract-ph");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
-    // generate-ts stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_generate_ts", .{
-            .target = target,
-            .optimize = optimize,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact("stage-generate-ts");
-        b.installArtifact(exe_stage);
-        break :install_stage;
-    }
+    // // watch-files stage
+    // install_stage: {
+    //     const dep_stage = b.dependency("stage_watch_files", .{
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .zmq_prefix = zmq_prefix,
+    //     });
+    //     const exe_stage = dep_stage.artifact("stage-watch-files");
+    //     b.installArtifact(exe_stage);
+    //     break :install_stage;
+    // }
+    // // extract-ph stage
+    // install_stage: {
+    //     const dep_stage = b.dependency("stage_extract_ph", .{
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .zmq_prefix = zmq_prefix,
+    //         .duckdb_prefix = duckdb_prefix,
+    //     });
+    //     const exe_stage = dep_stage.artifact("stage-extract-ph");
+    //     b.installArtifact(exe_stage);
+    //     break :install_stage;
+    // }
+    // // generate-ts stage
+    // install_stage: {
+    //     const dep_stage = b.dependency("stage_generate_ts", .{
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .zmq_prefix = zmq_prefix,
+    //     });
+    //     const exe_stage = dep_stage.artifact("stage-generate-ts");
+    //     b.installArtifact(exe_stage);
+    //     break :install_stage;
+    // }
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -95,6 +97,16 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const test_fright_cmd = b.addRunArtifact(exe);
+    test_fright_cmd.step.dependOn(b.getInstallStep());
+    test_fright_cmd.addArgs(&.{
+        "generate",
+        "--source-dir=../_sql-examples",
+        "--output-dir=../_dump",
+    });
+    const test_fright_step = b.step("test-run", "Run the app as test frighting");
+    test_fright_step.dependOn(&test_fright_cmd.step);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),

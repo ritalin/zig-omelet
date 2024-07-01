@@ -18,7 +18,7 @@ const std_options = .{
 pub fn main() !void {
     var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
     defer {
-        traceLog.debug("Leak? {}\n", .{gpa.deinit()});
+        traceLog.debug("Leak? {}", .{gpa.deinit()});
     }
     const allocator = gpa.allocator();
 
@@ -44,27 +44,36 @@ pub fn main() !void {
         },
     };
 
-    const channel_root = "ipc:///tmp/duckdb-ext-ph";
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const setting_allocator = arena.allocator();
-    const setting: Setting = .{
-        .arena = &arena,
-        .runner_endpoints = .{
-            .req_rep = try core.resolveBindPort(setting_allocator, channel_root, core.REQ_PORT),
-            .pub_sub = try core.resolveBindPort(setting_allocator, channel_root, core.PUBSUB_PORT),
+    var setting = switch (try Setting.loadFromArgs(allocator)) {
+        .help => |setting| {
+            try setting.help(std.io.getStdErr().writer());
+            std.process.exit(2);
         },
-        .stage_endpoints = .{
-            .req_rep = try core.resolveConnectPort(setting_allocator, channel_root, core.REQ_PORT),
-            .pub_sub = try core.resolveConnectPort(setting_allocator, channel_root, core.PUBSUB_PORT),
-        },
-        // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples/Foo.sql")},
-        .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples")}, 
-        // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
-        .watch = false,
+        .success => |setting| setting,
     };
+    defer setting.deinit();
+
+    // const channel_root = "ipc:///tmp/duckdb-ext-ph";
+
+    // var arena = std.heap.ArenaAllocator.init(allocator);
+    // defer arena.deinit();
+
+    // const setting_allocator = arena.allocator();
+    // const setting: Setting = .{
+    //     .arena = &arena,
+    //     .runner_endpoints = .{
+    //         .req_rep = try core.resolveIPCBindPort(setting_allocator, channel_root, core.REQ_PORT),
+    //         .pub_sub = try core.resolveIPCBindPort(setting_allocator, channel_root, core.PUBSUB_PORT),
+    //     },
+    //     .stage_endpoints = .{
+    //         .req_rep = try core.resolveIPCConnectPort(setting_allocator, channel_root, core.REQ_PORT),
+    //         .pub_sub = try core.resolveIPCConnectPort(setting_allocator, channel_root, core.PUBSUB_PORT),
+    //     },
+    //     // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples/Foo.sql")},
+    //     .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples")}, 
+    //     // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
+    //     .watch = false,
+    // };
 
     try core.makeIpcChannelRoot();
 
@@ -83,9 +92,9 @@ pub fn main() !void {
                 allocator, 
                 app_dir, "stage-watch-files",
                 &.{
-                    "--request-channel", setting.stage_endpoints.req_rep,
-                    "--subscribe-channel", setting.stage_endpoints.pub_sub,
-                    "--source-dir", setting.source_dir[0],
+                    "--request-channel", setting.general.stage_endpoints.req_rep,
+                    "--subscribe-channel", setting.general.stage_endpoints.pub_sub,
+                    "--source-dir", setting.command.generate.source_dir_paths[0],
                     // "--watch",
                 }, 
                 false
@@ -101,8 +110,8 @@ pub fn main() !void {
                 allocator, 
                 app_dir, "stage-extract-ph", 
                 &.{
-                    "--request-channel", setting.stage_endpoints.req_rep,
-                    "--subscribe-channel", setting.stage_endpoints.pub_sub,
+                    "--request-channel", setting.general.stage_endpoints.req_rep,
+                    "--subscribe-channel", setting.general.stage_endpoints.pub_sub,
                 }, 
                 false
             );
@@ -116,8 +125,9 @@ pub fn main() !void {
                 allocator, 
                 app_dir, "stage-generate-ts",
                 &.{
-                    "--request-channel", setting.stage_endpoints.req_rep,
-                    "--subscribe-channel", setting.stage_endpoints.pub_sub,
+                    "--request-channel", setting.general.stage_endpoints.req_rep,
+                    "--subscribe-channel", setting.general.stage_endpoints.pub_sub,
+                    // "--output-dir", setting.command.generate.output_dir_path,
                 }, 
                 false
             );

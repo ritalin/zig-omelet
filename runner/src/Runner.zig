@@ -21,7 +21,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
     var connection = try core.sockets.Connection.Server.init(allocator, &ctx);
-    try connection.bind(setting.runner_endpoints);
+    try connection.bind(setting.general.runner_endpoints);
 
     return .{
         .allocator = allocator,
@@ -39,9 +39,9 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     systemLog.debug("Launched", .{});
 
     dump_setting: {
-        systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.runner_endpoints.req_rep});
-        systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.runner_endpoints.pub_sub});
-        systemLog.debug("CLI: Watch mode = {}", .{setting.watch});
+        systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.general.runner_endpoints.req_rep});
+        systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.general.runner_endpoints.pub_sub});
+        systemLog.debug("CLI: Watch mode = {}", .{setting.command.watchModeEnabled()});
         break :dump_setting;
     }
 

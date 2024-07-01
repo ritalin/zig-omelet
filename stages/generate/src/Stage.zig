@@ -17,7 +17,7 @@ context: zmq.ZContext,
 connection: *Connection,
 logger: core.Logger,
 
-pub const APP_CONTEXT = "generate-ts";
+pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);

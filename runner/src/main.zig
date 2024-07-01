@@ -53,28 +53,6 @@ pub fn main() !void {
     };
     defer setting.deinit();
 
-    // const channel_root = "ipc:///tmp/duckdb-ext-ph";
-
-    // var arena = std.heap.ArenaAllocator.init(allocator);
-    // defer arena.deinit();
-
-    // const setting_allocator = arena.allocator();
-    // const setting: Setting = .{
-    //     .arena = &arena,
-    //     .runner_endpoints = .{
-    //         .req_rep = try core.resolveIPCBindPort(setting_allocator, channel_root, core.REQ_PORT),
-    //         .pub_sub = try core.resolveIPCBindPort(setting_allocator, channel_root, core.PUBSUB_PORT),
-    //     },
-    //     .stage_endpoints = .{
-    //         .req_rep = try core.resolveIPCConnectPort(setting_allocator, channel_root, core.REQ_PORT),
-    //         .pub_sub = try core.resolveIPCConnectPort(setting_allocator, channel_root, core.PUBSUB_PORT),
-    //     },
-    //     // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples/Foo.sql")},
-    //     .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql-examples")}, 
-    //     // .source_dir = &.{try std.fs.cwd().realpathAlloc(setting_allocator, "../_sql")},
-    //     .watch = false,
-    // };
-
     try core.makeIpcChannelRoot();
 
     var runner = try Runner.init(allocator, setting);

@@ -22,7 +22,7 @@ pub const CommandSetting = union(help.CommandArgId) {
                 const setting = GenerateSetting.loadArgs(arena, Iterator, parser.iter) 
                 catch {
                     return .{
-                        .help = .{.tags = &.{ .cmd_generate, .cmd_general }}
+                        .help = .{.tags = &.{ .cmd_generate, .cmd_general }, .command = .generate }
                     };
                 };
                 return .{

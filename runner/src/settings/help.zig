@@ -37,8 +37,15 @@ pub const ArgHelpSetting = struct {
     };
 
     tags: []const Tag,
+    command: ?CommandArgId,
 
     pub fn help(self: ArgHelpSetting, writer: anytype) !void {
+        try writer.print("usage: {s} [General options] {s} [Subcommand options]\n\n", .{
+            @import("build_options").EXE_NAME, 
+            if (self.command) |c| std.fmt.comptimePrint("{s}", .{@tagName(c)}) 
+            else CommandArgId.options.category_name.?
+        });
+
         for (self.tags) |tag| {
             switch (tag) {
                 .general => {
@@ -58,4 +65,4 @@ pub const ArgHelpSetting = struct {
     }
 };
 
-pub const GeneralHelpSetting: ArgHelpSetting = .{ .tags = &.{.subcommand, .general} };
+pub const GeneralHelpSetting: ArgHelpSetting = .{ .tags = &.{.subcommand, .general}, .command = null };

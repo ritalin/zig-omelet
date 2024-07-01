@@ -14,7 +14,7 @@ logger: core.Logger,
 
 const Self = @This();
 
-pub const APP_CONTEXT = "watch-files";
+pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);

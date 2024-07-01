@@ -10,7 +10,7 @@ const systemLog = core.Logger.SystemDirect(APP_CONTEXT);
 const traceLog = core.Logger.TraceDirect(APP_CONTEXT);
 const log = core.Logger.Stage.log;
 
-pub const APP_CONTEXT = "runner";
+pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 const Self = @This();
 
 allocator: std.mem.Allocator,

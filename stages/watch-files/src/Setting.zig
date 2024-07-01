@@ -2,6 +2,8 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
+
 const Setting = @This();
 
 arena: *std.heap.ArenaAllocator,
@@ -35,11 +37,14 @@ pub fn deinit(self: *Setting) void {
     self.* = undefined;
 }
 
-pub fn showUsage(writer: anytype) !void {
-    return clap.help(writer, ArgId, ParamDecls, .{});
+pub fn help(writer: anytype) !void {
+    try writer.print("usage: {s} [{?s}]\n\n", .{
+        @import("build_options").EXE_NAME, ArgId.options.category_name
+    });
+    try core.settings.showHelp(writer, ArgId);
 }
 
-const ArgUsages = std.StaticStringMap(struct { desc: []const u8, value: []const u8 }).initComptime(.{
+const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.request_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.source_dir), .{.desc = "Source directores or files", .value = "PATH"}},
@@ -53,30 +58,23 @@ const ArgId = enum {
     watch,
     standalone,
 
-    pub fn description(self: ArgId) []const u8 {
-        const usage = ArgUsages.get(@tagName(self)) orelse return "";
-        return usage.desc;
-    }
-    pub fn value(self: ArgId) []const u8 {
-        const usage = ArgUsages.get(@tagName(self)) orelse return "VALUE";
-        return usage.value;
-    }
-};
-
-const ParamDecls: []const clap.Param(ArgId) = &.{
-    .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
-    .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
-    .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .one},
-    .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
-    .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
-    // .{.id = ., .names = , .takes_value = },
+    pub const Decls: []const clap.Param(ArgId) = &.{
+        .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
+        .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
+        .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .one},
+        .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
+        .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
+        // .{.id = ., .names = , .takes_value = },
+    };
+    pub usingnamespace core.settings.ArgHelp(@This(), ArgDescriptions);
+    pub const options: core.settings.ArgHelpOption = .{.category_name = "Stage options"};
 };
 
 fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterator) !Builder {
     _ = args_iter.next();
 
     var parser = clap.streaming.Clap(ArgId, std.process.ArgIterator){
-        .params = ParamDecls,
+        .params = ArgId.Decls,
         .iter = args_iter,
     };
 
@@ -134,15 +132,15 @@ const Builder = struct {
         const allocator = arena.allocator();
 
         if (self.request_channel == null) {
-            std.debug.print("Need to specify a `request-channel` arg.\n\n", .{});
+            log.warn("Need to specify a `request-channel` arg.\n\n", .{});
             return error.SettingLoadFailed;
         }
         if (self.subscribe_channel == null) {
-            std.debug.print("Need to specify a `subscribe-channel` arg.\n\n", .{});
+            log.warn("Need to specify a `subscribe-channel` arg.\n\n", .{});
             return error.SettingLoadFailed;
         }
         if (self.sources.items.len == 0) {
-            std.debug.print("Need to specify at least one `source-dir` arg.\n\n", .{});
+            log.warn("Need to specify at least one `source-dir` arg.\n\n", .{});
             return error.SettingLoadFailed;
         }
 
@@ -151,7 +149,7 @@ const Builder = struct {
 
         for (self.sources.items) |path| {
             const path_abs = std.fs.cwd().realpathAlloc(allocator, path) catch {
-                std.debug.print("can not resolve `source-dir` arg ({s}).\n\n", .{path});
+                log.warn("can not resolve `source-dir` arg ({s}).\n\n", .{path});
                 return error.SettingLoadFailed;
             };
 

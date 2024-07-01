@@ -23,8 +23,15 @@ pub fn build(b: *std.Build) void {
     const dep_clap = b.dependency("clap", .{});
     const dep_core = b.dependency("lib_core", .{});
 
+    const APP_CONTEXT = "extract-ph";
+    const EXE_NAME = std.fmt.comptimePrint("stage-{s}", .{APP_CONTEXT});
+    
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "APP_CONTEXT", APP_CONTEXT);
+    build_options.addOption([]const u8, "EXE_NAME", EXE_NAME);
+
     const exe = b.addExecutable(.{
-        .name = "stage-extract-ph",
+        .name = EXE_NAME,
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -59,6 +66,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe.root_module.addImport("clap", dep_clap.module("clap"));
     exe.root_module.addImport("core", dep_core.module("core"));
+
+    exe.root_module.addOptions("build_options", build_options);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

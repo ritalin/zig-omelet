@@ -12,7 +12,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var setting = Setting.loadFromArgs(allocator) catch {
-        try Setting.showUsage(std.io.getStdErr().writer());
+        try Setting.help(std.io.getStdErr().writer());
         std.process.exit(1);
     };
     defer setting.deinit();    

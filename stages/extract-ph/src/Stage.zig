@@ -15,7 +15,7 @@ context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む
 connection: *Connection,
 logger: core.Logger,
 
-pub const APP_CONTEXT = "exctract-ph";
+pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);

@@ -2,7 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
-const log = core.Logger.SystemDirect(@import("build_options").AppContext);
+const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
 
 const help = @import("./help.zig");
 

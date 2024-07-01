@@ -20,34 +20,53 @@ const AVAILABLE_PROROCOLS = std.StaticStringMap(void).initComptime(.{
     .{"tcp://"}, .{"udp://"}
 });
 
-pub fn resolveConnectPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
-    if (std.mem.startsWith(u8, channel_root, "ipc://")) {
-        return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ channel_root, port_name });
+pub fn resolveIPCConnectPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
+    return resolveConnectPortInternal(try std.fmt.allocPrint(allocator, "{s}/{s}", .{channel_root, port_name}));
+}
+
+pub fn resolveConnectPort(allocator: std.mem.Allocator, channel: types.Symbol) !types.Symbol {
+    return resolveConnectPortInternal(try allocator.dupe(u8, channel));
+}
+
+fn resolveConnectPortInternal(channel: types.Symbol) !types.Symbol {
+    if (std.mem.startsWith(u8, channel, "ipc://")) {
+        return channel;
     }
 
     for (AVAILABLE_PROROCOLS.keys()) |k| {
-        if (std.mem.startsWith(u8, channel_root, k)) {
-            const port_index = std.mem.lastIndexOf(u8, channel_root, ":");
+        if (std.mem.startsWith(u8, channel, k)) {
+            const port_index = std.mem.lastIndexOf(u8, channel, ":");
             if (port_index == null) return error.ChannelPort;
 
-            return channel_root;
+            return channel;
         }
     }
 
     return error.ChannelProtocl;
 }
 
-pub fn resolveBindPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
-    if (std.mem.startsWith(u8, channel_root, "ipc://")) {
-        return std.fs.path.join(allocator, &.{ channel_root, port_name });
+pub fn resolveIPCBindPort(allocator: std.mem.Allocator, channel_root: types.Symbol, port_name: types.Symbol) !types.Symbol {
+    return resolveBindPortInternal(
+        allocator, 
+        try std.fmt.allocPrint(allocator, "{s}/{s}", .{channel_root, port_name})
+    );
+}
+
+pub fn resolveBindPort(allocator: std.mem.Allocator, channel: types.Symbol) !types.Symbol {
+    return resolveBindPortInternal(allocator, try allocator.dupe(u8, channel));
+}
+fn resolveBindPortInternal(allocator: std.mem.Allocator, channel: types.Symbol) !types.Symbol {
+    if (std.mem.startsWith(u8, channel, "ipc://")) {
+        return channel;
     }
 
     for (AVAILABLE_PROROCOLS.keys()) |k| {
-        if (std.mem.startsWith(u8, channel_root, k)) {
-            const port_index = std.mem.lastIndexOf(u8, channel_root, ":");
+        if (std.mem.startsWith(u8, channel, k)) {
+            const port_index = std.mem.lastIndexOf(u8, channel, ":");
             if (port_index == null) return error.ChannelPort;
 
-            return try std.fmt.allocPrint(allocator, "{s}*{s}", .{k, channel_root[port_index.?..]});
+            defer allocator.free(channel);
+            return try std.fmt.allocPrint(allocator, "{s}*{s}", .{k, channel[port_index.?..]});
         }
     }
 

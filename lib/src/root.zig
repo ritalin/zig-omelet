@@ -15,6 +15,11 @@ pub const Logger = @import("./Logger.zig");
 pub const CborStream = @import("./CborStream.zig");
 pub usingnamespace @import("./decode_event_cbor.zig");
 
+pub const settings = struct {
+    pub usingnamespace @import("./settings/types.zig");
+    pub usingnamespace @import("./settings/help.zig");
+};
+
 test "All tests" {
     testing.refAllDecls(@This());
 }

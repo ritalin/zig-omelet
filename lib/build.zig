@@ -19,11 +19,13 @@ pub fn build(b: *std.Build) void {
 
     const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
+    const dep_clap = b.dependency("clap", .{});
 
     const mod = b.addModule("core", .{
         .root_source_file = b.path("src/root.zig"),
     });
     mod.addImport("zmq", dep_zzmq.module("zzmq"));
+    mod.addImport("clap", dep_clap.module("clap"));
 
     mod.addIncludePath(b.path("../vendor/cbor/include"));
     mod.addCSourceFiles(.{

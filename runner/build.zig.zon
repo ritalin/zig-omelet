@@ -44,6 +44,7 @@
         //    .lazy = false,
         //},
         .zzmq = .{ .path = "../vendor/zzmq" },
+        .clap = .{ .path = "../vendor/zig-clap"},
         .lib_core = .{ .path = "../lib" },
         .stage_watch_files = .{ .path = "../stages/watch-files" },
         .stage_extract_ph = .{ .path = "../stages/extract-ph" },

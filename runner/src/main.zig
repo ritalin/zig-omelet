@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const Runner = @import("./Runner.zig");
-const Setting = @import("./Setting.zig");
+const Setting = @import("./settings/Setting.zig");
 const Config = @import("./Config.zig");
 
 // const traceLog = std.log;

@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) void {
 
     const dep_core = b.dependency("lib_core", .{});
 
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "AppContext", "runner");
+
     const exe = b.addExecutable(.{
         .name = "extract-sql-placeholder",
         .root_source_file = b.path("src/main.zig"),
@@ -37,6 +40,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe.root_module.addImport("clap", dep_clap.module("clap"));
     exe.root_module.addImport("core", dep_core.module("core"));
+    exe.root_module.addOptions("build_options", build_options);
 
     b.installArtifact(exe);
 

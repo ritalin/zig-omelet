@@ -2,7 +2,7 @@ const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
 
-const Setting = @import("./Setting.zig");
+const Setting = @import("./settings/Setting.zig");
 const StageCount = @import("./Config.zig").StageCount;
 
 const Symbol = core.Symbol;

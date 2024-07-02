@@ -2,8 +2,11 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
+
 const Self = @This();
 
+log_level: core.LogLevel,
 runner_endpoints: core.Endpoints,
 stage_endpoints: core.Endpoints,
 
@@ -11,11 +14,13 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         req_rep_channel,
         pub_sub_channel,
+        log_level,
         help,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .req_rep_channel, .names = .{.long = "reqrep-channel"}, .takes_value = .one},
             .{.id = .pub_sub_channel, .names = .{.long = "pubsub-channel"}, .takes_value = .one},
+            .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
             .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
         };
         pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
@@ -52,11 +57,13 @@ pub const Command = struct {
 };
 
 pub const Builder = struct {
+    log_level: ?core.LogLevel,
     request_channel: ?core.Symbol,
     subscribe_channel: ?core.Symbol,
     
     pub fn init() Builder {
         return .{
+            .log_level = null,
             .request_channel = null,
             .subscribe_channel = null,
         };
@@ -85,6 +92,17 @@ pub const Builder = struct {
 
             if (arg_) |arg| switch (arg.param.id) {
                 .help => return error.ShowHelp,
+                .log_level => {
+                    if (arg.value) |v| {
+                        builder.log_level = 
+                            std.meta.stringToEnum(core.LogLevel, v)
+                            orelse {
+                                log.warn("Unresolved log level: {s}", .{v});
+                                return error.SettingLoadFailed;
+                            }
+                        ;
+                    }
+                },
                 .req_rep_channel => builder.request_channel = arg.value,
                 .pub_sub_channel => builder.subscribe_channel = arg.value,
             };
@@ -140,6 +158,7 @@ pub const Builder = struct {
         };
 
         return .{
+            .log_level = self.log_level orelse .info,
             .runner_endpoints = .{
                 .req_rep = req_rep_channels[1],
                 .pub_sub = pub_sub_channels[0],

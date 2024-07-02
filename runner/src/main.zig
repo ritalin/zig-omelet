@@ -22,8 +22,6 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
-    core.Logger.filterWith(.trace);
-
     var setting = switch (try Setting.loadFromArgs(allocator)) {
         .help => |setting| {
             try setting.help(std.io.getStdErr().writer());
@@ -32,6 +30,8 @@ pub fn main() !void {
         .success => |setting| setting,
     };
     defer setting.deinit();
+
+    core.Logger.filterWith(setting.general.log_level);
 
     try core.makeIpcChannelRoot(setting.general.stage_endpoints);
     defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);

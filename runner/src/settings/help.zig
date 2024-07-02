@@ -6,6 +6,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     // General
     .{@tagName(.req_rep_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL",}},
     .{@tagName(.pub_sub_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL",}},
+    .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.help), .{.desc = "Print command-specific usage", .value = "",}},
     // Commands
     .{@tagName(.generate), .{.desc = "Generate query parameters", .value = "",}},

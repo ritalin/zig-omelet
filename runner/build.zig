@@ -111,7 +111,10 @@ pub fn build(b: *std.Build) void {
 
     const test_fright_sc = command: {
         if (b.args) |args| {
-            if (args.len > 0) break :command args[0];
+            if (args.len > 0) {
+                test_fright_cmd.addArgs(args[1..]);
+                break :command args[0];
+            }
         }
         break :command "generate";
     };

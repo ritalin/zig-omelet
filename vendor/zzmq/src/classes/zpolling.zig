@@ -42,11 +42,17 @@ pub const ZPollEvents = std.enums.EnumFieldStruct(ZPollEvent, bool, false);
 pub const ZPolling = struct {
     allocator: std.mem.Allocator,
     items: []const Item,
+    options: Options,
 
-    pub fn init(allocator: std.mem.Allocator, items: []const Item) !ZPolling {
+    pub const Options = struct {
+        n_retry: usize = 1,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, items: []const Item, options: Options) !ZPolling {
         return .{ 
             .allocator = allocator,
             .items = try allocator.dupe(Item, items),
+            .options = options,
         };
     }
 
@@ -72,7 +78,7 @@ pub const ZPolling = struct {
             };
         }
 
-        return self.pollWithTimeoutInternal(raw_items, timeout_ms, 1);
+        return self.pollWithTimeoutInternal(raw_items, timeout_ms, self.options.n_retry);
     }
 
     fn pollWithTimeoutInternal(self: ZPolling, raw_items: []c.zmq_pollitem_t, timeout_ms: c_int, retry_left: usize) !Iterator {

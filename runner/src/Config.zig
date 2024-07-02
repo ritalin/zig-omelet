@@ -117,23 +117,23 @@ fn initStageProcess(
 
     try args.append(try base_dir.realpathAlloc(allocator, stage.path));
 
-
-            // "--request-channel", general.stage_endpoints.req_rep,
-            // "--subscribe-channel", general.stage_endpoints.pub_sub,
-            // "--source-dir", setting.command.generate.source_dir_paths[0],
-            // "--watch",
-
     request_channel: {
-        const binder = GeneralConfigMap.get(@tagName(.req_rep));
+        const binder = EndpointConfigMap.get(@tagName(.req_rep));
         std.debug.assert(binder != null);
         try binder.?(general_setting.stage_endpoints, &args);
         break :request_channel;
     }
     pub_sub_channel: {
-        const binder = GeneralConfigMap.get(@tagName(.pub_sub));
+        const binder = EndpointConfigMap.get(@tagName(.pub_sub));
         std.debug.assert(binder != null);
         try binder.?(general_setting.stage_endpoints, &args);
         break :pub_sub_channel;
+    }
+    log_level: {
+        const binder = GeneralConfigMap.get(@tagName(.log_level));
+        std.debug.assert(binder != null);
+        try binder.?(general_setting, &args);
+        break :log_level;
     }
     generate: {
         for (stage.extra_args) |extra| {
@@ -157,9 +157,6 @@ fn ConfigBindMap(comptime SettingType: type) type {
         pub const KV = struct {std.meta.FieldEnum(SettingType), Fn};
         
         pub fn init(comptime kvs: []const KV) std.StaticStringMap(Fn) {
-            const fields = std.meta.fields(SettingType);
-            comptime std.debug.assert(kvs.len == fields.len);
-
             comptime var map_kvs: [kvs.len](struct {core.Symbol, Fn}) = undefined;
             for (kvs, 0..) |kv, i| {
                 map_kvs[i] = .{ @tagName(kv[0]), kv[1] };
@@ -181,10 +178,15 @@ fn findDecl(comptime Id: type, comptime decls: []const clap.Param(Id), comptime 
     @compileError(std.fmt.comptimePrint("Not contained CLI arg setting: {}",.{id}));
 }
 
-const GeneralConfigMap = 
+const EndpointConfigMap = 
     ConfigBindMap(core.Endpoints).init(&.{
         .{.req_rep, Binder.General.bindRequestChannel},
         .{.pub_sub, Binder.General.bindSubscribeChannel},
+    })
+;
+const GeneralConfigMap = 
+    ConfigBindMap(GeneralSetting).init(&.{
+        .{.log_level, Binder.General.bindLogLevel},
     })
 ;
 const GenerateConfigMap = 
@@ -210,6 +212,12 @@ const Binder = struct {
             try args.append("--" ++ decl.names.long.?);
 
             try args.append(eps.pub_sub);
+        }
+        fn bindLogLevel(setting: GeneralSetting, args: *std.ArrayList(core.Symbol)) !void {
+            const decl = comptime findDecl(ArgId, decls, .log_level);
+            try args.append("--" ++ decl.names.long.?);
+
+            try args.append(@tagName(setting.log_level));
         }
     };
     const Generate = struct {

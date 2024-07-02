@@ -32,10 +32,12 @@ pub fn StageArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         request_channel,
         subscribe_channel,
+        log_level,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
             .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
+            .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         };
         pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
         pub const options: core.settings.ArgHelpOption = .{.category_name = "Stage general options"};
@@ -93,15 +95,10 @@ pub const Builder = struct {
             if (arg_) |arg| switch (arg.param.id) {
                 .help => return error.ShowHelp,
                 .log_level => {
-                    if (arg.value) |v| {
-                        builder.log_level = 
-                            std.meta.stringToEnum(core.LogLevel, v)
-                            orelse {
-                                log.warn("Unresolved log level: {s}", .{v});
-                                return error.SettingLoadFailed;
-                            }
-                        ;
-                    }
+                    builder.log_level = core.settings.resolveLogLevel(arg.value) catch |err| {
+                        log.warn("Unresolved log level: {?s}", .{arg.value});
+                        return err;
+                    };
                 },
                 .req_rep_channel => builder.request_channel = arg.value,
                 .pub_sub_channel => builder.subscribe_channel = arg.value,

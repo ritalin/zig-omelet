@@ -24,25 +24,25 @@ pub fn init(allocator: std.mem.Allocator, app_context: Symbol, dispatcher: *Conn
 }
 
 pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, args: anytype) !void {
-    var buf = std.ArrayList(u8).init(self.allocator);
-    defer buf.deinit();
-    const writer = buf.writer();
+    if (level_filter.contains(log_level)) {
+        var buf = std.ArrayList(u8).init(self.allocator);
+        defer buf.deinit();
+        const writer = buf.writer();
 
-    try std.fmt.format(writer, content, args);
+        try std.fmt.format(writer, content, args);
 
-    // const log_message = try buf.toOwnedSlice();
-    // defer self.allocator.free(log_message);
-    const log_message = buf.items;
+        const log_message = buf.items;
 
-    if (self.stand_alone) {
-        Stage.log(log_level, self.app_context, log_message);
+        if (self.stand_alone) {
+            Stage.log(log_level, self.app_context, log_message);
+        }
+
+        try self.dispatcher.post(.{
+            .log = try types.EventPayload.Log.init(
+                self.allocator, log_level, self.app_context, log_message
+            )
+        });
     }
-
-    try self.dispatcher.post(.{
-        .log = try types.EventPayload.Log.init(
-            self.allocator, log_level, self.app_context, log_message
-        )
-    });
 }
 
 fn Scoped(comptime scope: @Type(.EnumLiteral)) type {

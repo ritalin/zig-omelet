@@ -18,6 +18,7 @@ pub usingnamespace @import("./decode_event_cbor.zig");
 pub const settings = struct {
     pub usingnamespace @import("./settings/types.zig");
     pub usingnamespace @import("./settings/help.zig");
+    pub usingnamespace @import("./settings/supports.zig");
 };
 
 test "All tests" {

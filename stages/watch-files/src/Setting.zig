@@ -8,6 +8,7 @@ const Setting = @This();
 
 arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
+log_level: core.LogLevel,
 sources: []const SourceDir,
 watch: bool,
 standalone: bool,
@@ -47,6 +48,7 @@ pub fn help(writer: anytype) !void {
 const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.request_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
+    .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.source_dir), .{.desc = "Source directores or files", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
@@ -54,6 +56,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
 const ArgId = enum {
     request_channel,
     subscribe_channel,
+    log_level,
     source_dir,
     watch,
     standalone,
@@ -61,6 +64,7 @@ const ArgId = enum {
     pub const Decls: []const clap.Param(ArgId) = &.{
         .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
+        .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
@@ -82,21 +86,14 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
 
     while (try parser.next()) |arg| {
         switch (arg.param.id) {
-            .request_channel => {
-                if (arg.value) |v| builder.request_channel = v;
-            },
-            .subscribe_channel => {
-                if (arg.value) |v| builder.subscribe_channel = v;
-            },
+            .request_channel => builder.request_channel = arg.value,
+            .subscribe_channel => builder.subscribe_channel = arg.value,
+            .log_level => builder.log_level = arg.value,
             .source_dir => {
                 if (arg.value) |v| try builder.addSourceDir(v);
             },
-            .watch => {
-                builder.watch = true;
-            },
-            .standalone => {
-                builder.standalone = true;
-            }
+            .watch => builder.watch = true,
+            .standalone => builder.standalone = true,
         }
     }
 
@@ -106,6 +103,7 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
 const Builder = struct {
     request_channel: ?core.Symbol,
     subscribe_channel: ?core.Symbol,
+    log_level: ?core.Symbol,
     sources: std.ArrayList(core.FilePath),
     watch: bool,
     standalone: bool,
@@ -114,6 +112,7 @@ const Builder = struct {
         return .{
             .request_channel = null,
             .subscribe_channel = null,
+            .log_level = null,
             .sources = std.ArrayList(core.FilePath).init(allocator),
             .watch = false,
             .standalone = false,
@@ -144,6 +143,11 @@ const Builder = struct {
             return error.SettingLoadFailed;
         }
 
+        const log_level = core.settings.resolveLogLevel(self.log_level) catch |err| {
+            log.warn("Unresolved log level: {?s}", .{self.log_level});
+            return err;
+        };
+
         var sources = std.ArrayList(SourceDir).init(allocator);
         defer sources.deinit();
 
@@ -165,6 +169,7 @@ const Builder = struct {
                 .req_rep = try allocator.dupe(u8, self.request_channel.?),
                 .pub_sub = try allocator.dupe(u8, self.subscribe_channel.?),
             },
+            .log_level = log_level,
             .sources = try sources.toOwnedSlice(),
             .watch = self.watch,
             .standalone = self.standalone,

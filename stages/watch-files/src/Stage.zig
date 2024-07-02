@@ -40,7 +40,7 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn run(self: *Self, setting: Setting) !void {
-    try self.logger.log(.info, "Beginning...", .{});
+    try self.logger.log(.debug, "Beginning...", .{});
     try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
 
     dump_setting: {

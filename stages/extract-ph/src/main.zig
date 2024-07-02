@@ -17,6 +17,8 @@ pub fn main() !void {
     };
     defer setting.deinit();    
 
+    core.Logger.filterWith(setting.log_level);
+
     var stage = try Stage.init(allocator, setting);
     defer stage.deinit();
 

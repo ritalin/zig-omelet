@@ -5,7 +5,7 @@ const core = @import("core");
 const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
 const help = @import("../help.zig");
 
-source_dir_paths: []core.FilePath,
+source_dir_path: []core.FilePath,
 output_dir_path: core.FilePath,
 watch: bool,
 
@@ -32,8 +32,8 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 
         if (arg_) |arg| {
             switch (arg.param.id) {
-                .source_dir => try builder.source_dir_paths.append(arg.value),
-                .output_dir => builder.output_dir_path = arg.value,
+                .source_dir_path => try builder.source_dir_path.append(arg.value),
+                .output_dir_path => builder.output_dir_path = arg.value,
                 .watch => builder.watch = true,
             }
         }
@@ -42,13 +42,13 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
-        source_dir,
-        output_dir,
+        source_dir_path,
+        output_dir_path,
         watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
-            .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
-            .{.id = .output_dir, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
+            .{.id = .source_dir_path, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
+            .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
             .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
         };
@@ -58,18 +58,18 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
 }
 
 const Builder = struct {
-    source_dir_paths: std.ArrayList(?core.FilePath),
+    source_dir_path: std.ArrayList(?core.FilePath),
     output_dir_path: ?core.FilePath = null,
     watch: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
-            .source_dir_paths = std.ArrayList(?core.FilePath).init(allocator),
+            .source_dir_path = std.ArrayList(?core.FilePath).init(allocator),
         };
     }
 
     pub fn deinit(self: *Builder) void {
-        self.source_dir_paths.deinit();
+        self.source_dir_path.deinit();
     }
 
     pub fn build(self: Builder, allocator: std.mem.Allocator) !Self {
@@ -78,12 +78,12 @@ const Builder = struct {
         var sources = std.ArrayList(core.FilePath).init(allocator);
         defer sources.deinit();
         
-        if (self.source_dir_paths.items.len == 0) {
+        if (self.source_dir_path.items.len == 0) {
             log.warn("Need to specify SQL source folder at least one", .{});
             return error.SettingLoadFailed;
         }
         else {
-            for (self.source_dir_paths.items) |path_| {
+            for (self.source_dir_path.items) |path_| {
                 if (path_) |path| {
                     _ = base_dir.statFile(path) catch {
                         log.warn("Cannot access source folder: {s}", .{path});
@@ -107,7 +107,7 @@ const Builder = struct {
         };
 
         return .{
-            .source_dir_paths = try sources.toOwnedSlice(),
+            .source_dir_path = try sources.toOwnedSlice(),
             .output_dir_path = output_dir_path,
             .watch = self.watch,
         };

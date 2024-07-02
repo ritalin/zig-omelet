@@ -108,11 +108,20 @@ pub fn build(b: *std.Build) void {
 
     const test_fright_cmd = b.addRunArtifact(exe);
     test_fright_cmd.step.dependOn(b.getInstallStep());
+
+    const test_fright_sc = command: {
+        if (b.args) |args| {
+            if (args.len > 0) break :command args[0];
+        }
+        break :command "generate";
+    };
+
+    @import("lib_core").DebugEndpoint.applyRunnerChannel(test_fright_cmd, test_fright_sc);
     test_fright_cmd.addArgs(&.{
-        "generate",
         "--source-dir=../_sql-examples",
         "--output-dir=../_dump/ts",
     });
+
     const test_fright_step = b.step("test-run", "Run the app as test frighting");
     test_fright_step.dependOn(&test_fright_cmd.step);
 

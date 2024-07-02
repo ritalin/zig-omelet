@@ -9,11 +9,25 @@ const decodeEvent = cbor.decodeEvent;
 const WAIT_TIME: u64 = 25_000; //nsec
 
 /// make temporary folder for ipc socket
-pub fn makeIpcChannelRoot() !void {
-    return std.fs.makeDirAbsolute(types.CHANNEL_ROOT) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+pub fn makeIpcChannelRoot(ipc_root_path: ?types.FilePath) !void {
+    if (ipc_root_path) |path| {
+        std.fs.cwd().makePath(path) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+    }
+}
+
+pub fn cleanupIpcChannelRoot(ipc_root_path: ?types.FilePath) void {
+    if (ipc_root_path) |path| {
+        const parent_dir_path = std.fs.path.dirname(path).?;
+        const stem_path = std.fs.path.stem(path);
+        var parent_dir = std.fs.openDirAbsolute(parent_dir_path, .{}) catch {
+            return;
+        };
+        defer parent_dir.close();
+        parent_dir.deleteTree(stem_path) catch {};
+    }
 }
 
 const AVAILABLE_PROROCOLS = std.StaticStringMap(void).initComptime(.{

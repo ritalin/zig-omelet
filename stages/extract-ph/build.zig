@@ -43,7 +43,6 @@ pub fn build(b: *std.Build) void {
         .root = b.path("src/c"),
         .files = &.{
             "parser.cpp",
-            // "dump.cpp",
             "cbor_encode.cpp",
         },
         .flags = &.{"-std=c++20"}

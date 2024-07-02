@@ -20,7 +20,21 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
             .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
         };
         pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
-        pub const options: core.settings.ArgHelpOption = .{.category_name = "General Options"};
+        pub const options: core.settings.ArgHelpOption = .{.category_name = "General options"};
+    };
+}
+
+pub fn StageArgId(comptime descriptions: core.settings.DescriptionMap) type {
+    return enum {
+        request_channel,
+        subscribe_channel,
+
+        pub const Decls: []const clap.Param(@This()) = &.{
+            .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
+            .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
+        };
+        pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
+        pub const options: core.settings.ArgHelpOption = .{.category_name = "Stage general options"};
     };
 }
 
@@ -33,7 +47,7 @@ pub const Command = struct {
                 .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
             };
             pub usingnamespace core.settings.ArgHelp(@This(), description);
-            pub const options: core.settings.ArgHelpOption = .{.category_name = "General Options"};
+            pub const options: core.settings.ArgHelpOption = .{.category_name = "General options"};
         };
     }
 };
@@ -79,7 +93,7 @@ pub const Builder = struct {
     }
 
     pub fn build (self: Builder, allocator: std.mem.Allocator) !Self {
-        const default_channel_folder = core.CHANNEL_ROOT;
+        const default_channel_folder = core.CHANNEL_ROOT ++ "/default";
         const default_channel_root = std.fmt.comptimePrint("ipc://{s}", .{default_channel_folder});
         
         const req_rep_channels = channel: {

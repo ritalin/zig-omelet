@@ -5,54 +5,42 @@ const types = @import("./types.zig");
 const Symbol = types.Symbol;
 const Connection = @import("./sockets/Connection.zig");
 
-const Self = @This();
 
 var level_filter = resetFilter(.info);
 
-allocator: std.mem.Allocator,
-app_context: Symbol,
-dispatcher: *Connection.EventDispatcher,
-stand_alone: bool,
+pub fn withAppContext(comptime app_context: Symbol) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        dispatcher: *Connection.EventDispatcher,
+        stand_alone: bool,
 
-pub fn init(allocator: std.mem.Allocator, app_context: Symbol, dispatcher: *Connection.EventDispatcher, stand_alone: bool) Self {
-    return .{
-        .allocator = allocator,
-        .app_context = app_context,
-        .dispatcher = dispatcher,
-        .stand_alone = stand_alone,
-    };
-}
+        const Self = @This();
 
-pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, args: anytype) !void {
-    if (level_filter.contains(log_level)) {
-        var buf = std.ArrayList(u8).init(self.allocator);
-        defer buf.deinit();
-        const writer = buf.writer();
-
-        try std.fmt.format(writer, content, args);
-
-        const log_message = buf.items;
-
-        if (self.stand_alone) {
-            Stage.log(log_level, self.app_context, log_message);
+        pub fn init(allocator: std.mem.Allocator, dispatcher: *Connection.EventDispatcher, stand_alone: bool) Self {
+            return .{
+                .allocator = allocator,
+                .dispatcher = dispatcher,
+                .stand_alone = stand_alone,
+            };
         }
 
-        try self.dispatcher.post(.{
-            .log = try types.EventPayload.Log.init(
-                self.allocator, log_level, self.app_context, log_message
-            )
-        });
-    }
-}
+        pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, args: anytype) !void {
+            if (level_filter.contains(log_level)) {
+                var buf = std.ArrayList(u8).init(self.allocator);
+                defer buf.deinit();
+                const writer = buf.writer();
 
-fn Scoped(comptime scope: @Type(.EnumLiteral)) type {
-    return struct {
-        pub fn log(level: std.log.Level, stage_name: types.Symbol, message: []const u8) void {
-            switch (level) {
-                .err => std.log.scoped(scope).err("[{s}] {s}", .{stage_name, message}),
-                .warn => std.log.scoped(scope).warn("[{s}] {s}", .{stage_name, message}),
-                .info => std.log.scoped(scope).info("[{s}] {s}", .{stage_name, message}),
-                .debug => std.log.scoped(scope).debug("[{s}] {s}", .{stage_name, message}),
+                try std.fmt.format(writer, content, args);
+
+                if (self.stand_alone) {
+                    Stage.log(log_level, app_context, buf.items);
+                }
+
+                try self.dispatcher.post(.{
+                    .log = try types.EventPayload.Log.init(
+                        self.allocator, log_level, app_context, buf.items
+                    )
+                });
             }
         }
     };
@@ -69,6 +57,19 @@ pub const Stage = struct {
                 else => Scoped(.default).log(log_level, stage_name, message),
             }
         }
+    }
+
+    fn Scoped(comptime scope: @Type(.EnumLiteral)) type {
+        return struct {
+            pub fn log(level: std.log.Level, stage_name: types.Symbol, message: []const u8) void {
+                switch (level) {
+                    .err => std.log.scoped(scope).err("[{s}] {s}", .{stage_name, message}),
+                    .warn => std.log.scoped(scope).warn("[{s}] {s}", .{stage_name, message}),
+                    .info => std.log.scoped(scope).info("[{s}] {s}", .{stage_name, message}),
+                    .debug => std.log.scoped(scope).debug("[{s}] {s}", .{stage_name, message}),
+                }
+            }
+        };
     }
 };
 

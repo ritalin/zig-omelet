@@ -6,16 +6,14 @@ const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
 
 const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
+const Logger = core.Logger.withAppContext(APP_CONTEXT);
 
 const Self = @This();
-
-// TODO provide from CLI args
-// const PREFIX = "./_dump/ts";
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
 connection: *Connection,
-logger: core.Logger,
+logger: Logger,
 
 pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
@@ -36,7 +34,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, setting.standalone),
+        .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
     };
 }
 

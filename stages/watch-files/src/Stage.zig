@@ -6,11 +6,12 @@ const Setting = @import("./Setting.zig");
 
 const Symbol = core.Symbol;
 const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
+const Logger = core.Logger.withAppContext(APP_CONTEXT);
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
 connection: *Connection,
-logger: core.Logger,
+logger: Logger,
 
 const Self = @This();
 
@@ -30,7 +31,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .allocator = allocator,
         .context = ctx,
         .connection = connection,
-        .logger = core.Logger.init(allocator, APP_CONTEXT, connection.dispatcher, setting.standalone),
+        .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
     };
 }
 

@@ -22,6 +22,8 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
+    core.Logger.filterWith(.trace);
+
     var setting = switch (try Setting.loadFromArgs(allocator)) {
         .help => |setting| {
             try setting.help(std.io.getStdErr().writer());

@@ -7,6 +7,8 @@ const Connection = @import("./sockets/Connection.zig");
 
 const Self = @This();
 
+var level_filter = resetFilter(.info);
+
 allocator: std.mem.Allocator,
 app_context: Symbol,
 dispatcher: *Connection.EventDispatcher,
@@ -59,11 +61,13 @@ fn Scoped(comptime scope: @Type(.EnumLiteral)) type {
 /// Log received from stage
 pub const Stage = struct {
     pub fn log(level: types.LogLevel, stage_name: types.Symbol, message: []const u8) void {
-        const log_level = level.toStdLevel();
-        
-        switch (level.ofScope()) {
-            .trace => Scoped(.trace).log(log_level, stage_name, message),
-            else => Scoped(.default).log(log_level, stage_name, message),
+        if (level_filter.contains(level)) {
+            const log_level = level.toStdLevel();
+            
+            switch (level.ofScope()) {
+                .trace => Scoped(.trace).log(log_level, stage_name, message),
+                else => Scoped(.default).log(log_level, stage_name, message),
+            }
         }
     }
 };
@@ -102,12 +106,19 @@ fn Direct(comptime stage_name: types.Symbol, comptime scope: @Type(.EnumLiteral)
             S.err("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn warn(comptime message: []const u8, args: anytype) void {
+            if (! level_filter.contains(.warn)) return;
+
             S.warn("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn info(comptime message: []const u8, args: anytype) void {
+            if (! level_filter.contains(.info)) return;
+
             S.info("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn debug(comptime message: []const u8, args: anytype) void {
+            if ((scope == .trace) and (! level_filter.contains(.trace))) return;
+            if (! level_filter.contains(.debug)) return;
+
             S.debug("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
     };
@@ -118,5 +129,20 @@ pub fn SystemDirect(comptime stage_name: types.Symbol) type {
 }
 pub fn TraceDirect(comptime stage_name: types.Symbol) type {
     return Direct(stage_name, .trace);
+}
+
+pub fn filterWith(level: types.LogLevel) void {
+    level_filter = resetFilter(level);
+}
+
+fn resetFilter(level: types.LogLevel) types.LogLevelSet {
+    var filter = types.LogLevelSet.initFull();
+
+    const field_len = std.meta.fields(types.LogLevel).len;
+    for (@intFromEnum(level)+1..field_len) |value| {
+        filter.remove(@enumFromInt(value));
+    }
+
+    return filter;
 }
 

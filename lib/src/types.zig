@@ -45,6 +45,7 @@ pub const LogLevel = enum {
         };
     }
 };
+pub const LogLevelSet = std.enums.EnumSet(LogLevel);
 
 /// ChannelType
 pub const ChannelType = enum {

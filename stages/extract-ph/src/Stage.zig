@@ -206,13 +206,6 @@ fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reade
 
 fn stringToLogLevel(s: core.Symbol) core.LogLevel {
     return std.meta.stringToEnum(core.LogLevel, s) orelse .err;
-    // inline for (comptime std.meta.fields(core.LogLevel)) |f| {
-    //     if (std.mem.eql(u8, s, f.name)) {
-    //         return @enumFromInt(f.value);
-    //     }
-    // }
-
-    // return .err;
 }
 
 const LookupEntry = struct {

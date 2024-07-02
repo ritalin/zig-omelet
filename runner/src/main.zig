@@ -31,8 +31,8 @@ pub fn main() !void {
     };
     defer setting.deinit();
 
-    try core.makeIpcChannelRoot(setting.general.ipc_root_dir_path);
-    defer core.cleanupIpcChannelRoot(setting.general.ipc_root_dir_path);
+    try core.makeIpcChannelRoot(setting.general.stage_endpoints);
+    defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
     const config: Config = .{
         .stage_watch = .{

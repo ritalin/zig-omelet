@@ -116,8 +116,9 @@ pub fn build(b: *std.Build) void {
         break :command "generate";
     };
 
-    @import("lib_core").DebugEndpoint.applyRunnerChannel(test_fright_cmd, test_fright_sc);
+    @import("lib_core").DebugEndpoint.applyRunnerChannel(test_fright_cmd);
     test_fright_cmd.addArgs(&.{
+        test_fright_sc,
         "--source-dir=../_sql-examples",
         "--output-dir=../_dump/ts",
     });

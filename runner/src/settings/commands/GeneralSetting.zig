@@ -4,7 +4,6 @@ const core = @import("core");
 
 const Self = @This();
 
-ipc_root_dir_path: ?core.FilePath,
 runner_endpoints: core.Endpoints,
 stage_endpoints: core.Endpoints,
 
@@ -92,9 +91,24 @@ pub const Builder = struct {
         }
     }
 
+    fn makeIPCChannel(allocator: std.mem.Allocator) ![]const u8 {
+        var seed = std.rand.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+        var rand = seed.random();
+
+        var buf: [24]u8 = undefined;
+        rand.bytes(&buf);
+
+        const sub_path = try core.bytesToHexAlloc(allocator, &buf);
+        defer allocator.free(sub_path);
+
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{core.CHANNEL_ROOT, sub_path});
+    }
+
     pub fn build (self: Builder, allocator: std.mem.Allocator) !Self {
-        const default_channel_folder = core.CHANNEL_ROOT ++ "/default";
-        const default_channel_root = std.fmt.comptimePrint("ipc://{s}", .{default_channel_folder});
+        const channel_folder = try makeIPCChannel(allocator);
+        defer allocator.free(channel_folder);
+        const default_channel_root = try std.fmt.allocPrint(allocator, "ipc://{s}", .{channel_folder});
+        defer allocator.free(default_channel_root);
         
         const req_rep_channels = channel: {
             if (self.request_channel) |channel| {
@@ -126,7 +140,6 @@ pub const Builder = struct {
         };
 
         return .{
-            .ipc_root_dir_path = try allocator.dupe(u8, default_channel_folder),
             .runner_endpoints = .{
                 .req_rep = req_rep_channels[1],
                 .pub_sub = pub_sub_channels[0],

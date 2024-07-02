@@ -34,7 +34,7 @@ const RunnerChannel = std.StaticStringMap(types.Symbol).initComptime(.{
     .{"--pubsub-channel", std.fmt.comptimePrint("--pubsub-channel={s}", .{CMD_S2C_BIND_PORT})},
 });
 
-pub fn applyRunnerChannel(runner: *std.Build.Step.Run, subcommand: types.Symbol) void {
+pub fn applyRunnerChannel(runner: *std.Build.Step.Run) void {
     for (RunnerChannel.keys()) |k| {
         arg: {
             for (runner.argv.items) |arg| {
@@ -45,6 +45,4 @@ pub fn applyRunnerChannel(runner: *std.Build.Step.Run, subcommand: types.Symbol)
             runner.addArg(RunnerChannel.get(k).?);
         }
     }
-
-    runner.addArg(subcommand);
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 
+pub const IPC_PROTOCOL = "ipc://";
 // IPC channel root directory
 pub const CHANNEL_ROOT = "/tmp/duckdb-ext-ph";
 

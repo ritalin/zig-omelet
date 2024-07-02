@@ -158,18 +158,5 @@ fn makeHash(allocator: std.mem.Allocator, file_path: []const u8, file: std.fs.Fi
         hasher.update(buf[0..read_size]);
     }
 
-    return bytesToHexAlloc(allocator, &hasher.finalResult());
-}
-
-fn bytesToHexAlloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
-    var result = try allocator.alloc(u8, input.len * 2);
-    if (input.len == 0) return result;
-
-    const charset = "0123456789" ++ "abcdef";
-
-    for (input, 0..) |b, i| {
-        result[i * 2 + 0] = charset[b >> 4];
-        result[i * 2 + 1] = charset[b & 15];
-    }
-    return result;
+    return core.bytesToHexAlloc(allocator, &hasher.finalResult());
 }

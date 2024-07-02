@@ -9,25 +9,41 @@ const decodeEvent = cbor.decodeEvent;
 const WAIT_TIME: u64 = 25_000; //nsec
 
 /// make temporary folder for ipc socket
-pub fn makeIpcChannelRoot(ipc_root_path: ?types.FilePath) !void {
-    if (ipc_root_path) |path| {
-        std.fs.cwd().makePath(path) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
+pub fn makeIpcChannelRoot(endpoints: types.Endpoints) !void {
+    try makeIpcChannelRootInternal(endpoints.req_rep);
+    try makeIpcChannelRootInternal(endpoints.pub_sub);
+}
+
+fn makeIpcChannelRootInternal(channel: types.Symbol) !void {
+    if (ipcChannelRootPath(channel)) |path| {
+        try std.fs.cwd().makePath(path);
     }
 }
 
-pub fn cleanupIpcChannelRoot(ipc_root_path: ?types.FilePath) void {
-    if (ipc_root_path) |path| {
-        const parent_dir_path = std.fs.path.dirname(path).?;
-        const stem_path = std.fs.path.stem(path);
-        var parent_dir = std.fs.openDirAbsolute(parent_dir_path, .{}) catch {
-            return;
-        };
-        defer parent_dir.close();
-        parent_dir.deleteTree(stem_path) catch {};
+pub fn cleanupIpcChannelRoot(endpoints: types.Endpoints) void {
+    cleanupIpcChannelRootInternal(endpoints.req_rep);
+    cleanupIpcChannelRootInternal(endpoints.pub_sub);
+}
+
+fn cleanupIpcChannelRootInternal(channel: types.Symbol) void {
+    if (ipcChannelRootPath(channel)) |path| {
+        if (std.fs.path.dirname(path)) |parent_dir_path| {
+            var parent_dir = std.fs.cwd().openDir(parent_dir_path, .{}) catch {
+                return;
+            };
+            defer parent_dir.close();
+
+            const stem_path = std.fs.path.stem(path);
+            parent_dir.deleteTree(stem_path) catch {};
+        }
     }
+}
+
+fn ipcChannelRootPath(channel: types.Symbol) ?types.FilePath {
+    if (std.mem.startsWith(u8, channel, types.IPC_PROTOCOL)) {
+        return std.fs.path.dirname(channel[types.IPC_PROTOCOL.len..]);
+    }
+    return null;       
 }
 
 const AVAILABLE_PROROCOLS = std.StaticStringMap(void).initComptime(.{
@@ -85,6 +101,19 @@ fn resolveBindPortInternal(allocator: std.mem.Allocator, channel: types.Symbol) 
     }
 
     return error.ChannelProtocl;
+}
+
+pub fn bytesToHexAlloc(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var result = try allocator.alloc(u8, input.len * 2);
+    if (input.len == 0) return result;
+
+    const charset = "0123456789" ++ "abcdef";
+
+    for (input, 0..) |b, i| {
+        result[i * 2 + 0] = charset[b >> 4];
+        result[i * 2 + 1] = charset[b & 15];
+    }
+    return result;
 }
 
 pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !void {

@@ -5,22 +5,25 @@ const core = @import("core");
 const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
 
-const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
+const Connection = core.sockets.Connection.Client(APP_CONTEXT, GenerateWorker);
 const Logger = core.Logger.withAppContext(APP_CONTEXT);
+
+const GenerateWorker = @import("./GenerateWorker.zig");
 
 const Self = @This();
 
 allocator: std.mem.Allocator,
-context: zmq.ZContext,
+context: *zmq.ZContext,
 connection: *Connection,
 logger: Logger,
 
 pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
-    var ctx = try zmq.ZContext.init(allocator);
+    const context = try allocator.create(zmq.ZContext);
+    context.* = try zmq.ZContext.init(allocator);
 
-    var connection = try Connection.init(allocator, &ctx);
+    var connection = try Connection.init(allocator, context);
     try connection.subscribe_socket.addFilters(.{
         .ready_topic_body = true,
         .topic_body = true,
@@ -32,7 +35,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
 
     return .{
         .allocator = allocator,
-        .context = ctx,
+        .context = context,
         .connection = connection,
         .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
     };
@@ -41,6 +44,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
 pub fn deinit(self: *Self) void {
     self.connection.deinit();
     self.context.deinit();
+    self.allocator.destroy(self.context);
 }
 
 pub fn run(self: *Self, setting: Setting) !void {
@@ -52,7 +56,6 @@ pub fn run(self: *Self, setting: Setting) !void {
         try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{setting.endpoints.pub_sub});
         break :dump_setting;
     }
-
     launch: {
         try self.connection.dispatcher.post(.{
             .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
@@ -60,9 +63,7 @@ pub fn run(self: *Self, setting: Setting) !void {
         break :launch;
     }
 
-    var current_source: ?Source = null;
-
-    var lookup = std.BufSet.init(self.allocator);
+    var lookup = std.StringHashMap(core.EventPayload.SourcePath).init(self.allocator);
     defer lookup.deinit();
 
     try self.connection.dispatcher.state.ready();
@@ -81,46 +82,28 @@ pub fn run(self: *Self, setting: Setting) !void {
 
             switch (item.event) {
                 .ready_topic_body => {
-                    if (current_source) |*source| {
-                        source.deinit();
-                        current_source = null;
-                    }
                     try self.logger.log(.err, "Ready for generating", .{});
                     try self.connection.dispatcher.post(.ready_generate);
                 },
                 .topic_body => |source| {
                     try self.connection.dispatcher.approve();
                     try self.logger.log(.trace, "Accept source: `{s}`", .{source.header.path});
-                    try self.logger.log(.trace, "Begin generate: `{s}`", .{source.header.name});
 
-                    try lookup.insert(source.header.path);
-                    defer lookup.remove(source.header.path);
+                    const path = try source.header.clone(self.allocator);
+                    try lookup.put(path.path, path);
 
-                    var output_dir = try std.fs.cwd().makeOpenPath(setting.output_dir_path, .{});
-                    defer output_dir.close();
-
-                    var builder = try CodeBuilder.init(self.allocator, output_dir, source.header.name);
-                    defer builder.deinit();
-
-                    var walker = try CodeBuilder.Parser.beginParse(self.allocator, source.bodies);
-                    defer walker.deinit();
-
-                    while (try walker.walk()) |target| switch (target) {
-                        .query => |q| {
-                            try builder.applyQuery(q);
-                        },
-                        .parameter => |placeholder| {
-                            try builder.applyPlaceholder(placeholder);
-                        },
-                        .result_set => |field_types| {
-                            try builder.applyResultSets(field_types);
-                        },
-                    };
-
-                    try builder.build();
-                    try self.logger.log(.trace, "End generate: `{s}`", .{source.header.name});
-
+                    const worker = try GenerateWorker.init(self.allocator, source, setting.output_dir_path);
+                    try self.connection.pull_sink_socket.spawn(worker);
                     try self.connection.dispatcher.post(.ready_generate);
+                },
+                .worker_result => |result| {
+                    try self.processWorkResult(result.content, &lookup);
+
+                    if (self.connection.dispatcher.state.level.terminating) {
+                        if (lookup.count() == 0) {
+                            try self.connection.dispatcher.post(.ready_generate);
+                        }
+                    }
                 },
                 .finish_topic_body => {
                     try self.connection.dispatcher.state.receiveTerminate();
@@ -130,9 +113,14 @@ pub fn run(self: *Self, setting: Setting) !void {
                     }
                 },
                 .quit, .quit_all => {
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
-                    });
+                    if (lookup.count() == 0) {
+                        try self.connection.dispatcher.post(.{
+                            .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                        });
+                    }
+                },
+                .log => |log| {
+                    try self.logger.log(log.level, "{s}", .{log.content});
                 },
                 else => {
                     try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
@@ -142,24 +130,30 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 }
 
-const Source = struct {
-    header: core.EventPayload.SourcePath,
-    bodies: std.BufMap,
+fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.StringHashMap(core.EventPayload.SourcePath)) !void {
+    var reader = core.CborStream.Reader.init(result_content);
 
-    pub fn init(allocator: std.mem.Allocator, header: core.EventPayload.SourcePath) !Source {
-        return .{
-            .header = try header.clone(allocator),
-            .bodies = std.BufMap.init(allocator),
-        };
+    const source_path = try reader.readString();
+    const dest_name = try reader.readString();
+    const message = try reader.readString();
+    const status = try reader.readEnum(GenerateWorker.ResultStatus);
+    
+    const kv_ = lookup.fetchRemove(source_path);
+    defer {
+        if (kv_) |*kv| kv.value.deinit();
     }
 
-    pub fn deinit(self: *Source) void {
-        self.header.deinit();
-        self.bodies.deinit();
-        self.* = undefined;
+    if (status == .generate_failed) {
+        try self.logger.log(.err, "{s} of `{s}`", .{
+            message, source_path,
+        });
     }
-
-    pub fn addPayload(self: *Source, body: core.EventPayload.SourceBody) !void {
-        try self.bodies.put(body.topic, body.content);
+    else {
+        try self.logger.log(.info, "{s} of `{s}/*` {s}", .{
+            message,
+            dest_name,
+            if (status == .new_file) "✨" else "",
+        });
     }
-};
+    try self.logger.log(.trace, "End generate from `{s}`", .{if (kv_) |kv| kv.value.name else "????"});
+}

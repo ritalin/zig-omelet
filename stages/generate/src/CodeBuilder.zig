@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const Symbol = core.Symbol;
+const FilePath = core.FilePath;
 
 const Self = @This();
 
@@ -13,9 +14,12 @@ output_dir: std.fs.Dir,
 query: ?Symbol,
 parameters: ?Symbol,
 
-pub fn init(allocator: std.mem.Allocator, prefix_dir: std.fs.Dir, dest_dir: Symbol) !Self {
-    const dir_name = trimExtension(dest_dir);
-    const dir = try if (dir_name.len > 0) prefix_dir.makeOpenPath(dir_name, .{}) else prefix_dir;
+pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !Self {
+    const dir = dir: {
+        var parent_dir = try std.fs.cwd().makeOpenPath(prefix_dir_path, .{});
+        defer parent_dir.close();
+        break :dir try parent_dir.makeOpenPath(if (dest_dir_path.len > 0) dest_dir_path else prefix_dir_path, .{});
+    };
 
     return .{
         .allocator = allocator,
@@ -30,16 +34,6 @@ pub fn deinit(self: *Self) void {
 
     if (self.query) |x| self.allocator.free(x);
     if (self.parameters) |x| self.allocator.free(x);
-}
-
-fn trimExtension(name: core.Symbol) core.Symbol {
-    const ext = std.fs.path.extension(name);
-    if (std.mem.lastIndexOf(u8, name, ext)) |i| {
-        return name[0..i];
-    }
-    else {
-        return name;
-    }
 }
 
 pub fn applyQuery(self: *Self, query: Symbol) !void {
@@ -90,26 +84,37 @@ pub fn applyResultSets(self: *Self, fields: []const FieldTypePair) !void {
 
 pub fn build(self: Self) !void {
     if (self.query) |query| {
-        var file = try self.output_dir.createFile("query.sql", .{});
-        defer file.close();
-
-        try file.writeAll(query);
+        writeQuery(self.output_dir, query) catch {
+            return error.QueryFileGenerationFailed;
+        };
     }
-
     types: {
-        var file = try self.output_dir.createFile("types.ts", .{});
-        defer file.close();
-        var writer = file.writer();
-
-        try writer.print("export namespace {s} {{\n", .{Namespace});
-
-        if (self.parameters) |parameters| {
-            try writer.print("{s}\n", .{parameters});
-        }
-
-        try writer.writeAll("}");
+        writeTypescriptTypes(self.output_dir, self.parameters) catch {
+            return error.TypeFileGenerationFailed;
+        };
         break :types;
     }
+}
+
+fn writeQuery(output_dir: std.fs.Dir, query: Symbol) !void {
+    var file = try output_dir.createFile("query.sql", .{});
+    defer file.close();
+
+    try file.writeAll(query);
+}
+
+fn writeTypescriptTypes(output_dir: std.fs.Dir, parameters_: ?Symbol) !void {
+    var file = try output_dir.createFile("types.ts", .{});
+    defer file.close();
+    var writer = file.writer();
+
+    try writer.print("export namespace {s} {{\n", .{Namespace});
+
+    if (parameters_) |parameters| {
+        try writer.print("{s}\n", .{parameters});
+    }
+
+    try writer.writeAll("}");
 }
 
 pub const Target = union(enum) {

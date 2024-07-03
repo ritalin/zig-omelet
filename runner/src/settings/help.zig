@@ -42,7 +42,7 @@ pub const ArgHelpSetting = struct {
 
     pub fn help(self: ArgHelpSetting, writer: anytype) !void {
         try writer.print("usage: {s} [General options] {s} [Subcommand options]\n\n", .{
-            @import("build_options").EXE_NAME, 
+            @import("build_options").exe_name, 
             if (self.command) |c| std.fmt.comptimePrint("{s}", .{@tagName(c)}) 
             else CommandArgId.options.category_name.?
         });

@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
     const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
@@ -23,15 +24,15 @@ pub fn build(b: *std.Build) void {
     const dep_clap = b.dependency("clap", .{});
     const dep_core = b.dependency("lib_core", .{});
 
-    const APP_CONTEXT = "extract-ph";
-    const EXE_NAME = std.fmt.comptimePrint("stage-{s}", .{APP_CONTEXT});
-    
+    const app_context = "extract-ph";
+    const exe_name = b.fmt("{s}-{s}-{s}", .{exe_prefix, "duckdb", app_context}); // for displaying help
+
     const build_options = b.addOptions();
-    build_options.addOption([]const u8, "APP_CONTEXT", APP_CONTEXT);
-    build_options.addOption([]const u8, "EXE_NAME", EXE_NAME);
+    build_options.addOption([]const u8, "APP_CONTEXT", app_context);
+    build_options.addOption([]const u8, "exe_name", exe_name);
 
     const exe = b.addExecutable(.{
-        .name = EXE_NAME,
+        .name = exe_name,
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,

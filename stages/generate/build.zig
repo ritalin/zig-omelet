@@ -15,22 +15,22 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
-
     const dep_core = b.dependency("lib_core", .{});
 
-
-    const APP_CONTEXT = "generate-ts";
-    const EXE_NAME = std.fmt.comptimePrint("stage-{s}", .{APP_CONTEXT});
+    const app_context = "ts-generate";
+    const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
 
     const build_options = b.addOptions();
-    build_options.addOption([]const u8, "APP_CONTEXT", APP_CONTEXT);
-    build_options.addOption([]const u8, "EXE_NAME", EXE_NAME);
+    build_options.addOption([]const u8, "APP_CONTEXT", app_context);
+    build_options.addOption([]const u8, "exe_name", exe_name);
 
     const exe = b.addExecutable(.{
-        .name = EXE_NAME,
+        .name = exe_name,
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,

@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
     const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
@@ -23,15 +24,15 @@ pub fn build(b: *std.Build) void {
 
     const dep_core = b.dependency("lib_core", .{});
 
-    const APP_CONTEXT = "runner";
-    const EXE_NAME = "omret";
+    const app_context = "runner";
+    const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context});
     
     const build_options = b.addOptions();
-    build_options.addOption([]const u8, "APP_CONTEXT", APP_CONTEXT);
-    build_options.addOption([]const u8, "EXE_NAME", EXE_NAME);
+    build_options.addOption([]const u8, "APP_CONTEXT", app_context);
+    build_options.addOption([]const u8, "exe_name", exe_name);
 
     const exe = b.addExecutable(.{
-        .name = EXE_NAME,
+        .name = exe_name,
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -48,39 +49,39 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // watch-files stage
-    install_stage: {
+    stage_watch_files: {
         const dep_stage = b.dependency("stage_watch_files", .{
             .target = target,
             .optimize = optimize,
+            .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
         });
-        const exe_stage = dep_stage.artifact("stage-watch-files");
+        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "watch-files"}));
         b.installArtifact(exe_stage);
-        break :install_stage;
+        break :stage_watch_files;
     }
-    // extract-ph stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_extract_ph", .{
+    stage_duck_db_extract_ph: {
+        const dep_stage = b.dependency("stage_duckdb_extract_ph", .{
             .target = target,
             .optimize = optimize,
+            .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
             .duckdb_prefix = duckdb_prefix,
         });
-        const exe_stage = dep_stage.artifact("stage-extract-ph");
+        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-ph"}));
         b.installArtifact(exe_stage);
-        break :install_stage;
+        break :stage_duck_db_extract_ph;
     }
-    // generate-ts stage
-    install_stage: {
-        const dep_stage = b.dependency("stage_generate_ts", .{
+    stage_ts_generate: {
+        const dep_stage = b.dependency("stage_ts_generate", .{
             .target = target,
             .optimize = optimize,
+            .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
         });
-        const exe_stage = dep_stage.artifact("stage-generate-ts");
+        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
         b.installArtifact(exe_stage);
-        break :install_stage;
+        break :stage_ts_generate;
     }
 
     // This *creates* a Run step in the build graph, to be executed when another

@@ -34,7 +34,8 @@ pub fn deinit(self: *Setting) void {
 
 pub fn help(writer: anytype) !void {
     try writer.print("usage: {s} [{?s}]\n\n", .{
-        @import("build_options").EXE_NAME, ArgId.options.category_name
+        @import("build_options").exe_name, 
+        ArgId.options.category_name
     });
     try core.settings.showHelp(writer, ArgId);
 }

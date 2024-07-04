@@ -1,5 +1,5 @@
 .{
-    .name = "runner",
+    .name = "duckdb-extract-sl",
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.0",
@@ -43,25 +43,16 @@
         //    // actually used.
         //    .lazy = false,
         //},
-        .zzmq = .{ .path = "../vendor/zzmq" },
-        .clap = .{ .path = "../vendor/zig-clap"},
-        .lib_core = .{ .path = "../lib" },
-        .stage_watch_files = .{ .path = "../stages/watch-files" },
-        .stage_duckdb_extract_ph = .{ .path = "../stages/extract-ph" },
-        .stage_ts_generate = .{ .path = "../stages/generate" },
+        .zzmq = .{ .path = "../../vendor/zzmq" },
+        .lib_core = .{ .path = "../../lib" },
+        .clap = .{ .path = "../../vendor/zig-clap"},
     },
 
-    // Specifies the set of files and directories that are included in this package.
-    // Only files and directories listed here are included in the `hash` that
-    // is computed for this package.
-    // Paths are relative to the build root. Use the empty string (`""`) to refer to
-    // the build root itself.
-    // A directory listed here means that all files within, recursively, are included.
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "LICENSE",
-        "README.md",
+        //"LICENSE",
+        //"README.md",
     },
 }

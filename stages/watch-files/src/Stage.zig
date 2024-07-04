@@ -3,10 +3,11 @@ const zmq = @import("zmq");
 const core = @import("core");
 
 const Setting = @import("./Setting.zig");
+const app_context = @import("build_options").app_context;
 
 const Symbol = core.Symbol;
-const Connection = core.sockets.Connection.Client(APP_CONTEXT, void);
-const Logger = core.Logger.withAppContext(APP_CONTEXT);
+const Connection = core.sockets.Connection.Client(app_context, void);
+const Logger = core.Logger.withAppContext(app_context);
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
@@ -14,8 +15,6 @@ connection: *Connection,
 logger: Logger,
 
 const Self = @This();
-
-pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
@@ -57,7 +56,7 @@ pub fn run(self: *Self, setting: Setting) !void {
 
     launch: {
         try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
         });
         break :launch;
     }
@@ -83,7 +82,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                 },
                 .quit, .quit_all => {
                     try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
                     });
                 },
                 else => {

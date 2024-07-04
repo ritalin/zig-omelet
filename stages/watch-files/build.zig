@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
     const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
 
     const build_options = b.addOptions();
-    build_options.addOption([]const u8, "APP_CONTEXT", app_context);
+    build_options.addOption([]const u8, "app_context", app_context);
     build_options.addOption([]const u8, "exe_name", exe_name);
 
     const exe = b.addExecutable(.{

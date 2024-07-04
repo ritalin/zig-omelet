@@ -17,13 +17,14 @@ pub fn build(b: *std.Build) void {
 
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
     const dep_core = b.dependency("lib_core", .{});
 
-    const app_context = "ts-generate";
-    const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
+    const app_context = "extract-sl";
+    const exe_name = b.fmt("{s}-{s}-{s}", .{exe_prefix, "duckdb", app_context}); // for displaying help
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "app_context", app_context);
@@ -37,10 +38,34 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+        native_config: {
+            // exe.addIncludePath(b.path("src/c"));
+            // exe.addCSourceFiles(.{ 
+            //     .root = b.path("src/c"),
+            //     .files = &.{
+            //         "parser.cpp",
+            //         "cbor_encode.cpp",
+            //     },
+            //     .flags = &.{"-std=c++20"}
+            // });
+            exe.defineCMacro("DISABLE_CATCH2_TEST", "1");
+            // exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
+            // exe.addIncludePath(b.path("../../vendor/cbor/include"));
+            exe.linkLibCpp();
+            exe.linkLibC();
+            break:native_config;
+        }
         zmq_native_config: {
-            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/include" }) });
+            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "zmq/lib"}) });
             exe.linkSystemLibrary("zmq");
             break:zmq_native_config;
+        }
+        duckdb_native_config: {
+            exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
+            // exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
+            // exe.linkSystemLibrary("duckdb");
+            break:duckdb_native_config;
         }
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
@@ -71,6 +96,10 @@ pub fn build(b: *std.Build) void {
             if (b.args) |args| {
                 run_cmd.addArgs(args);
             }
+
+            // Apply zmq communication cannel
+            try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
+
             // This creates a build step. It will be visible in the `zig build --help` menu,
             // and can be selected like this: `zig build run`
             // This will evaluate the `run` step rather than the default, which is "install".
@@ -78,25 +107,12 @@ pub fn build(b: *std.Build) void {
             run_step.dependOn(&run_cmd.step);
             break:app_runner;
         }
-        test_fright: {
-            const test_fright_cmd = b.addRunArtifact(exe);
-            test_fright_cmd.step.dependOn(b.getInstallStep());
-
-            // Apply zmq communication cannel
-            try @import("lib_core").DebugEndpoint.applyStageChannel(test_fright_cmd);
-            test_fright_cmd.addArgs(&.{
-                "--output-dir=../../_dump/ts",
-                "--log-level=trace",
-            });
-            const test_fright_run_step = b.step("test-run", "Run the app fro test fright");
-            test_fright_run_step.dependOn(&test_fright_cmd.step);
-
-            break :test_fright;
-        }
         break:app_module;
     }
 
     test_module: {
+        // const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
+
         const test_prefix = "test";
         const exe_unit_tests = b.addTest(.{
             .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
@@ -105,12 +121,53 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
 
+        native_config: {
+            // exe_unit_tests.addIncludePath(b.path("src/c"));
+            // exe_unit_tests.addCSourceFiles(.{
+            //     .root = b.path("src/c"),
+            //     .files = &.{
+            //         "catch2_session_run.cpp",
+            //         "parser.cpp",
+            //         "cbor_encode.cpp",
+            //     },
+            //     .flags = &.{"-std=c++20"}
+            // });
+            // exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
+            // exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
+            // exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
+            exe_unit_tests.linkLibC();
+            exe_unit_tests.linkLibCpp();
+            break:native_config;
+        }
+        zmq_native_config: {
+            exe_unit_tests.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/include" }) });
+            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "zmq/lib"}) });
+            exe_unit_tests.linkSystemLibrary("zmq");
+            break:zmq_native_config;
+        }
+        duckdb_native_config: {
+            // exe_unit_tests.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
+            // exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
+            // exe_unit_tests.linkSystemLibrary("duckdb");
+            break:duckdb_native_config;
+        }
+        catch2_native_config: {
+            // exe_unit_tests.addCSourceFiles(.{
+            //     .root = b.path("src/c"),
+            //     .files = &.{
+            //         "catch2_session_run.cpp",
+            //     }
+            // });
+
+            // exe_unit_tests.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/lib"})});
+            // exe_unit_tests.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
+            // exe_unit_tests.linkSystemLibrary("catch2");
+            break:catch2_native_config;
+        }
         import_modules: {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-            exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
             exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
             exe_unit_tests.root_module.addOptions("build_options", build_options);
-            exe_unit_tests.linkSystemLibrary("zmq");
             break:import_modules;
         } 
         test_runner: {

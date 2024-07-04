@@ -4,13 +4,13 @@ const core = @import("core");
 
 const Setting = @import("./settings/Setting.zig");
 const StageCount = @import("./Config.zig").StageCount;
+const app_context = @import("build_options").app_context;
 
 const Symbol = core.Symbol;
-const systemLog = core.Logger.SystemDirect(APP_CONTEXT);
-const traceLog = core.Logger.TraceDirect(APP_CONTEXT);
+const systemLog = core.Logger.SystemDirect(app_context);
+const traceLog = core.Logger.TraceDirect(app_context);
 const log = core.Logger.Stage.log;
 
-pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 const Self = @This();
 
 allocator: std.mem.Allocator,
@@ -196,7 +196,7 @@ fn dumpTopics(allocator: std.mem.Allocator, topics: std.BufSet) !void {
     var buf = std.ArrayList(u8).init(managed_allocator);
     var writer = buf.writer();
 
-    try writer.writeAll(try std.fmt.allocPrint(managed_allocator, "[{s}] Received topics ({}): ", .{APP_CONTEXT, topics.count()}));
+    try writer.writeAll(try std.fmt.allocPrint(managed_allocator, "[{s}] Received topics ({}): ", .{app_context, topics.count()}));
 
     var it = topics.iterator();
 

@@ -13,12 +13,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var setting = Setting.loadFromArgs(allocator) catch {
-        try Setting.help(std.io.getStdErr().writer());
+        // try Setting.help(std.io.getStdErr().writer());
         std.process.exit(1);
     };
-    defer setting.deinit();    
+    defer setting.deinit();  
 
-    core.Logger.filterWith(setting.log_level);
+    // core.Logger.filterWith(setting.log_level);
 
     var stage = try Stage.init(allocator, setting);
     defer stage.deinit();
@@ -29,7 +29,5 @@ pub fn main() !void {
 }
 
 test "main" {
-    const run_catch2 = @import("./catch2_runner.zig").run_catch2;
-    
-    try std.testing.expectEqual(0, try run_catch2(std.testing.allocator));
+    std.testing.refAllDecls(@This());
 }

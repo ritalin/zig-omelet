@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const clap = @import("clap");
 
-const log = core.Logger.TraceDirect(@import("build_options").APP_CONTEXT);
+const log = core.Logger.TraceDirect(@import("build_options").app_context);
 
 const GeneralSetting = @import("./settings/commands/GeneralSetting.zig");
 const GenerateSetting = @import("./settings/commands/Generate.zig");

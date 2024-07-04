@@ -4,9 +4,10 @@ const core = @import("core");
 
 const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
+const app_context = @import("build_options").app_context;
 
-const Connection = core.sockets.Connection.Client(APP_CONTEXT, GenerateWorker);
-const Logger = core.Logger.withAppContext(APP_CONTEXT);
+const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
+const Logger = core.Logger.withAppContext(app_context);
 
 const GenerateWorker = @import("./GenerateWorker.zig");
 
@@ -17,7 +18,6 @@ context: *zmq.ZContext,
 connection: *Connection,
 logger: Logger,
 
-pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const context = try allocator.create(zmq.ZContext);
@@ -58,7 +58,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
     launch: {
         try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
         });
         break :launch;
     }
@@ -115,7 +115,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                 .quit, .quit_all => {
                     if (lookup.count() == 0) {
                         try self.connection.dispatcher.post(.{
-                            .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                            .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
                         });
                     }
                 },

@@ -3,10 +3,11 @@ const zmq = @import("zmq");
 const core = @import("core");
 
 const Setting = @import("./Setting.zig");
+const app_context = @import("build_options").app_context;
 
 const Symbol = core.Symbol;
-const Connection = core.sockets.Connection.Client(APP_CONTEXT, ExtractWorker);
-const Logger = core.Logger.withAppContext(APP_CONTEXT);
+const Connection = core.sockets.Connection.Client(app_context, ExtractWorker);
+const Logger = core.Logger.withAppContext(app_context);
 
 const ExtractWorker = @import("./ExtractWorker.zig");
 
@@ -16,8 +17,6 @@ allocator: std.mem.Allocator,
 context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む
 connection: *Connection,
 logger: Logger,
-
-pub const APP_CONTEXT = @import("build_options").APP_CONTEXT;
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);
@@ -59,7 +58,7 @@ pub fn run(self: *Self, setting: Setting) !void {
 
     launch: {
         try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
         });
         break :launch;
     }
@@ -122,7 +121,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                 },
                 .quit, .quit_all => {
                     try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, APP_CONTEXT),
+                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
                     });
                 },
                 .log => |log| {
@@ -171,7 +170,7 @@ fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringH
     }
 
     return .{
-        .log = try core.EventPayload.Log.init(self.allocator, .warn, APP_CONTEXT, "Unknown worker result"),
+        .log = try core.EventPayload.Log.init(self.allocator, .warn, app_context, "Unknown worker result"),
     };
 }
 
@@ -195,7 +194,7 @@ fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reade
     const from = try reader.readString();
     const content = try reader.readString();
     
-    const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{APP_CONTEXT, from});
+    const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{app_context, from});
     defer allocator.free(full_from);
 
     return .{

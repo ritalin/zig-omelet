@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(exe_stage);
         break :stage_duck_db_extract_ph;
     }
-    const dep_ts_generate = stage: {
+    stage: {
         const dep = b.dependency("stage_ts_generate", .{
             .target = target,
             .optimize = optimize,
@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
         b.installArtifact(exe_stage);
         break :stage dep;
-    };
+    }
     const stage_runner = stage: {
         const dep = b.dependency("stage_runner", .{
             .target = target,
@@ -100,10 +100,34 @@ pub fn build(b: *std.Build) void {
         break :test_fright_cmd;
     }
 
-    const test_all_step = b.step("test-all", "Run all unit tests");
-    const s0 = b.addInstallArtifact(dep_ts_generate.artifact("test-ts-generate"), .{.dest_sub_path = "test/test-ts-generate", .dest_dir = .{.override = .prefix}});
-    const s1 = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, "test/test-ts-generate"})});
-    
-    s1.step.dependOn(&s0.step);
-    test_all_step.dependOn(&s1.step);
+    addTestAll(b);
 }
+
+fn addTestAll(b: *std.Build) void {
+    const test_all_step = b.step("test-all", "Run all unit tests");
+
+    var deps_iter = b.initialized_deps.valueIterator();
+
+    while(deps_iter.next()) |dep| {
+        for (dep.*.builder.install_tls.step.dependencies.items) |dep_step| {
+            const inst: *std.Build.Step.InstallArtifact = dep_step.cast(std.Build.Step.InstallArtifact) orelse continue;
+
+            if (inst.artifact.kind == .@"test") {
+                const path = b.pathResolve(&.{"test/", inst.artifact.name});
+
+                // install test artifact
+                const install_step = b.addInstallArtifact(
+                    inst.artifact, 
+                    .{
+                        .dest_sub_path = path, 
+                        .dest_dir = .{.override = .prefix}
+                    }
+                );
+                // invoke test
+                const run_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
+                run_step.step.dependOn(&install_step.step);
+                test_all_step.dependOn(&run_step.step);
+            }
+        }
+    }
+} 

@@ -21,6 +21,8 @@ pub fn build(b: *std.Build) void {
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
 
+    const mod_context = "lib_core";
+
     lib_module: {
         const mod = b.addModule("core", .{
             .root_source_file = b.path("src/root.zig"),
@@ -94,7 +96,7 @@ pub fn build(b: *std.Build) void {
             break:test_runner;
         }
         test_artifact: {
-            // b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+            b.getInstallStep().dependOn(&b.addInstallArtifact(mod_unit_tests, .{.dest_sub_path = "../test/" ++ mod_context}).step);
             break:test_artifact;
         }
         break:test_module;

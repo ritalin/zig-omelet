@@ -216,6 +216,8 @@ const TopicBodyView = struct {
     }
 };
 
+const test_context = "test-lib-core";
+
 test "Encode/Decode event" {
     const allocator = std.testing.allocator;
 
@@ -228,7 +230,7 @@ test "Encode/Decode event" {
     defer topic.deinit();
     const source_path = try types.EventPayload.SourcePath.init(allocator, "Some-name", "Some-path", "Some-content", 1);
     defer source_path.deinit();
-    const topic_body = try types.EventPayload.TopicBody.init(allocator, source_path, &.{
+    const topic_body = try types.EventPayload.TopicBody.init(allocator, source_path.name, source_path.path, source_path.hash, &.{
         .{ "topic_a", "topic_a_content" },
         .{ "topic_b", "topic_b_content" },
         .{ "topic_c", "topic_c_content" },
@@ -236,7 +238,7 @@ test "Encode/Decode event" {
     defer topic_body.deinit();
     const quit_accept = try types.EventPayload.Stage.init(allocator, "Qwerty");
     defer quit_accept.deinit();
-    const log = try types.EventPayload.Log.init(allocator, .debug, "Test message😃");
+    const log = try types.EventPayload.Log.init(allocator, .debug, test_context, "Test message😃");
     defer log.deinit();
 
     try encodeEventInternal(allocator, &writer, .ack);
@@ -259,50 +261,90 @@ test "Encode/Decode event" {
     defer allocator.free(encoded);
 
     var reader = CborStream.Reader.init(encoded);
-    var event: types.Event = undefined;
 
-    event = try decodeEventInternal(allocator, .ack, &reader);
-    try std.testing.expectEqual(.ack, event);
-
-    event = try decodeEventInternal(allocator, .nack, &reader);
-    try std.testing.expectEqual(.nack, event);
-
-    event = try decodeEventInternal(allocator, .launched, &reader);
-    try std.testing.expectEqualStrings(launched.stage_name, event.launched.stage_name);
-
-    event = try decodeEventInternal(allocator, .request_topic, &reader);
-    try std.testing.expectEqual(.request_topic, event);
-
-    event = try decodeEventInternal(allocator, .topic, &reader);
-    try std.testing.expectEqualDeep(topic, event.topic);
-
-    event = try decodeEventInternal(allocator, .begin_watch_path, &reader);
-    try std.testing.expectEqual(.begin_watch_path, event);
-
-    event = try decodeEventInternal(allocator, .source_path, &reader);
-    try std.testing.expectEqualDeep(source_path, event.source_path);
-
-    event = try decodeEventInternal(allocator, .topic_body, &reader);
-    try std.testing.expectEqualDeep(try TopicBodyView.from(allocator, topic_body), try TopicBodyView.from(allocator, event.topic_body));
-
-    event = try decodeEventInternal(allocator, .ready_topic_body, &reader);
-    try std.testing.expectEqual(.ready_topic_body, event);
-
-    event = try decodeEventInternal(allocator, .ready_generate, &reader);
-    try std.testing.expectEqual(.ready_generate, event);
-
-    event = try decodeEventInternal(allocator, .end_watch_path, &reader);
-    try std.testing.expectEqual(.end_watch_path, event);
-
-    event = try decodeEventInternal(allocator, .quit_all, &reader);
-    try std.testing.expectEqual(.quit_all, event);
-
-    event = try decodeEventInternal(allocator, .quit, &reader);
-    try std.testing.expectEqual(.quit, event);
-
-    event = try decodeEventInternal(allocator, .quit_accept, &reader);
-    try std.testing.expectEqualStrings(quit_accept.stage_name, event.quit_accept.stage_name);
-
-    event = try decodeEventInternal(allocator, .log, &reader);
-    try std.testing.expectEqualDeep(log, event.log);
+    ack: {
+        const event = try decodeEventInternal(allocator, .ack, &reader);
+        try std.testing.expectEqual(.ack, event);
+        break:ack;
+    }
+    nack: {
+        const event = try decodeEventInternal(allocator, .nack, &reader);
+        try std.testing.expectEqual(.nack, event);
+        break:nack;
+    }
+    launched: {
+        const event = try decodeEventInternal(allocator, .launched, &reader);
+        defer event.deinit();
+        try std.testing.expectEqualStrings(launched.stage_name, event.launched.stage_name);
+        break:launched;
+    }
+    request_topic: {
+        const event = try decodeEventInternal(allocator, .request_topic, &reader);
+        try std.testing.expectEqual(.request_topic, event);
+        break:request_topic;
+    }
+    topic: {
+        const event = try decodeEventInternal(allocator, .topic, &reader);
+        defer event.deinit();
+        try std.testing.expectEqualDeep(topic, event.topic);
+        break:topic;
+    }
+    begin_watch_path: {
+        const event = try decodeEventInternal(allocator, .begin_watch_path, &reader);
+        try std.testing.expectEqual(.begin_watch_path, event);
+        break:begin_watch_path;
+    }
+    source_path: {
+        const event = try decodeEventInternal(allocator, .source_path, &reader);
+        defer event.deinit();
+        try std.testing.expectEqualDeep(source_path, event.source_path);
+        break:source_path;
+    }
+    topic_body: {
+        const event = try decodeEventInternal(allocator, .topic_body, &reader);
+        defer event.deinit();
+        const lhs = try TopicBodyView.from(allocator, topic_body);
+        defer lhs.deinit();
+        const rhs = try TopicBodyView.from(allocator, event.topic_body);
+        defer rhs.deinit();
+        try std.testing.expectEqualDeep(lhs, rhs);
+        break:topic_body;
+    }
+    ready_topic_body: {
+        const event = try decodeEventInternal(allocator, .ready_topic_body, &reader);
+        try std.testing.expectEqual(.ready_topic_body, event);
+        break:ready_topic_body;
+    }
+    ready_generate: {
+        const event = try decodeEventInternal(allocator, .ready_generate, &reader);
+        try std.testing.expectEqual(.ready_generate, event);
+        break:ready_generate;
+    }
+    end_watch_path: {
+        const event = try decodeEventInternal(allocator, .end_watch_path, &reader);
+        try std.testing.expectEqual(.end_watch_path, event);
+        break:end_watch_path;
+    }
+    quit_all: {
+        const event = try decodeEventInternal(allocator, .quit_all, &reader);
+        try std.testing.expectEqual(.quit_all, event);
+        break:quit_all;
+    }
+    quit: {
+        const event = try decodeEventInternal(allocator, .quit, &reader);
+        try std.testing.expectEqual(.quit, event);
+        break:quit;
+    }
+    quit_accept: {
+        const event = try decodeEventInternal(allocator, .quit_accept, &reader);
+        defer event.deinit();
+        try std.testing.expectEqualStrings(quit_accept.stage_name, event.quit_accept.stage_name);
+        break:quit_accept;
+    }
+    log: {
+        const event = try decodeEventInternal(allocator, .log, &reader);
+        defer event.deinit();
+        try std.testing.expectEqualStrings(log.from, event.log.from);
+        break:log;
+    }
 }

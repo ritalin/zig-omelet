@@ -382,8 +382,10 @@ test "generate name parameter code" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -413,8 +415,10 @@ test "generate name parameter code for upper case field" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -444,8 +448,10 @@ test "generate name parameter code from lower-case" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -475,8 +481,10 @@ test "generate name parameter code with any type" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -506,8 +514,10 @@ test "generate positional parameter code" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -537,8 +547,10 @@ test "generate positional parameter code with any type" {
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters);
@@ -563,8 +575,10 @@ test "Output build result" {
 
     var output_dir = std.testing.tmpDir(.{});
     defer output_dir.cleanup();
+    const parent_path = try output_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, output_dir.dir, "foo");
+    var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
     builder.query = try allocator.dupe(u8, "select $1::id, $2::name from foo where value = $3::value");

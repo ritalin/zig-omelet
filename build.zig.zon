@@ -43,12 +43,10 @@
         //    // actually used.
         //    .lazy = false,
         //},
-        .zzmq = .{ .path = "../vendor/zzmq" },
-        .clap = .{ .path = "../vendor/zig-clap"},
-        .lib_core = .{ .path = "../lib" },
-        .stage_watch_files = .{ .path = "../stages/watch-files" },
-        .stage_duckdb_extract_ph = .{ .path = "../stages/extract-ph" },
-        .stage_ts_generate = .{ .path = "../stages/generate" },
+        .stage_runner = .{ .path = "./runner" },
+        .stage_watch_files = .{ .path = "./stages/watch-files" },
+        .stage_duckdb_extract_ph = .{ .path = "./stages/extract-ph" },
+        .stage_ts_generate = .{ .path = "./stages/generate" },
     },
 
     // Specifies the set of files and directories that are included in this package.

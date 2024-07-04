@@ -37,6 +37,7 @@ pub fn main() !void {
     try core.makeIpcChannelRoot(setting.general.stage_endpoints);
     defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
+    // TODO provide as configuration files
     const config: Config = .{
         .stage_watch = .{
             .path = exe_prefix ++ "-" ++ "watch-files",

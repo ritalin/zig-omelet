@@ -6,6 +6,7 @@ const Config = @import("./Config.zig");
 
 // const traceLog = std.log;
 const traceLog = core.Logger.TraceDirect(Runner.APP_CONTEXT);
+const exe_prefix = @import("build_options").exe_prefix;
 
 const default_log_level = .debug;
 const std_options = .{
@@ -38,20 +39,20 @@ pub fn main() !void {
 
     const config: Config = .{
         .stage_watch = .{
-            .path = "stage-watch-files",
+            .path = exe_prefix ++ "-" ++ "watch-files",
             .extra_args = &.{@tagName(.source_dir_path), @tagName(.watch)},
             .managed = true,
         },
         .stage_extract = &.{
             .{
-                .path = "stage-extract-ph",
+                .path = exe_prefix ++ "-" ++ "duckdb-extract-ph",
                 .extra_args = &.{},
                 .managed = true,
             },
         },
         .stage_generate = &.{
             .{
-                .path = "stage-generate-ts",
+                .path = exe_prefix ++ "-" ++ "ts-generate",
                 .extra_args = &.{@tagName(.output_dir_path)},
                 .managed = true,
             },

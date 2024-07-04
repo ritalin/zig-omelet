@@ -88,7 +88,9 @@ pub fn build(b: *std.Build) void {
         break :test_fright;
     }
 
+    const test_prefix = "test";
     const exe_unit_tests = b.addTest(.{
+        .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -96,7 +98,7 @@ pub fn build(b: *std.Build) void {
     exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
     exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
     exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
-
+    exe_unit_tests.root_module.addOptions("build_options", build_options);
     exe_unit_tests.linkSystemLibrary("zmq");
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -106,4 +108,7 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+
 }

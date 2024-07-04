@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
-    const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
 
@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "APP_CONTEXT", app_context);
     build_options.addOption([]const u8, "exe_name", exe_name);
+    build_options.addOption([]const u8, "exe_prefix", exe_prefix);
 
     const exe = b.addExecutable(.{
         .name = exe_name,
@@ -49,86 +50,7 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    stage_watch_files: {
-        const dep_stage = b.dependency("stage_watch_files", .{
-            .target = target,
-            .optimize = optimize,
-            .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "watch-files"}));
-        b.installArtifact(exe_stage);
-        break :stage_watch_files;
-    }
-    stage_duck_db_extract_ph: {
-        const dep_stage = b.dependency("stage_duckdb_extract_ph", .{
-            .target = target,
-            .optimize = optimize,
-            .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
-            .duckdb_prefix = duckdb_prefix,
-        });
-        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-ph"}));
-        b.installArtifact(exe_stage);
-        break :stage_duck_db_extract_ph;
-    }
-    stage_ts_generate: {
-        const dep_stage = b.dependency("stage_ts_generate", .{
-            .target = target,
-            .optimize = optimize,
-            .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
-        });
-        const exe_stage = dep_stage.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
-        b.installArtifact(exe_stage);
-        break :stage_ts_generate;
-    }
 
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    const test_fright_cmd = b.addRunArtifact(exe);
-    test_fright_cmd.step.dependOn(b.getInstallStep());
-
-    const test_fright_sc = command: {
-        if (b.args) |args| {
-            if (args.len > 0) {
-                test_fright_cmd.addArgs(args[1..]);
-                break :command args[0];
-            }
-        }
-        break :command "generate";
-    };
-
-    @import("lib_core").DebugEndpoint.applyRunnerChannel(test_fright_cmd);
-    test_fright_cmd.addArgs(&.{
-        test_fright_sc,
-        "--source-dir=../_sql-examples",
-        "--output-dir=../_dump/ts",
-    });
-
-    const test_fright_step = b.step("test-run", "Run the app as test frighting");
-    test_fright_step.dependOn(&test_fright_cmd.step);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
@@ -147,7 +69,9 @@ pub fn build(b: *std.Build) void {
     exe_unit_tests.linkLibC();
 
     exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+    exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
     exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
+    exe_unit_tests.root_module.addOptions("build_options", build_options);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
@@ -157,3 +81,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 }
+
+// re-exports
+pub const applyRunnerChannel = @import("lib_core").DebugEndpoint.applyRunnerChannel;

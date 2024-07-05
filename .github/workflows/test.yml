@@ -2,13 +2,14 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ "main", "zig-*" ]
-    tags: [ 'v*.*.*' ]
+    branches: [ "main" ]
+    # tags: [ 'v*.*.*' ]
     
   pull_request:
-    branches: [ "main", "zig-*" ]
+    branches: [ "main" ]
 
 env:
+  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -25,29 +26,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
-      # Set up BuildKit Docker container builder to be able to build
-      # multi-platform images and export cache
-      # https://github.com/docker/setup-buildx-action
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # v3.0.0
-
-      # Extract metadata (tags, labels) for Docker
-      # https://github.com/docker/metadata-action
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5 # v5.0.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
-      # Build and push Docker image with Buildx (don't push on PR)
-      # https://github.com/docker/build-push-action
-      - name: Build and push Docker image
-        id: build-and-push
-        uses: docker/build-push-action@v5 # v5.0.0
-        with:
-          context: .docker
-          file: test.Dockerfile
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          submodules: recursive
+      - name: Install zig latest
+        uses: mlugg/setup-zig@v1
+      - name: Install libzmq
+        run: |
+          sudo apt update && sudo apt -y install libzmq3-dev
+          dpkg -L libzmq3-dev
+      - name: Install libduckdb
+        run: |
+          mkdir /tmp/duckdb
+          mkdir -p /usr/local/duckdb/lib
+          mkdir -p /usr/local/duckdb/include
+          wget -nv -O /tmp/duckdk.zip https://github.com/duckdb/duckdb/releases/download/v1.0.0/libduckdb-linux-amd64.zip
+          unzip /tmp/duckdk.zip -d /tmp/duckdb
+          mv /tmp/duckdb/lib* /usr/local/duckdb/lib/
+          mv /tmp/duckdb/*.h /tmp/duckdb/*.hpp /usr/local/duckdb/include/
+      - run: zig build test-all -Dduckdb_prefix=/usr/local -Dzmq_prefix=/usr --verbose

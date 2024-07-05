@@ -29,64 +29,88 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "app_context", app_context);
     build_options.addOption([]const u8, "exe_name", exe_name);
 
-    const exe = b.addExecutable(.{
-        .name = exe_name,
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-    exe.root_module.addImport("core", dep_core.module("core"));
-    exe.root_module.addImport("clap", dep_clap.module("clap"));
+    app_module: {
+        const exe = b.addExecutable(.{
+            .name = exe_name,
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
 
-    exe.linkSystemLibrary("zmq");
-    exe.linkLibCpp();
-    exe.linkLibC();
+        zmq_native_config: {
+            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            exe.linkSystemLibrary("zmq");
+            exe.linkLibC();
+            break:zmq_native_config;
+        }
+        import_modules: {
+            exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+            exe.root_module.addImport("clap", dep_clap.module("clap"));
+            exe.root_module.addImport("core", dep_core.module("core"));
+            exe.root_module.addOptions("build_options", build_options);
+            break:import_modules;
+        }
+        app_runner: {
+            // This declares intent for the executable to be installed into the
+            // standard location when the user invokes the "install" step (the default
+            // step when running `zig build`).
+            b.installArtifact(exe);
 
-    exe.root_module.addOptions("build_options", build_options);
+            // This *creates* a Run step in the build graph, to be executed when another
+            // step is evaluated that depends on it. The next line below will establish
+            // such a dependency.
+            const run_cmd = b.addRunArtifact(exe);
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
+            // By making the run step depend on the install step, it will be run from the
+            // installation directory rather than directly from within the cache directory.
+            // This is not necessary, however, if the application depends on other installed
+            // files, this ensures they will be present and in the expected location.
+            run_cmd.step.dependOn(b.getInstallStep());
 
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
+            // This allows the user to pass arguments to the application in the build
+            // command itself, like this: `zig build run -- arg1 arg2 etc`
+            if (b.args) |args| {
+                run_cmd.addArgs(args);
+            }
 
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
+            // Apply zmq communication cannel
+            try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
 
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+            // This creates a build step. It will be visible in the `zig build --help` menu,
+            // and can be selected like this: `zig build run`
+            // This will evaluate the `run` step rather than the default, which is "install".
+            const run_step = b.step("run", "Run the app");
+            run_step.dependOn(&run_cmd.step);
+            break:app_runner;
+        }
+        break:app_module;
     }
 
-    // Apply zmq communication cannel
-    try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
+    test_module: {
+        const exe_unit_tests = b.addTest(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
 
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+        native_config: {
+            exe_unit_tests.linkLibC();
+            break:native_config;
+        }
+        test_runner: {
+            const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
+            // Similar to creating the run step earlier, this exposes a `test` step to
+            // the `zig build --help` menu, providing a way for the user to request
+            // running the unit tests.
+            const test_step = b.step("test", "Run unit tests");
+            test_step.dependOn(&run_exe_unit_tests.step);
+            break:test_runner;
+        }
+        test_artifact: {
+            // b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+            break:test_artifact;
+        }
+        break:test_module;
+    }
 }

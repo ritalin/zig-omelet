@@ -3,7 +3,7 @@ const std = @import("std");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix: []const u8 = "omret";
-    const zmq_prefix: []const u8 = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
     
     stage_watch_files: {
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
         b.installArtifact(exe_stage);
-        break :stage dep;
+        break :stage;
     }
     const stage_runner = stage: {
         const dep = b.dependency("stage_runner", .{
@@ -104,8 +104,7 @@ pub fn build(b: *std.Build) void {
 }
 
 fn addTestAll(b: *std.Build) void {
-    const test_all_step = b.step("test-all", "Run all unit tests");
-
+    const run_step = b.step("test-all", "Run all unit tests");
     var deps_iter = b.initialized_deps.valueIterator();
 
     while(deps_iter.next()) |dep| {
@@ -114,7 +113,7 @@ fn addTestAll(b: *std.Build) void {
 
             if (inst.artifact.kind == .@"test") {
                 const path = b.pathResolve(&.{"test/", inst.artifact.name});
-
+                std.debug.print("Test found: {s}", .{path});
                 // install test artifact
                 const install_step = b.addInstallArtifact(
                     inst.artifact, 
@@ -124,9 +123,9 @@ fn addTestAll(b: *std.Build) void {
                     }
                 );
                 // invoke test
-                const run_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
-                run_step.step.dependOn(&install_step.step);
-                test_all_step.dependOn(&run_step.step);
+                const invoke_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
+                invoke_step.step.dependOn(&install_step.step);
+                run_step.dependOn(&invoke_step.step);
             }
         }
     }

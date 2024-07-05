@@ -17,7 +17,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zmq_prefix = b.option([]const u8, "prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+
+    std.debug.print("[lib-core/zmq_prefix] {s}\n", .{zmq_prefix});
+
+
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
 
@@ -52,6 +56,7 @@ pub fn build(b: *std.Build) void {
 
     test_module: {
         const mod_unit_tests = b.addTest(.{
+            .name = "test-lib-core",
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,

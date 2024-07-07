@@ -33,7 +33,6 @@ jobs:
       - name: Install libzmq
         run: |
           sudo apt update && sudo apt -y install libzmq3-dev
-          dpkg -L libzmq3-dev
       - name: Install libduckdb
         run: |
           mkdir /tmp/duckdb
@@ -43,4 +42,6 @@ jobs:
           unzip /tmp/duckdk.zip -d /tmp/duckdb
           sudo mv /tmp/duckdb/lib* /usr/local/duckdb/lib/
           sudo mv /tmp/duckdb/*.h /tmp/duckdb/*.hpp /usr/local/duckdb/include/
+      - name: Install libcatch2
+        run: sudo apt-get -y install catch2
       - run: zig build test-all -Dduckdb_prefix=/usr/local -Dzmq_prefix=/usr --verbose

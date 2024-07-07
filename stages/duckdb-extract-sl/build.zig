@@ -40,18 +40,17 @@ pub fn build(b: *std.Build) void {
         });
 
         native_config: {
-            // exe.addIncludePath(b.path("src/c"));
+            exe.addIncludePath(b.path("src/c"));
             exe.addCSourceFiles(.{ 
                 .root = b.path("src/c"),
                 .files = &.{
                     "parser.cpp",
-            //         "cbor_encode.cpp",
+                    "duckdb_database.cpp",
                 },
-                .flags = &.{"-std=c++20"}
+                .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
             exe.defineCMacro("DISABLE_CATCH2_TEST", "1");
             exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
-            // exe.addIncludePath(b.path("../../vendor/cbor/include"));
             exe.linkLibCpp();
             exe.linkLibC();
             break:native_config;
@@ -123,14 +122,14 @@ pub fn build(b: *std.Build) void {
         });
 
         native_config: {
-            // exe_unit_tests.addIncludePath(b.path("src/c"));
+            exe_unit_tests.addIncludePath(b.path("src/c"));
             exe_unit_tests.addCSourceFiles(.{
                 .root = b.path("src/c"),
                 .files = &.{
                     "parser.cpp",
-            //         "cbor_encode.cpp",
+                    "duckdb_database.cpp",
                 },
-                .flags = &.{"-std=c++20"}
+                .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
             // exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));

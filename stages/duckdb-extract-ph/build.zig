@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
                 .files = &.{
                     "parser.cpp",
                 },
-                .flags = &.{"-std=c++20"}
+                .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
             exe.defineCMacro("DISABLE_CATCH2_TEST", "1");
             exe.addIncludePath(b.path("src/c"));
@@ -126,7 +126,7 @@ pub fn build(b: *std.Build) void {
                 .files = &.{
                     "parser.cpp",
                 },
-                .flags = &.{"-std=c++20"}
+                .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
             exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));

@@ -45,7 +45,6 @@ pub fn build(b: *std.Build) void {
                 .root = b.path("src/c"),
                 .files = &.{
                     "parser.cpp",
-                    "cbor_encode.cpp",
                 },
                 .flags = &.{"-std=c++20"}
             });
@@ -54,6 +53,7 @@ pub fn build(b: *std.Build) void {
             exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
             exe.addIncludePath(b.path("../../vendor/cbor/include"));
             exe.addIncludePath(b.path("../../vendor/json/include"));
+            exe.addIncludePath(b.path("../../lib/core/src/c"));
             exe.linkLibCpp();
             exe.linkLibC();
             break:native_config;
@@ -121,18 +121,17 @@ pub fn build(b: *std.Build) void {
         });
         
         native_config: {
-            exe_unit_tests.addIncludePath(b.path("src/c"));
             exe_unit_tests.addCSourceFiles(.{
                 .root = b.path("src/c"),
                 .files = &.{
                     "parser.cpp",
-                    "cbor_encode.cpp",
                 },
                 .flags = &.{"-std=c++20"}
             });
             exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
+            exe_unit_tests.addIncludePath(b.path("../../lib/core/src/c"));
             exe_unit_tests.linkLibC();
             exe_unit_tests.linkLibCpp();
             break:native_config;

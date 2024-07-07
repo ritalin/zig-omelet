@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) void {
             exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
             exe.linkSystemLibrary("zmq");
             exe.linkLibC();
+            exe.linkLibCpp();
             break:zmq_native_config;
         }
         import_modules: {
@@ -110,6 +111,7 @@ pub fn build(b: *std.Build) void {
 
         native_config: {
             exe_unit_tests.linkLibC();
+            exe_unit_tests.linkLibCpp();
             break:native_config;
         }
         zmq_native_config: {

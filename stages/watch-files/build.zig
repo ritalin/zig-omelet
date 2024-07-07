@@ -36,11 +36,14 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-
+        native_config: {
+            exe.linkLibC();
+            exe.linkLibCpp();
+            break:native_config;
+        }
         zmq_native_config: {
             exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
             exe.linkSystemLibrary("zmq");
-            exe.linkLibC();
             break:zmq_native_config;
         }
         import_modules: {
@@ -95,6 +98,7 @@ pub fn build(b: *std.Build) void {
 
         native_config: {
             exe_unit_tests.linkLibC();
+            exe_unit_tests.linkLibCpp();
             break:native_config;
         }
         test_runner: {

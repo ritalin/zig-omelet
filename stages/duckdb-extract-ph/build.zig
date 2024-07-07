@@ -22,7 +22,8 @@ pub fn build(b: *std.Build) void {
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
-    const dep_core = b.dependency("lib_core", .{});
+    const dep_lib_core = b.dependency("lib_core", .{});
+    const dep_lib_testing = b.dependency("lib_testing", .{});
 
     const app_context = "extract-ph";
     const exe_name = b.fmt("{s}-{s}-{s}", .{exe_prefix, "duckdb", app_context}); // for displaying help
@@ -72,7 +73,7 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
-            exe.root_module.addImport("core", dep_core.module("core"));
+            exe.root_module.addImport("core", dep_lib_core.module("core"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
         }
@@ -149,19 +150,12 @@ pub fn build(b: *std.Build) void {
             break:duckdb_native_config;
         }
         catch2_native_config: {
-            exe_unit_tests.addCSourceFiles(.{
-                .root = b.path("src/c"),
-                .files = &.{
-                    "catch2_session_run.cpp",
-                }
-            });
-            exe_unit_tests.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/lib"})});
             exe_unit_tests.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
-            exe_unit_tests.linkSystemLibrary("catch2");
             break:catch2_native_config;
         }
         import_modules: {
-            exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
+            exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
+            exe_unit_tests.root_module.addImport("test_runner", dep_lib_testing.module("runner"));
             break:import_modules;
         } 
         test_runner: {

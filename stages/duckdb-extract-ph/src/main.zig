@@ -29,7 +29,7 @@ pub fn main() !void {
 }
 
 test "main" {
-    const run_catch2 = @import("./catch2_runner.zig").run_catch2;
+    const run_catch2 = @import("test_runner").run_catch2;
     
     try std.testing.expectEqual(0, try run_catch2(std.testing.allocator));
 }

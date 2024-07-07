@@ -1,0 +1,1 @@
+create table foo(kind int not null, xyz varchar)

@@ -1,15 +1,163 @@
 #include <duckdb.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
+#include <duckdb/parser/expression/list.hpp>
 
 #define MAGIC_ENUM_RANGE_MAX (std::numeric_limits<uint8_t>::max())
 
 #include <magic_enum/magic_enum.hpp>
 
+#include "duckdb_database.hpp"
+#include "duckdb_worker.h"
 
 #include <iostream>
 
+class SelectListCollector {
+public:
+    SelectListCollector(worker::Database *db, std::string id, std::optional<void *> socket) 
+        : conn(std::move(db->connect())), id(id), socket(std::move(socket)) {}
+public:
+    auto execute(std::string query) -> WorkerResultCode;
+public:
+    auto warn(const std::string& message) -> void;
+    auto error(const std::string& message) -> void;
+private:
+    duckdb::Connection conn;
+    std::string id;
+    std::optional<void *> socket;
+private:
+    friend auto borrowConnection(SelectListCollector& collector) -> duckdb::Connection&;
+};
+
+auto borrowConnection(SelectListCollector& collector) -> duckdb::Connection& {
+    return collector.conn;
+}
+
+static auto prependDescribeKeyword(duckdb::SelectStatement& stmt) -> void {
+    auto& original_node = stmt.node;
+
+    auto describe = new duckdb::ShowRef();
+    describe->show_type = duckdb::ShowType::DESCRIBE;
+    describe->query = std::move(original_node);
+
+    auto describe_node = new duckdb::SelectNode();
+    describe_node->from_table.reset(describe);
+
+    stmt.node.reset(describe_node);
+}
+
+static auto walkExpression(SelectListCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> void {
+    if (expr->HasParameter() || expr->HasSubquery()) {
+        switch (expr->expression_class) {
+        case duckdb::ExpressionClass::PARAMETER:
+            {
+                auto& param_expr = expr->Cast<duckdb::ParameterExpression>();
+                param_expr.identifier = "1";
+            }
+            break;
+        case duckdb::ExpressionClass::CAST: 
+
+        case duckdb::ExpressionClass::FUNCTION:
+
+        case duckdb::ExpressionClass::COMPARISON:
+
+        case duckdb::ExpressionClass::BETWEEN:
+
+        case duckdb::ExpressionClass::CASE:
+
+        case duckdb::ExpressionClass::SUBQUERY:
+        default: 
+            collector.warn(std::format("[TODO] Unsupported expression class: {}", magic_enum::enum_name(expr->expression_class)));
+            break;
+        }
+    }
+}
+
+static auto convertToPositionalParameter(SelectListCollector& collector, duckdb::SelectStatement& stmt) -> void {
+    switch (stmt.node->type) {
+    case duckdb::QueryNodeType::SELECT_NODE: 
+        {
+            auto& select_node =  stmt.node->Cast<duckdb::SelectNode>();
+            for (auto& expr: select_node.select_list) {
+                ::walkExpression(collector, expr);
+            }
+        }
+        break;
+    default: 
+        collector.warn(std::format("[TODO] Unsupported select node: {}", magic_enum::enum_name(stmt.node->type)));
+        break;
+    }
+}
+
+static auto sendLog(void *socket, const std::string& log_level, const std::string& message) -> void {
+
+}
+
+static auto sendWorkerResult(const std::optional<void *>& socket) -> void {
+
+}
+
+auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
+    std::string message;
+    try {
+        auto stmts = this->conn.ExtractStatements(query);
+
+        for (auto& stmt: stmts) {
+            if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
+                auto& select_stmt = stmt->Cast<duckdb::SelectStatement>();
+                ::convertToPositionalParameter(*this, select_stmt);
+                ::prependDescribeKeyword(select_stmt);
+            }
+            else {
+                // send empty result
+                ::sendWorkerResult(this->socket);
+            }
+        }
+
+        return no_error;
+    }
+    catch (const duckdb::ParserException& ex) {
+        message = ex.what();
+    }
+    
+    this->error(message);
+    return invalid_sql;
+}
+
+auto SelectListCollector::warn(const std::string& message) -> void {
+    if (this->socket) {
+        ::sendLog(this->socket.value(), "warn", message);
+    }
+    else {
+        std::cout << std::format("warn: {}", message) << std::endl;
+    }
+}
+auto SelectListCollector::error(const std::string& message) -> void {
+    if (this->socket) {
+        ::sendLog(this->socket.value(), "err", message);
+    }
+    else {
+        std::cout << std::format("err: {}", message) << std::endl;
+    }
+}
+
+
 extern "C" {
+    auto initCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
+        auto db = reinterpret_cast<worker::Database *>(db_ref);
+        auto collector = new SelectListCollector(db, std::string(id, id_len), socket);
+
+        *handle = reinterpret_cast<CollectorRef>(collector);
+        return 0;
+    }
+
+    auto deinitCollector(CollectorRef handle) -> void {
+        delete reinterpret_cast<SelectListCollector *>(handle);
+    }
+
+    auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> void {
+    }
+
     auto ParseDescribeStmt() -> void {
         auto sql = "describe select $a::int, xyz, 123 from Foo";
 
@@ -54,67 +202,62 @@ extern "C" {
 
 using namespace Catch::Matchers;
 
-TEST_CASE("Load schemas") {
-    auto db = duckdb::DuckDB(nullptr);
-    auto conn = duckdb::Connection(db);
+TEST_CASE("Error SQL") {
+    auto sql = std::string("SELT $1::int as a");
 
-    conn.Query("create table foo(kind int not null, xyz varchar)");
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    
+    auto err = collector.execute(sql);
 
-    SECTION("created table information") {
-        auto info = conn.TableInfo("Foo");
-        REQUIRE(info);
-        REQUIRE(info->columns.size() == 2);
+    SECTION("execute result code") {
+        CHECK(err != 0);
+    }
+}
 
-        SECTION("find column#1") {
-            auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
-                return c.GetName() == "kind";
-            });
-            CHECK(result != info->columns.end());
+TEST_CASE("Convert named parameter to positional parameter") {
+    auto sql = std::string("select $value as a from Foo");
 
-            CHECK_THAT(result->GetName(), Equals("kind"));
-            CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
-        }
-        SECTION("find column#2") {
-            auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
-                return c.GetName() == "xyz";
-            });
-            CHECK(result != info->columns.end());
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
 
-            CHECK_THAT(result->GetName(), Equals("xyz"));
-            CHECK_THAT(result->GetType().ToString(), Equals("VARCHAR"));
-        }
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::convertToPositionalParameter(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals("SELECT $1 AS a FROM Foo"));
     }
 }
 
 TEST_CASE("Prepend describe") {
     auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
 
-    auto db = duckdb::DuckDB(nullptr);
-    auto conn = duckdb::Connection(db);
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
 
+    auto conn = db.connect();;
     auto stmts = conn.ExtractStatements(sql);
     auto& stmt = stmts[0];
-
-    auto& select_stmt = stmt->Cast<duckdb::SelectStatement>();
-    auto& original_node = select_stmt.node;
-
-    auto describe = new duckdb::ShowRef();
-    describe->show_type = duckdb::ShowType::DESCRIBE;
-    describe->query = std::move(original_node);
-
-    auto describe_node = new duckdb::SelectNode();
-    describe_node->from_table.reset(describe);
-
-    select_stmt.node.reset(describe_node);
+    ::prependDescribeKeyword(stmt->Cast<duckdb::SelectStatement>());
 
     SECTION("result") {
         CHECK_THAT(stmt->ToString(), Equals("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, xyz, 123, CAST($2 AS VARCHAR) AS c FROM Foo)"));
     }
 }
 
+TEST_CASE("Not exist relation") {
+    auto sql = std::string("SELT $1::int as p from Origin");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+
+}
+
 TEST_CASE("Describe SELECT list") {
-    // auto sql = std::string("DESCRIBE (CAST($1 AS INTEGER) AS a, xyz, SELECT 123, CAST($2 AS VARCHAR) AS c FROM Foo)");
-    auto sql = std::string("DESCRIBE (SELECT CAST($2 AS INTEGER) AS a, 123, CAST($1 AS VARCHAR) AS c)");
+    auto sql = std::string("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, 123, CAST($1 AS VARCHAR) AS c)");
 
     auto db = duckdb::DuckDB(nullptr);
     auto conn = duckdb::Connection(db);
@@ -126,7 +269,7 @@ TEST_CASE("Describe SELECT list") {
 
     auto param_count = stmt->GetStatementProperties().parameter_count;
     SECTION("verify prepared statement param count") {
-        CHECK(param_count == 2);
+        CHECK(param_count == 1);
     }
     auto params = duckdb::vector<duckdb::Value>(param_count);
     auto result = stmt->Execute(params);

@@ -43,8 +43,8 @@
         //    // actually used.
         //    .lazy = false,
         //},
-        .zzmq = .{ .path = "../vendor/zzmq" },
-        .clap = .{ .path = "../vendor/zig-clap"},
+        .zzmq = .{ .path = "../../vendor/zzmq" },
+        .clap = .{ .path = "../../vendor/zig-clap"},
     },
 
     // Specifies the set of files and directories that are included in this package.

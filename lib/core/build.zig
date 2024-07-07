@@ -33,9 +33,9 @@ pub fn build(b: *std.Build) void {
         });
 
         cbor_native_config: {
-            mod.addIncludePath(b.path("../vendor/cbor/include"));
+            mod.addIncludePath(b.path("../../vendor/cbor/include"));
             mod.addCSourceFiles(.{
-                .root = b.path("../vendor/cbor/src/"),
+                .root = b.path("../../vendor/cbor/src/"),
                 .files = &.{
                     "encoder.c",
                     "common.c",
@@ -73,9 +73,9 @@ pub fn build(b: *std.Build) void {
             break:zmq_native_config;
         }
         cbor_native_config: {
-            mod_unit_tests.addIncludePath(b.path("../vendor/cbor/include"));
+            mod_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             mod_unit_tests.addCSourceFiles(.{
-                .root = b.path("../vendor/cbor/src/"),
+                .root = b.path("../../vendor/cbor/src/"),
                 .files = &.{
                     "encoder.c",
                     "common.c",

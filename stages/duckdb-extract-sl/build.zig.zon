@@ -44,8 +44,9 @@
         //    .lazy = false,
         //},
         .zzmq = .{ .path = "../../vendor/zzmq" },
-        .lib_core = .{ .path = "../../lib/core" },
         .clap = .{ .path = "../../vendor/zig-clap"},
+        .lib_core = .{ .path = "../../lib/core" },
+        .lib_testing = .{ .path = "../../lib/testing" },
     },
 
     .paths = .{

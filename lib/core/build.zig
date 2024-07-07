@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    // const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
 
     std.debug.print("[lib-core/zmq_prefix] {s}\n", .{zmq_prefix});
 
@@ -30,8 +31,19 @@ pub fn build(b: *std.Build) void {
     lib_module: {
         const mod = b.addModule("core", .{
             .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
         });
-
+        native_config: {
+            mod.addIncludePath(b.path("src/c"));
+            mod.addCSourceFiles(.{
+                .root = b.path("src/c"),
+                .files = &.{
+                    "cbor_encode.cpp",
+                },
+            });
+            break:native_config;
+        }
         cbor_native_config: {
             mod.addIncludePath(b.path("../../vendor/cbor/include"));
             mod.addCSourceFiles(.{

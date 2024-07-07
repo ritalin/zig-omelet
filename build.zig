@@ -113,7 +113,7 @@ fn addTestAll(b: *std.Build) void {
 
             if (inst.artifact.kind == .@"test") {
                 const path = b.pathResolve(&.{"test/", inst.artifact.name});
-                std.debug.print("Test found: {s}", .{path});
+                std.debug.print("Test found: {s}\n", .{path});
                 // install test artifact
                 const install_step = b.addInstallArtifact(
                     inst.artifact, 

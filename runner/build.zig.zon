@@ -45,7 +45,7 @@
         //},
         .zzmq = .{ .path = "../vendor/zzmq" },
         .clap = .{ .path = "../vendor/zig-clap"},
-        .lib_core = .{ .path = "../lib" },
+        .lib_core = .{ .path = "../lib/core" },
         .stage_watch_files = .{ .path = "../stages/watch-files" },
         .stage_duckdb_extract_ph = .{ .path = "../stages/extract-ph" },
         .stage_ts_generate = .{ .path = "../stages/generate" },

@@ -58,9 +58,10 @@ using magic_enum::iostream_operators::operator<<;
 
 // -------------------------
 
-auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatement& stmt) -> void;
+static auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatement& stmt) -> void;
+static auto walkSortOrderNode(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys) -> void;
 
-auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> std::optional<std::string> {
+static auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> std::optional<std::string> {
     if (expr->HasParameter() || expr->HasSubquery()) {
         switch (expr->expression_class) {
         case duckdb::ExpressionClass::PARAMETER:
@@ -76,7 +77,7 @@ auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::
             {
                 auto& cast_expr = expr->Cast<duckdb::CastExpression>();
                 if (cast_expr.child->expression_class == duckdb::ExpressionClass::PARAMETER) {
-                    auto param_key = walkExpression(collector, cast_expr.child);
+                    auto param_key = ::walkExpression(collector, cast_expr.child);
                     expr.swap(cast_expr.child);
                     cast_expr.child.release();
 
@@ -90,23 +91,25 @@ auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::
             {
                 auto& fn_expr = expr->Cast<duckdb::FunctionExpression>();
                 for (auto& arg: fn_expr.children) {
-                    walkExpression(collector, arg);
+                    ::walkExpression(collector, arg);
                 }
+
+                ::walkSortOrderNode(collector, fn_expr.order_bys);
             }
             break;
         case duckdb::ExpressionClass::CONJUNCTION:
             {
                 auto& conj_expr = expr->Cast<duckdb::ConjunctionExpression>();
                 for (auto& child: conj_expr.children) {
-                    walkExpression(collector, child);
+                    ::walkExpression(collector, child);
                 }
             }
             break;
         case duckdb::ExpressionClass::COMPARISON:
             {
                 auto& cmp_expr = expr->Cast<duckdb::ComparisonExpression>();
-                walkExpression(collector, cmp_expr.left);
-                walkExpression(collector, cmp_expr.right);
+                ::walkExpression(collector, cmp_expr.left);
+                ::walkExpression(collector, cmp_expr.right);
             }
             break;
         case duckdb::ExpressionClass::COLUMN_REF:
@@ -116,35 +119,35 @@ auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::
             {
                 auto& op_expr = expr->Cast<duckdb::OperatorExpression>();
                 for (auto& child: op_expr.children) {
-                    walkExpression(collector, child);
+                    ::walkExpression(collector, child);
                 }
             }
             break;
         case duckdb::ExpressionClass::BETWEEN:
             {
                 auto& cmp_expr = expr->Cast<duckdb::BetweenExpression>();
-                walkExpression(collector, cmp_expr.input);
-                walkExpression(collector, cmp_expr.lower);
-                walkExpression(collector, cmp_expr.upper);
+                ::walkExpression(collector, cmp_expr.input);
+                ::walkExpression(collector, cmp_expr.lower);
+                ::walkExpression(collector, cmp_expr.upper);
             }
             break;
         case duckdb::ExpressionClass::CASE:
             {
                 auto& case_expr = expr->Cast<duckdb::CaseExpression>();
                 for (auto& c: case_expr.case_checks) {
-                    walkExpression(collector, c.when_expr);
-                    walkExpression(collector, c.then_expr);
+                    ::walkExpression(collector, c.when_expr);
+                    ::walkExpression(collector, c.then_expr);
                 }
-                walkExpression(collector, case_expr.else_expr);
+                ::walkExpression(collector, case_expr.else_expr);
             }
             break;
         case duckdb::ExpressionClass::SUBQUERY:
             {
                 auto& sq_expr = expr->Cast<duckdb::SubqueryExpression>();
-                walkSelectStatement(collector, *sq_expr.subquery);
+                ::walkSelectStatement(collector, *sq_expr.subquery);
 
                 if (sq_expr.subquery_type == duckdb::SubqueryType::ANY) {
-                    walkExpression(collector, sq_expr.child);
+                    ::walkExpression(collector, sq_expr.child);
                 }
             }
             break;
@@ -160,26 +163,26 @@ auto walkExpression(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::
     return std::nullopt;
 }
 
-auto walkTableRef(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::TableRef>& table_ref) -> void {
+static auto walkTableRef(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::TableRef>& table_ref) -> void {
     switch (table_ref->type) {
     case duckdb::TableReferenceType::TABLE_FUNCTION:
         {
             auto& fn_ref = table_ref->Cast<duckdb::TableFunctionRef>();
-            walkExpression(collector, fn_ref.function);
+            ::walkExpression(collector, fn_ref.function);
         }
         break;
     case duckdb::TableReferenceType::JOIN:
         {
             auto& join_ref = table_ref->Cast<duckdb::JoinRef>();
-            walkTableRef(collector, join_ref.left);
-            walkTableRef(collector, join_ref.right);
-            walkExpression(collector, join_ref.condition);
+            ::walkTableRef(collector, join_ref.left);
+            ::walkTableRef(collector, join_ref.right);
+            ::walkExpression(collector, join_ref.condition);
         }
         break;
     case duckdb::TableReferenceType::SUBQUERY:
         {
             auto& sq_ref = table_ref->Cast<duckdb::SubqueryRef>();
-            walkSelectStatement(collector, *sq_ref.subquery);
+            ::walkSelectStatement(collector, *sq_ref.subquery);
         }
         break;
     case duckdb::TableReferenceType::BASE_TABLE:
@@ -192,24 +195,39 @@ auto walkTableRef(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::Ta
     }
 }
 
-auto walkSelectStatementNode(PlaceholderCollector *collector, duckdb::SelectNode& node) -> void {
-    for (auto& sel: node.select_list) {
-        walkExpression(collector, sel);
-    }
-
-    walkTableRef(collector, node.from_table);
-
-    if (node.where_clause) {
-        walkExpression(collector, node.where_clause);
+static auto walkSortOrderNode(PlaceholderCollector *collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys) -> void {
+    for (auto& order_by: order_bys->orders) {
+        ::walkExpression(collector, order_by.expression);
     }
 }
 
-auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatement& stmt) -> void {
+static auto walkSelectStatementNode(PlaceholderCollector *collector, duckdb::SelectNode& node) -> void {
+    for (auto& sel: node.select_list) {
+        ::walkExpression(collector, sel);
+    }
+
+    ::walkTableRef(collector, node.from_table);
+
+    if (node.where_clause) {
+        ::walkExpression(collector, node.where_clause);
+    }
+    if (node.groups.group_expressions.size() > 0) {
+        collector->warn(std::format("[TODO] Unsupported group by clause"));
+    }
+    if (node.having) {
+        collector->warn(std::format("[TODO] Unsupported having clause"));
+    }
+    if (node.sample) {
+        collector->warn(std::format("[TODO] Unsupported sample clause"));
+    }
+}
+
+static auto walkSelectStatement(PlaceholderCollector *collector, duckdb::SelectStatement& stmt) -> void {
     auto& node = stmt.node;
 
     switch (node->type) {
     case duckdb::QueryNodeType::SELECT_NODE:
-        walkSelectStatementNode(collector, node->Cast<duckdb::SelectNode>());
+        ::walkSelectStatementNode(collector, node->Cast<duckdb::SelectNode>());
         break;
     default:
         collector->warn(std::format("[TODO] unsupported select stmt node: {}", magic_enum::enum_name(node->type)));
@@ -231,7 +249,7 @@ namespace ns {
     }
 }
 
-auto serializePlaceHolder(const std::vector<PlaceholderCollector::WalkResult::Placeholder>& entries) -> std::string {
+static auto serializePlaceHolder(const std::vector<PlaceholderCollector::WalkResult::Placeholder>& entries) -> std::string {
     auto items = nlohmann::json::array();
 
     for (auto& e: entries) {
@@ -259,7 +277,7 @@ auto PlaceholderCollector::walk(duckdb::unique_ptr<duckdb::SQLStatement> &stmt) 
     case duckdb::StatementType::SELECT_STATEMENT:
         {
             auto& sel_stmt = stmt->Cast<duckdb::SelectStatement>();
-            walkSelectStatement(this, sel_stmt);
+            ::walkSelectStatement(this, sel_stmt);
         }
         break;
     default:
@@ -337,7 +355,7 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
                 encoder.addStringPair(TOPIC_QUERY, result.query);
             }
             send_placeholder: {
-                auto ph = serializePlaceHolder(result.placeholders());
+                auto ph = ::serializePlaceHolder(result.placeholders());
                 encoder.addStringPair(TOPIC_PH, ph);
             }
 
@@ -351,10 +369,10 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
     }
 }
 
-auto sendLog(void *socket, const std::string& id, const std::string& log_level, const std::string msg) -> void {
+static auto sendLog(void *socket, const std::string& id, const std::string& log_level, const std::string msg) -> void {
     event_type: {
         auto event_type = std::string("worker_result");
-        zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+        ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
     payload: {
         CborEncoder payload_encoder;
@@ -383,7 +401,7 @@ auto sendLog(void *socket, const std::string& id, const std::string& log_level, 
 
 auto PlaceholderCollector::warn(const std::string msg) -> void {
     if (this->socket) {
-        sendLog(this->socket.value(), this->id, "warn", msg);
+        ::sendLog(this->socket.value(), this->id, "warn", msg);
     }
     else {
         std::cout << std::format("warn: {}", msg);
@@ -392,7 +410,7 @@ auto PlaceholderCollector::warn(const std::string msg) -> void {
 
 auto PlaceholderCollector::err(const std::string msg) -> void {
     if (this->socket) {
-        sendLog(this->socket.value(), this->id, "err", msg);
+        ::sendLog(this->socket.value(), this->id, "err", msg);
     }
     else {
         std::cout << std::format("err: {}", msg);
@@ -483,7 +501,7 @@ TEST_CASE("Fromless select statement") {
 
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -508,7 +526,7 @@ TEST_CASE("No placeholder select statement") {
 
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -532,7 +550,7 @@ TEST_CASE("No placeholder select statement with where clause") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -556,7 +574,7 @@ TEST_CASE("Select clause typed positional placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -587,7 +605,7 @@ TEST_CASE("Select clause typed named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -605,6 +623,43 @@ TEST_CASE("Select clause typed named placeholder in select statement") {
     }
 }
 
+TEST_CASE("Select clause function-args typed named placeholder with order bys in select statement") {
+    auto query = std::string("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
+    const std::string expect_query("SELECT string_agg(n, $1 ORDER BY fmod(n, $2) DESC) FROM range(0, 360, 30) AS t(n)");
+
+    auto parser = duckdb::Parser();
+    parser.ParseQuery(std::string(query.c_str(), query.size()));
+
+    CHECK(parser.statements.size() == 1);
+
+    auto& stmt = parser.statements[0];
+    PlaceholderCollector collector("");
+    auto result = collector.walk(stmt);
+
+    SECTION("takeaway query") {
+        CHECK_THAT(stmt->ToString(), Equals(expect_query));
+    }
+    SECTION("potitional placeholder index") {
+        CHECK(result.max_index == 2);
+    }
+    SECTION("picked up placeholder") {
+        CHECK(result.lookup.size() == 2);
+        
+        SECTION("picked up placeholder info#1") {
+            REQUIRE(result.lookup.contains("sep"));
+
+            auto& entry = result.lookup["sep"];
+            CHECK(entry == PlaceholderCollector::Entry{1, "sep", std::make_optional(std::string("VARCHAR"))});
+        }
+        SECTION("picked up placeholder info#2") {
+            REQUIRE(result.lookup.contains("deg"));
+
+            auto& entry = result.lookup["deg"];
+            CHECK(entry == PlaceholderCollector::Entry{2, "deg", std::make_optional(std::string("INTEGER"))});
+        }
+    }
+}
+
 TEST_CASE("Select clause untyped positional placeholder in select statement") {
     std::string query("select a, $1, c, from foo where x = 0");
     const std::string expect_query("SELECT a, $1, c FROM foo WHERE (x = 0)");
@@ -618,7 +673,7 @@ TEST_CASE("Select clause untyped positional placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -649,7 +704,7 @@ TEST_CASE("Select clause auto incl positional placeholder in select statement") 
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -687,7 +742,7 @@ TEST_CASE("Where clause typed named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -718,7 +773,7 @@ TEST_CASE("Table func named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -753,7 +808,7 @@ TEST_CASE("IN operator named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -793,7 +848,7 @@ TEST_CASE("NOT IN operator named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -834,7 +889,7 @@ TEST_CASE("BETWEEN operator named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -875,7 +930,7 @@ TEST_CASE("named placeholder at WHERE function param in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -909,7 +964,7 @@ TEST_CASE("case expr named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -949,7 +1004,7 @@ TEST_CASE("case expr named placeholder w/o else in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -990,7 +1045,7 @@ TEST_CASE("nested case expr named placeholder in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -1036,7 +1091,7 @@ TEST_CASE("case expr named placeholder in select statement#2") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -1088,7 +1143,7 @@ TEST_CASE("named placeholder of scalar subquery in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -1128,7 +1183,7 @@ TEST_CASE("named placeholder of exists subquery in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -1168,7 +1223,7 @@ TEST_CASE("named placeholder of subquery condition in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {
@@ -1203,7 +1258,7 @@ TEST_CASE("named placeholder of lateral join subquery in select statement") {
     PlaceholderCollector collector("");
     auto result = collector.walk(stmt);
 
-    SECTION("walk away query") {
+    SECTION("takeaway query") {
         CHECK_THAT(stmt->ToString(), Equals(expect_query));
     }
     SECTION("potitional placeholder index") {

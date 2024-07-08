@@ -1,1 +1,1 @@
-create table foo(kind int not null, xyz varchar)
+create table Foo(kind int not null, xyz varchar)

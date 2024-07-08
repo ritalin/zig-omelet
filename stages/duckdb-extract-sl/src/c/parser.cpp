@@ -1,3 +1,5 @@
+#include <iomanip>
+
 #include <duckdb.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
@@ -46,40 +48,179 @@ static auto prependDescribeKeyword(duckdb::SelectStatement& stmt) -> void {
     stmt.node.reset(describe_node);
 }
 
-static auto walkExpression(SelectListCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> void {
-    if (expr->HasParameter() || expr->HasSubquery()) {
-        switch (expr->expression_class) {
-        case duckdb::ExpressionClass::PARAMETER:
-            {
-                auto& param_expr = expr->Cast<duckdb::ParameterExpression>();
-                param_expr.identifier = "1";
+static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> std::string {
+    if (expr->alias != "") {
+        return expr->alias;
+    }
+    else {
+        return expr->ToString();
+    }
+}
+
+static auto walkOrderBysNodeInternal(SelectListCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void;
+static auto walkSelectStatementInternal(SelectListCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void;
+
+static auto walkExpressionInternal(SelectListCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
+    switch (expr->expression_class) {
+    case duckdb::ExpressionClass::PARAMETER:
+        {
+            auto& param_expr = expr->Cast<duckdb::ParameterExpression>();
+            param_expr.identifier = "1";
+        }
+        break;
+    case duckdb::ExpressionClass::CAST: 
+        {
+            ::walkExpressionInternal(collector, expr->Cast<duckdb::CastExpression>().child, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::COMPARISON:
+        {
+            auto& cmp_expr = expr->Cast<duckdb::ComparisonExpression>();
+            ::walkExpressionInternal(collector, cmp_expr.left, depth+1);
+            ::walkExpressionInternal(collector, cmp_expr.right, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::BETWEEN:
+        {
+            auto& between_expr = expr->Cast<duckdb::BetweenExpression>();
+            ::walkExpressionInternal(collector, between_expr.input, depth+1);
+            ::walkExpressionInternal(collector, between_expr.lower, depth+1);
+            ::walkExpressionInternal(collector, between_expr.upper, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::CASE:
+        {
+            auto& case_expr = expr->Cast<duckdb::CaseExpression>();
+
+            // whrn-then clause
+            for (auto& case_check: case_expr.case_checks) {
+                ::walkExpressionInternal(collector, case_check.when_expr, depth+1);
+                ::walkExpressionInternal(collector, case_check.then_expr, depth+1);
             }
-            break;
-        case duckdb::ExpressionClass::CAST: 
+            
+            // else clause
+            ::walkExpressionInternal(collector, case_expr.else_expr, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::CONJUNCTION:
+        {
+            auto& conj_expr = expr->Cast<duckdb::ConjunctionExpression>();
+            
+            for (auto& child: conj_expr.children) {
+                ::walkExpressionInternal(collector, child, depth+1);
+            }
+        }
+        break;
+    case duckdb::ExpressionClass::FUNCTION:
+        {
+            auto& fn_expr = expr->Cast<duckdb::FunctionExpression>();
 
-        case duckdb::ExpressionClass::FUNCTION:
+            for (auto& child: fn_expr.children) {
+                ::walkExpressionInternal(collector, child, depth+1);
+            }
 
-        case duckdb::ExpressionClass::COMPARISON:
+            // order by(s)
+            ::walkOrderBysNodeInternal(collector, fn_expr.order_bys, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::SUBQUERY:
+        {
+            auto& sq_expr = expr->Cast<duckdb::SubqueryExpression>();
+            ::walkSelectStatementInternal(collector, *sq_expr.subquery, depth+1);
 
-        case duckdb::ExpressionClass::BETWEEN:
+            if (sq_expr.subquery_type == duckdb::SubqueryType::ANY) {
+                ::walkExpressionInternal(collector, sq_expr.child, depth+1);
+            }
+        }
+        break;
+    case duckdb::ExpressionClass::CONSTANT:
+    case duckdb::ExpressionClass::COLUMN_REF:
+        // no conversion
+        break;
+    case duckdb::ExpressionClass::OPERATOR:
+    default: 
+        collector.warn(std::format("[TODO] Unsupported expression class: {}", magic_enum::enum_name(expr->expression_class)));
+        break;
+    }
+}
 
-        case duckdb::ExpressionClass::CASE:
+static auto walkOrderBysNodeInternal(SelectListCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void {
+    for (auto& order_by: order_bys->orders) {
+        ::walkExpressionInternal(collector, order_by.expression, depth);
+    }
+}
 
-        case duckdb::ExpressionClass::SUBQUERY:
-        default: 
-            collector.warn(std::format("[TODO] Unsupported expression class: {}", magic_enum::enum_name(expr->expression_class)));
-            break;
+static auto walkSelectListItem(SelectListCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
+    if (expr->HasParameter() || expr->HasSubquery()) {
+        if (depth > 0) {
+            ::walkExpressionInternal(collector, expr, depth);
+        }
+        else {
+            auto new_alias = keepColumnName(expr);
+
+            ::walkExpressionInternal(collector, expr, depth);
+
+            if (expr->ToString() != new_alias) {
+                expr->alias = new_alias;
+            }
         }
     }
 }
 
-static auto convertToPositionalParameter(SelectListCollector& collector, duckdb::SelectStatement& stmt) -> void {
+static auto walkTableRef(SelectListCollector& collector, duckdb::unique_ptr<duckdb::TableRef>& table_ref, uint32_t depth) -> void {
+    switch (table_ref->type) {
+    case duckdb::TableReferenceType::BASE_TABLE:
+    case duckdb::TableReferenceType::EMPTY_FROM:
+        // no conversion
+        break;
+    case duckdb::TableReferenceType::TABLE_FUNCTION:
+        {
+            auto& table_fn = table_ref->Cast<duckdb::TableFunctionRef>();
+            ::walkExpressionInternal(collector, table_fn.function, depth);
+        }
+        break;
+    case duckdb::TableReferenceType::JOIN:
+        {
+            auto& join_ref = table_ref->Cast<duckdb::JoinRef>();
+            ::walkTableRef(collector, join_ref.left, depth+1);
+            ::walkTableRef(collector, join_ref.right, depth+1);
+            ::walkExpressionInternal(collector, join_ref.condition, depth+1);
+        }
+        break;
+    case duckdb::TableReferenceType::SUBQUERY:
+        {
+            auto& sq_ref = table_ref->Cast<duckdb::SubqueryRef>();
+            ::walkSelectStatementInternal(collector, *sq_ref.subquery, 0);
+        }
+        break;
+    default:
+        collector.warn(std::format("[TODO] Unsupported table ref type: {}", magic_enum::enum_name(table_ref->type)));
+        break;
+    }
+}
+
+static auto walkSelectStatementInternal(SelectListCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void {
     switch (stmt.node->type) {
     case duckdb::QueryNodeType::SELECT_NODE: 
         {
             auto& select_node =  stmt.node->Cast<duckdb::SelectNode>();
             for (auto& expr: select_node.select_list) {
-                ::walkExpression(collector, expr);
+                ::walkSelectListItem(collector, expr, depth);
+            }
+            form_clause: {
+                ::walkTableRef(collector, select_node.from_table, depth+1);
+            }
+            if (select_node.where_clause) {
+                ::walkExpressionInternal(collector, select_node.where_clause, depth+1);
+            }
+            if (select_node.groups.group_expressions.size() > 0) {
+                collector.warn(std::format("[TODO] Unsupported group by clause"));
+            }
+            if (select_node.having) {
+                collector.warn(std::format("[TODO] Unsupported having clause"));
+            }
+            if (select_node.sample) {
+                collector.warn(std::format("[TODO] Unsupported sample clause"));
             }
         }
         break;
@@ -89,11 +230,15 @@ static auto convertToPositionalParameter(SelectListCollector& collector, duckdb:
     }
 }
 
+static auto walkSelectStatement(SelectListCollector& collector, duckdb::SelectStatement& stmt) -> void {
+    ::walkSelectStatementInternal(collector, stmt, 0);
+}
+
 static auto sendLog(void *socket, const std::string& log_level, const std::string& message) -> void {
 
 }
 
-static auto sendWorkerResult(const std::optional<void *>& socket) -> void {
+static auto sendWorkerResult(const std::optional<void *>& socket, int32_t index) -> void {
 
 }
 
@@ -102,15 +247,19 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
     try {
         auto stmts = this->conn.ExtractStatements(query);
 
-        for (auto& stmt: stmts) {
+        // for (auto& stmt: stmts) {
+        if (stmts.size() > 0) {
+            auto& stmt = stmts[0];
+            const int32_t index = 1;
+
             if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
                 auto& select_stmt = stmt->Cast<duckdb::SelectStatement>();
-                ::convertToPositionalParameter(*this, select_stmt);
+                ::walkSelectStatement(*this, select_stmt);
                 ::prependDescribeKeyword(select_stmt);
             }
             else {
                 // send empty result
-                ::sendWorkerResult(this->socket);
+                ::sendWorkerResult(this->socket, 1);
             }
         }
 
@@ -156,6 +305,9 @@ extern "C" {
     }
 
     auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> void {
+        auto collector = reinterpret_cast<SelectListCollector *>(handle);
+
+        collector->execute(std::string(query, query_len));
     }
 
     auto ParseDescribeStmt() -> void {
@@ -215,7 +367,39 @@ TEST_CASE("Error SQL") {
     }
 }
 
-TEST_CASE("Convert named parameter to positional parameter") {
+TEST_CASE("Convert positional parameter") {
+    auto sql = std::string("select $1 as a from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals("SELECT $1 AS a FROM Foo"));
+    }
+}
+
+TEST_CASE("Convert positional parameter without alias") {
+    auto sql = std::string("select $1 from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals("SELECT $1 FROM Foo"));
+    }
+}
+
+TEST_CASE("Convert named parameter") {
     auto sql = std::string("select $value as a from Foo");
 
     auto db = worker::Database();
@@ -224,11 +408,328 @@ TEST_CASE("Convert named parameter to positional parameter") {
     auto& conn = ::borrowConnection(collector);
     auto stmts = conn.ExtractStatements(sql);
     auto& stmt = stmts[0];
-    ::convertToPositionalParameter(collector, stmt->Cast<duckdb::SelectStatement>());
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
 
     SECTION("result") {
         CHECK_THAT(stmt->ToString(), Equals("SELECT $1 AS a FROM Foo"));
     }
+}
+
+TEST_CASE("Convert named parameter with type cast") {
+    auto sql = std::string("select $value::int as a from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals("SELECT CAST($1 AS INTEGER) AS a FROM Foo"));
+    }
+}
+
+TEST_CASE("Convert named parameter without alias") {
+    auto sql = std::string("select $v, v from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"(SELECT $1 AS "$v", v FROM Foo)"));
+    }
+}
+
+TEST_CASE("Convert named parameter with type cast without alias") {
+    auto sql = std::string("select $user_name::text, user_name from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT CAST($1 AS VARCHAR) AS "CAST($user_name AS VARCHAR)", user_name FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter as expr without alias") {
+    auto sql = std::string("select $x::int + $y::int from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT (CAST($1 AS INTEGER) + CAST($1 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter inslude betteen without alias") {
+    auto sql = std::string("select $v::int between $x::int and $y::int from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($1 AS INTEGER) AND CAST($1 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter inslude case expr without alias#1") {
+    // case
+    auto sql = std::string("select case when $v::int = 0 then $x::int else $y::int end from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($1 AS INTEGER)) ELSE CAST($1 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter inslude case expr without alias#2") {
+    // case
+    auto sql = std::string("select case $v::int when 99 then $x::int else $y::int end from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($1 AS INTEGER)) ELSE CAST($1 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter inslude logical operator without alias") {
+    auto sql = std::string("select $x::int = 123 AND $y::text = 'abc' from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($1 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter in function args without alias") {
+    auto sql = std::string("select string_agg(s, $sep::text) from Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT string_agg(s, CAST($1 AS VARCHAR)) AS "string_agg(s, CAST($sep AS VARCHAR))" FROM Foo)#"));
+    }
+}
+
+TEST_CASE("Convert named parameter in function args without alias#2") {
+    auto sql = std::string("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($1 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM range(0, 360, 30) AS t(n))#"));
+    }
+}
+
+TEST_CASE("Convert named parameter in subquery without alias") {
+    auto sql = std::string(R"#(
+        select (select Foo.v + Point.x + $offset::int from Point)
+        from Foo
+    )#");
+    auto expect = std::string(R"#(SELECT (SELECT ((Foo.v + Point.x) + CAST($1 AS INTEGER)) FROM Point) AS "(SELECT ((Foo.v + Point.x) + CAST($offset AS INTEGER)) FROM Point)" FROM Foo)#");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter without alias in exists clause") {
+    auto sql = std::string(R"#(
+        select exists (select Foo.v - Point.x > $diff::int from Point)
+        from Foo
+    )#");
+    auto expect = std::string(R"#(SELECT EXISTS(SELECT ((Foo.v - Point.x) > CAST($1 AS INTEGER)) FROM Point) AS "EXISTS(SELECT ((Foo.v - Point.x) > CAST($diff AS INTEGER)) FROM Point)" FROM Foo)#");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter without alias in any clause") {
+    auto sql = std::string(R"#(
+        select $v::int = any(select * from range(0, 10, $step::int))
+    )#");
+    auto expect = std::string(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM range(0, 10, CAST($1 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM range(0, 10, CAST($step AS INTEGER))))")#");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter without alias in any clause#2") {
+    auto sql = std::string(R"#(select $v::int = any(range(0, 10, $step::int)))#");
+    auto expect = std::string(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($1 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($step AS INTEGER)))))")#");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter in table function args") {
+    auto sql = std::string("select id * 101 from range(0, 10, $step::int) t(id)");
+    auto expect = std::string("SELECT (id * 101) FROM range(0, 10, CAST($1 AS INTEGER)) AS t(id)");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter in joined condition") {
+    auto sql = std::string("select * from Foo join Bar on Foo.v = Bar.v and Bar.x = $x::int");
+    auto expect = std::string("SELECT * FROM Foo INNER JOIN Bar ON (((Foo.v = Bar.v) AND (Bar.x = CAST($1 AS INTEGER))))");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter in derived table (subquery)") {
+    auto sql = std::string(R"#(
+        select * from (
+            select $v::int, $s::text 
+        ) v
+    )#");
+    auto expect = std::string(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($1 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter in where clause") {
+    auto sql = std::string(R"#(
+        select * from Foo
+        where v = $v::int and kind = $k::int
+    )#");
+    auto expect = std::string("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($1 AS INTEGER)))");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+
+    auto& conn = ::borrowConnection(collector);
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    ::walkSelectStatement(collector, stmt->Cast<duckdb::SelectStatement>());
+
+    SECTION("result") {
+        CHECK_THAT(stmt->ToString(), Equals(expect));
+    }
+}
+
+TEST_CASE("Convert named parameter ????") {
+    // order by
 }
 
 TEST_CASE("Prepend describe") {

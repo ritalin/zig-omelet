@@ -1,12 +1,29 @@
-#include <duckdb.hpp>
 #include <fstream>
+#include <algorithm>
+#include <cctype>
+
+#include <duckdb.hpp>
 
 #include "duckdb_database.hpp"
 #include "duckdb_worker.h"
 
 namespace worker {
 
-static auto initSchemaInternal(duckdb::Connection& conn, const std::string& schema_file_path) -> void {
+namespace fs = std::filesystem;
+
+static auto extensionAccepted(const std:: string& ext) -> bool {
+    std::string canonical_ext = ext;
+    std::transform(
+        ext.begin(), ext.end(), canonical_ext.begin(),
+        [](unsigned char c){ return std::tolower(c); }
+    );
+
+    return canonical_ext == ".sql";
+}
+
+static auto initSchemaInternal(duckdb::Connection& conn, const fs::path& schema_file_path) -> void {
+    if (! extensionAccepted(schema_file_path.extension())) return;
+
     auto file = std::ifstream(schema_file_path);
     auto content = std::string(
         std::istreambuf_iterator<char>(file),
@@ -23,8 +40,6 @@ Database::Database(): db(duckdb::DuckDB(nullptr)) {}
 auto Database::connect() -> duckdb::Connection {
     return duckdb::Connection(this->db);
 }
-
-namespace fs = std::filesystem;
 
 auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
     std::error_code err;
@@ -50,6 +65,8 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
 
 extern "C" {
     auto initDatabase(const char *schema_dir_path, size_t schema_dir_len, DatabaseRef *handle) -> int32_t {
+        *handle = nullptr;
+
         auto db = new worker::Database();
         auto result = db->loadSchemaAll(std::string(schema_dir_path, schema_dir_len));
 
@@ -57,7 +74,6 @@ extern "C" {
             *handle = reinterpret_cast<DatabaseRef>(db);
         }
 
-        *handle = nullptr;
         return result;
     }
 
@@ -96,7 +112,7 @@ TEST_CASE("Load schemas") {
 
         SECTION("relation#1") {
             auto info = conn.TableInfo("Foo");
-            REQUIRE(info);
+            REQUIRE((bool)info == true);
             REQUIRE(info->columns.size() == 2);
 
             SECTION("find column#1") {

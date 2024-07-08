@@ -1,6 +1,9 @@
-# duckdb-extract-placeholder
+# zig-omelet
 
-this tool can extract named placeholder in SQL to convert into positional 
+this tool has following fetues:
+
+* can extract named placeholder in SQL to convert into positional
+* can extract select list in SQL to convert result set type definition
 
 ## Requirement
 

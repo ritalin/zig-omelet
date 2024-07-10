@@ -28,24 +28,13 @@ pub fn build(b: *std.Build) void {
 
     const mod_context = "lib_core";
 
-    lib_module: {
-        const mod = b.addModule("core", .{
-            .root_source_file = b.path("src/root.zig"),
+    const mod_cbor = lib_module_cbor: {
+        const mod = b.addModule("cbor", .{
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
-        native_config: {
-            mod.addIncludePath(b.path("src/c"));
-            mod.addCSourceFiles(.{
-                .root = b.path("src/c"),
-                .files = &.{
-                    "cbor_encode.cpp",
-                },
-            });
-            break:native_config;
-        }
         cbor_native_config: {
-            mod.addIncludePath(b.path("../../vendor/cbor/include"));
             mod.addCSourceFiles(.{
                 .root = b.path("../../vendor/cbor/src/"),
                 .files = &.{
@@ -56,11 +45,55 @@ pub fn build(b: *std.Build) void {
                     "ieee754.c",
                 }
             });
+            mod.addIncludePath(b.path("../../vendor/cbor/include"));
             break:cbor_native_config;
+        }
+        break:lib_module_cbor mod;
+    };
+    lib_module_cbor_support: {
+        const mod = b.addModule("cbor_cpp_support", .{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        });
+
+        native_config: {
+            mod.addIncludePath(b.path("src/c"));
+            mod.addCSourceFiles(.{
+                .root = b.path("src/c"),
+                .files = &.{
+                    "cbor_encode.cpp",
+                },
+                .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
+            });
+            mod.addIncludePath(b.path("../../vendor/cbor/include"));
+            break:native_config;
+        }
+        import_modules: {
+            mod.addImport("cbor", mod_cbor);
+            break:import_modules;
+        }
+        break:lib_module_cbor_support;
+    }
+
+    lib_module: {
+        const mod = b.addModule("core", .{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        });
+
+        native_config: {
+            mod.addIncludePath(b.path("../../vendor/cbor/include"));
+            break:native_config;
         }
         import_modules: {
             mod.addImport("zmq", dep_zzmq.module("zzmq"));
             mod.addImport("clap", dep_clap.module("clap"));
+            mod.addImport("cbor", mod_cbor);
             break:import_modules;
         }
         break:lib_module;
@@ -75,6 +108,7 @@ pub fn build(b: *std.Build) void {
         });
 
         native_config: {
+            mod_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             mod_unit_tests.linkLibC();
             mod_unit_tests.linkLibCpp();
             break:native_config;
@@ -84,22 +118,9 @@ pub fn build(b: *std.Build) void {
             mod_unit_tests.linkSystemLibrary("zmq");
             break:zmq_native_config;
         }
-        cbor_native_config: {
-            mod_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
-            mod_unit_tests.addCSourceFiles(.{
-                .root = b.path("../../vendor/cbor/src/"),
-                .files = &.{
-                    "encoder.c",
-                    "common.c",
-                    "decoder.c",
-                    "parser.c",
-                    "ieee754.c",
-                }
-            });
-            break:cbor_native_config;
-        }
         import_modules: {
             mod_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+            mod_unit_tests.root_module.addImport("cbor", mod_cbor);
             break:import_modules;
         }
         test_runner: {

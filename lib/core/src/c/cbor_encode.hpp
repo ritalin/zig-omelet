@@ -1,4 +1,6 @@
-#include <sstream>
+#pragma once
+
+#include <vector>
 
 class CborEncoder {
     std::vector<char> buf;

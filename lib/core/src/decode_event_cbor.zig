@@ -23,7 +23,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
     switch (event) {
         .ack => {},
         .nack => {},
-        .launched => |payload| {
+        .launched, .failed_launching => |payload| {
             _ = try writer.writeString(payload.stage_name);
         },
         .request_topic => {},
@@ -99,6 +99,13 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
 
             return .{
                 .launched = try types.EventPayload.Stage.init(allocator, stage_name),
+            };
+        },
+        .failed_launching => {
+            const stage_name = try reader.readString();
+
+            return .{
+                .failed_launching = try types.EventPayload.Stage.init(allocator, stage_name),
             };
         },
         .request_topic => return .request_topic,

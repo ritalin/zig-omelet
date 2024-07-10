@@ -62,6 +62,7 @@ pub const EventType = enum (u8) {
     ack = 1,
     nack,
     launched,
+    failed_launching,
     request_topic,
     topic,
     // watch
@@ -313,6 +314,7 @@ pub const Event = union(EventType) {
     nack,
     // Booting events
     launched: EventPayload.Stage,
+    failed_launching: EventPayload.Stage,
     request_topic: void,
     topic: EventPayload.Topic,
     // watch
@@ -339,6 +341,7 @@ pub const Event = union(EventType) {
         // std.debug.print("[DEBUG] Brgin dealloc event: {}\n", .{std.meta.activeTag(self)});
         switch (self) {
             .launched => |payload| payload.deinit(),
+            .failed_launching => |payload| payload.deinit(),
             .topic => |payload| payload.deinit(),
             .source_path => |payload| payload.deinit(),
             .topic_body => |payload| payload.deinit(),
@@ -367,6 +370,11 @@ pub const Event = union(EventType) {
                 .launched => |payload| {
                     return .{
                         .launched = try payload.clone(allocator),
+                    };
+                },
+                .failed_launching => |payload| {
+                    return .{
+                        .failed_launching = try payload.clone(allocator),
                     };
                 },
                 .topic => |payload| {

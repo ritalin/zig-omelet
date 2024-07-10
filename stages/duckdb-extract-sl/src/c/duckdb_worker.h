@@ -7,6 +7,7 @@ enum WorkerResultCode {
     no_error = 0,
     schema_file_not_found,
     invalid_sql,
+    describe_filed,
 };
 
 #ifdef __cplusplus

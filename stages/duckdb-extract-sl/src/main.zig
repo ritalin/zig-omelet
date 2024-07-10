@@ -26,7 +26,7 @@ pub fn main() !void {
     _ = c.initDatabase(path.ptr, path.len, &db);
     defer c.deinitDatabase(db);
 
-    const sql = "select $v::int = any(select * from range(0, 10, $step::int))";
+    const sql = "SELECT $1 || $2::text";
 
     var collector: c.CollectorRef = undefined;
     _ = c.initCollector(db, "1", 1, null, &collector);

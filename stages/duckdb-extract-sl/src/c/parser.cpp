@@ -14,21 +14,30 @@
 
 #include <iostream>
 
+#include "yyjson.hpp"
+#include "json_serializer.hpp"
+
 class SelectListCollector {
 public:
     SelectListCollector(worker::Database *db, std::string id, std::optional<void *> socket) 
-        : conn(std::move(db->connect())), id(id), socket(std::move(socket)) {}
+        : conn(std::move(db->connect())), id(id), socket(socket) {}
 public:
     auto execute(std::string query) -> WorkerResultCode;
 public:
     auto warn(const std::string& message) -> void;
-    auto error(const std::string& message) -> void;
+    auto err(const std::string& message) -> void;
 private:
     duckdb::Connection conn;
     std::string id;
     std::optional<void *> socket;
 private:
     friend auto borrowConnection(SelectListCollector& collector) -> duckdb::Connection&;
+};
+
+struct DescribeResult {
+    std::string field_name;
+    std::optional<std::string> field_type;
+    bool nullable;
 };
 
 auto borrowConnection(SelectListCollector& collector) -> duckdb::Connection& {
@@ -44,8 +53,56 @@ static auto prependDescribeKeyword(duckdb::SelectStatement& stmt) -> void {
 
     auto describe_node = new duckdb::SelectNode();
     describe_node->from_table.reset(describe);
+    describe_node->select_list.push_back(duckdb::StarExpression().Copy());
 
     stmt.node.reset(describe_node);
+
+    stmt.named_param_map = {{"1", 0}};
+    stmt.n_param = 1;
+}
+
+static auto hydrateDescribeResult(const SelectListCollector& collector, const duckdb::unique_ptr<duckdb::QueryResult>& query_result, std::vector<DescribeResult>& results) -> void {
+    for (auto& row: *query_result) {
+        // TODO: dealing with untype
+
+        results.push_back({
+            row.GetValue<std::string>(0),
+            std::make_optional(row.GetValue<std::string>(1)),
+            row.GetValue<std::string>(2) == "YES",
+        });
+    }
+}
+
+static auto describeSelectStatementInternal(SelectListCollector& collector, const duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
+    auto& conn = borrowConnection(collector);
+
+    std::string err_message;
+    WorkerResultCode err;
+
+    try {
+        std::cout << std::format("Q: {}, p: {}", stmt.ToString(), stmt.Copy()->named_param_map[std::string("1")]) << std::endl;
+        // auto prepares_stmt = std::move(conn.Prepare(stmt.Copy()));
+        auto prepares_stmt = std::move(conn.Prepare(stmt.ToString()));
+        // passes null value to all parameter(s)
+        auto param_count = prepares_stmt->GetStatementProperties().parameter_count;
+        auto params = duckdb::vector<duckdb::Value>(param_count);
+
+        auto query_result = prepares_stmt->Execute(params);
+        ::hydrateDescribeResult(collector, query_result, results);
+        return no_error;
+    }
+    catch (const duckdb::ParameterNotResolvedException& ex) {
+        err_message = "Cannot infer type for untyped placeholder";
+        err = describe_filed;
+    }
+    catch (const duckdb::Exception& ex) {
+        err_message = ex.what();
+        err = invalid_sql;
+    }
+
+    collector.err(err_message);
+
+    return err;
 }
 
 static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> std::string {
@@ -70,7 +127,8 @@ static auto walkExpressionInternal(SelectListCollector& collector, duckdb::uniqu
         break;
     case duckdb::ExpressionClass::CAST: 
         {
-            ::walkExpressionInternal(collector, expr->Cast<duckdb::CastExpression>().child, depth+1);
+            auto& cast_expr = expr->Cast<duckdb::CastExpression>();
+            ::walkExpressionInternal(collector, cast_expr.child, depth+1);
         }
         break;
     case duckdb::ExpressionClass::COMPARISON:
@@ -163,6 +221,9 @@ static auto walkSelectListItem(SelectListCollector& collector, duckdb::unique_pt
             if (expr->ToString() != new_alias) {
                 expr->alias = new_alias;
             }
+
+            // TODO: record untyped patameter column (untyped == no type casting)
+
         }
     }
 }
@@ -234,11 +295,17 @@ static auto walkSelectStatement(SelectListCollector& collector, duckdb::SelectSt
     ::walkSelectStatementInternal(collector, stmt, 0);
 }
 
+static auto describeSelectStatement(SelectListCollector& collector, duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
+    ::walkSelectStatement(collector, stmt);
+    ::prependDescribeKeyword(stmt);
+    return ::describeSelectStatementInternal(collector, stmt, results);
+}
+
 static auto sendLog(void *socket, const std::string& log_level, const std::string& message) -> void {
 
 }
 
-static auto sendWorkerResult(const std::optional<void *>& socket, int32_t index) -> void {
+static auto sendWorkerResult(const std::optional<void *>& socket, int32_t index, const std::vector<DescribeResult>& results) -> void {
 
 }
 
@@ -252,15 +319,14 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
             auto& stmt = stmts[0];
             const int32_t index = 1;
 
+            std::vector<DescribeResult> results;
+
             if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-                auto& select_stmt = stmt->Cast<duckdb::SelectStatement>();
-                ::walkSelectStatement(*this, select_stmt);
-                ::prependDescribeKeyword(select_stmt);
+                describeSelectStatement(*this, stmt->Cast<duckdb::SelectStatement>(), results);
             }
-            else {
-                // send empty result
-                ::sendWorkerResult(this->socket, 1);
-            }
+
+            // send as worker result
+            ::sendWorkerResult(this->socket, 1, results);
         }
 
         return no_error;
@@ -269,7 +335,7 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
         message = ex.what();
     }
     
-    this->error(message);
+    this->err(message);
     return invalid_sql;
 }
 
@@ -281,7 +347,7 @@ auto SelectListCollector::warn(const std::string& message) -> void {
         std::cout << std::format("warn: {}", message) << std::endl;
     }
 }
-auto SelectListCollector::error(const std::string& message) -> void {
+auto SelectListCollector::err(const std::string& message) -> void {
     if (this->socket) {
         ::sendLog(this->socket.value(), "err", message);
     }
@@ -294,7 +360,7 @@ auto SelectListCollector::error(const std::string& message) -> void {
 extern "C" {
     auto initCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
-        auto collector = new SelectListCollector(db, std::string(id, id_len), socket);
+        auto collector = new SelectListCollector(db, std::string(id, id_len), socket ? std::make_optional(socket) : std::nullopt);
 
         *handle = reinterpret_cast<CollectorRef>(collector);
         return 0;
@@ -729,8 +795,14 @@ TEST_CASE("Convert named parameter in where clause") {
 }
 
 TEST_CASE("Convert named parameter ????") {
+    // TODO: not implement
     // order by
-}
+    // window function
+    //    * filter
+    //    * partition
+    //    * order by
+    //    * frame
+}//
 
 TEST_CASE("Prepend describe") {
     auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
@@ -749,78 +821,292 @@ TEST_CASE("Prepend describe") {
 }
 
 TEST_CASE("Not exist relation") {
-    auto sql = std::string("SELT $1::int as p from Origin");
+    auto sql = std::string("SELECT $1::int as p from Origin");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
+
+    std::vector<DescribeResult> results;
+    ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+
+    SECTION("describe result") {
+        REQUIRE(results.size() == 0);
+    }
+}
+
+TEST_CASE("Describe SELECT list") {
+    auto sql = std::string("SELECT $a::int AS a, 123, $c::text AS c");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
+
+    std::vector<DescribeResult> results;
+    auto err = ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+
+    SECTION("describe result") {
+        SECTION("err code") {
+            REQUIRE(err == no_error);
+        }
+        SECTION("result count") {
+            REQUIRE(results.size() == 3);
+        }
+        SECTION("row data#1") {
+            auto& row = results[0];
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("a"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#2") {
+            auto& row = results[1];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("123"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#3") {
+            auto& row = results[2];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("c"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("VARCHAR"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+    }
+}
+
+TEST_CASE("Describe SELECT list without placeholder alias") {
+    auto sql = std::string("SELECT $a::int, 123 as b, $c::text");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
+
+    std::vector<DescribeResult> results;
+    auto err = ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+
+    SECTION("describe result") {
+        SECTION("err code") {
+            REQUIRE(err == no_error);
+        }
+        SECTION("result count") {
+            REQUIRE(results.size() == 3);
+        }
+        SECTION("row data#1") {
+            auto& row = results[0];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("CAST($a AS INTEGER)"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#2") {
+            auto& row = results[1];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("b"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#3") {
+            auto& row = results[2];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("CAST($c AS VARCHAR)"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("VARCHAR"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+    }
+}
+
+TEST_CASE("Describe SELECT list with not null definition") {
+    SKIP("(TODO) Need handling nullability manually"); 
 
     auto db = worker::Database();
     auto collector = SelectListCollector(&db, "1", std::nullopt);
 
+    auto& conn = borrowConnection(collector);
+    conn.Query("CREATE TABLE Foo (x INTEGER NOT NULL, v VARCHAR)");
 
-}
+    auto sql = std::string("SELECT x, v FROM Foo WHERE x = $x");
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
 
-TEST_CASE("Describe SELECT list") {
-    auto sql = std::string("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, 123, CAST($1 AS VARCHAR) AS c)");
+    std::vector<DescribeResult> results;
+    auto err = ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
 
-    auto db = duckdb::DuckDB(nullptr);
-    auto conn = duckdb::Connection(db);
-
-    auto stmt = conn.Prepare(sql);
-    SECTION("verify prepared statement") {
-        REQUIRE_FALSE(stmt->HasError());
-    }
-
-    auto param_count = stmt->GetStatementProperties().parameter_count;
-    SECTION("verify prepared statement param count") {
-        CHECK(param_count == 1);
-    }
-    auto params = duckdb::vector<duckdb::Value>(param_count);
-    auto result = stmt->Execute(params);
-
-    SECTION("verify result") {
-        REQUIRE_FALSE(result->HasError());
-    }
-    SECTION("result columns") {
-        CHECK(result->ColumnCount() == 6);
-        CHECK_THAT(result->ColumnName(0), Equals("column_name"));
-        CHECK_THAT(result->ColumnName(1), Equals("column_type"));
-        CHECK_THAT(result->ColumnName(2), Equals("null"));
-        CHECK_THAT(result->ColumnName(3), Equals("key"));
-        CHECK_THAT(result->ColumnName(4), Equals("default"));
-        CHECK_THAT(result->ColumnName(5), Equals("extra"));
-    }
-    SECTION("result data") {
-        auto iter = result->begin();
-
+    SECTION("describe result") {
+        SECTION("err code") {
+            REQUIRE(err == no_error);
+        }
+        SECTION("result count") {
+            REQUIRE(results.size() == 2);
+        }
         SECTION("row data#1") {
-            auto row = *iter;
+            auto& row = results[0];
 
-            CHECK(iter != result->end());
-            CHECK_THAT(row.GetValue<std::string>(0), Equals("a"));
-            CHECK_THAT(row.GetValue<std::string>(1), Equals("INTEGER"));
-            CHECK_THAT(row.GetValue<std::string>(2), Equals("YES"));
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("x"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK_FALSE(row.nullable);
+            }
         }
-        ++iter;
         SECTION("row data#2") {
-            auto row = *iter;
+            auto& row = results[1];
 
-            CHECK(iter != result->end());
-            CHECK_THAT(row.GetValue<std::string>(0), Equals("123"));
-            CHECK_THAT(row.GetValue<std::string>(1), Equals("INTEGER"));
-            CHECK_THAT(row.GetValue<std::string>(2), Equals("YES"));
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("v"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("VARCHAR"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
         }
-        ++iter;
-        SECTION("row data#3") {
-            auto row = *iter;
+    }  
+}
 
-            CHECK(iter != result->end());
-            CHECK_THAT(row.GetValue<std::string>(0), Equals("c"));
-            CHECK_THAT(row.GetValue<std::string>(1), Equals("VARCHAR"));
-            CHECK_THAT(row.GetValue<std::string>(2), Equals("YES"));
+TEST_CASE("Describe SELECT list with untyped placeholder#1") {
+    auto sql = std::string("SELECT $a || $b::text, 123 as b");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
+
+    std::vector<DescribeResult> results;
+    auto err = ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+
+    SECTION("describe result") {
+        SECTION("err code") {
+            REQUIRE(err == no_error);
         }
-        ++iter;
-        SECTION("validate all iteratation") {
-            CHECK_FALSE(iter != result->end());
+        SECTION("result count") {
+            REQUIRE(results.size() == 2);
+        }
+        SECTION("row data#1") {
+            auto& row = results[0];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("($a || CAST($b AS VARCHAR))"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("VARCHAR"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#2") {
+            auto& row = results[1];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("b"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
         }
     }
 }
+
+TEST_CASE("Describe SELECT list with untyped placeholder#2") {
+    auto sql = std::string("SELECT v || $a, 123 as b FROM Foo");
+
+    auto db = worker::Database();
+    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    borrowConnection(collector).Query("CREATE TABLE Foo (x INTEGER NOT NULL, v VARCHAR)");
+    auto stmts = std::move(::borrowConnection(collector).ExtractStatements(sql));
+
+    std::vector<DescribeResult> results;
+    auto err = ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+
+    SECTION("describe result") {
+        SECTION("err code") {
+            REQUIRE(err == no_error);
+        }
+        SECTION("result count") {
+            REQUIRE(results.size() == 2);
+        }
+        SECTION("row data#1") {
+            auto& row = results[0];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("(v || $a)"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("VARCHAR"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+        SECTION("row data#2") {
+            auto& row = results[1];
+
+            SECTION("field name") {
+                CHECK_THAT(row.field_name, Equals("b"));
+            }
+            SECTION("field type") {
+                CHECK(row.field_type);
+                CHECK_THAT(row.field_type.value(), Equals("INTEGER"));
+            }
+            SECTION("nullable") {
+                CHECK(row.nullable);
+            }
+        }
+    }
+}
+// untyped
 
 #endif

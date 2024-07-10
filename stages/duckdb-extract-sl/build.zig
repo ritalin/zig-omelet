@@ -65,12 +65,17 @@ pub fn build(b: *std.Build) void {
             exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
             exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
             exe.linkSystemLibrary("duckdb");
+
+            exe.addIncludePath(b.path("../../vendor/duckdb/third_party/yyjson/include"));
+            exe.addIncludePath(b.path("../../vendor/duckdb/third_party/fmt/include"));
+            exe.addIncludePath(b.path("../../vendor/duckdb/extension/json/include"));
             break:duckdb_native_config;
         }
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
             exe.root_module.addImport("core", dep_lib_core.module("core"));
+            exe.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
         }
@@ -100,6 +105,10 @@ pub fn build(b: *std.Build) void {
             // Apply zmq communication cannel
             try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
 
+            run_cmd.addArgs(&.{
+                "--log-leven=trace",
+                "--schema-dir=./_schema-examples"
+            });
             // This creates a build step. It will be visible in the `zig build --help` menu,
             // and can be selected like this: `zig build run`
             // This will evaluate the `run` step rather than the default, which is "install".
@@ -131,7 +140,6 @@ pub fn build(b: *std.Build) void {
                 },
                 .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
-            // exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
             // exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
             exe_unit_tests.linkLibC();
@@ -148,6 +156,10 @@ pub fn build(b: *std.Build) void {
             exe_unit_tests.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/include" }) });
             exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "duckdb/lib"}) });
             exe_unit_tests.linkSystemLibrary("duckdb");
+
+            exe_unit_tests.addIncludePath(b.path("../../vendor/duckdb/third_party/yyjson/include"));
+            exe_unit_tests.addIncludePath(b.path("../../vendor/duckdb/third_party/fmt/include"));
+            exe_unit_tests.addIncludePath(b.path("../../vendor/duckdb/extension/json/include"));
             break:duckdb_native_config;
         }
         catch2_native_config: {
@@ -156,7 +168,9 @@ pub fn build(b: *std.Build) void {
         }
         import_modules: {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
+            exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
             exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
+            exe_unit_tests.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe_unit_tests.root_module.addImport("test_runner", dep_lib_testing.module("runner"));
             exe_unit_tests.root_module.addOptions("build_options", build_options);
             break:import_modules;

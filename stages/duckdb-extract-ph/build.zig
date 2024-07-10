@@ -51,7 +51,6 @@ pub fn build(b: *std.Build) void {
             exe.defineCMacro("DISABLE_CATCH2_TEST", "1");
             exe.addIncludePath(b.path("src/c"));
             exe.addIncludePath(b.path("../../vendor/magic-enum/include"));
-            exe.addIncludePath(b.path("../../vendor/cbor/include"));
             exe.addIncludePath(b.path("../../vendor/json/include"));
             exe.addIncludePath(b.path("../../lib/core/src/c"));
             exe.linkLibCpp();
@@ -74,6 +73,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
             exe.root_module.addImport("core", dep_lib_core.module("core"));
+            exe.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
         }
@@ -128,7 +128,6 @@ pub fn build(b: *std.Build) void {
                 },
                 .flags = &.{"-std=c++20", if (optimize == .Debug) "-Werror" else ""},
             });
-            exe_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/magic-enum/include"));
             exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
             exe_unit_tests.addIncludePath(b.path("../../lib/core/src/c"));
@@ -154,6 +153,7 @@ pub fn build(b: *std.Build) void {
         }
         import_modules: {
             exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
+            exe_unit_tests.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe_unit_tests.root_module.addImport("test_runner", dep_lib_testing.module("runner"));
             break:import_modules;
         } 

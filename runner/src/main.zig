@@ -49,6 +49,11 @@ pub fn main() !void {
                 .extra_args = &.{},
                 .managed = true,
             },
+            .{
+                .path = exe_prefix ++ "-" ++ "duckdb-extract-sl",
+                .extra_args = &.{},
+                .managed = false,
+            },
         },
         .stage_generate = &.{
             .{

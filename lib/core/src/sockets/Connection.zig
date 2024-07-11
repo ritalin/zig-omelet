@@ -83,11 +83,22 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
 
                             if (entry.event.tag() == .quit) {
                                 try dispatcher.approve();
-                                try dispatcher.state.readyQuit();
+
+                                if (dispatcher.state.level.done) {
+                                    continue;
+                                }
+                                else {
+                                    try dispatcher.state.readyQuit();
+                                }
                             }
                             else if (entry.event.tag() == .quit_all) {
-                                // TODO terminate worker thread
-                                try dispatcher.state.readyQuit();
+                                if (dispatcher.state.level.done) {
+                                    continue;
+                                }
+                                else {
+                                    // TODO terminate worker thread
+                                    try dispatcher.state.readyQuit();
+                                }
                             }
 
                             return .{ 

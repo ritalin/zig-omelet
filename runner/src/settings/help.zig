@@ -11,8 +11,9 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     // Commands
     .{@tagName(.generate), .{.desc = "Generate query parameters", .value = "",}},
     // Command/Generate
-    .{@tagName(.source_dir), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
-    .{@tagName(.output_dir), .{.desc = "Output filder", .value = "PATH", .required = true}},
+    .{@tagName(.source_dir_path), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
+    .{@tagName(.output_dir_path), .{.desc = "Output folder", .value = "PATH", .required = true}},  
+    .{@tagName(.schema_dir_path), .{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
 });
 
 const GeneralSetting = @import("./commands/GeneralSetting.zig");

@@ -6,6 +6,7 @@ const log = core.Logger.SystemDirect(@import("build_options").app_context);
 const help = @import("../help.zig");
 
 source_dir_path: []core.FilePath,
+schema_dir_path: ?core.FilePath,
 output_dir_path: core.FilePath,
 watch: bool,
 
@@ -33,6 +34,7 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
         if (arg_) |arg| {
             switch (arg.param.id) {
                 .source_dir_path => try builder.source_dir_path.append(arg.value),
+                .schema_dir_path => builder.schema_dir_path = arg.value,
                 .output_dir_path => builder.output_dir_path = arg.value,
                 .watch => builder.watch = true,
             }
@@ -43,11 +45,13 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         source_dir_path,
+        schema_dir_path, 
         output_dir_path,
         watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .source_dir_path, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
+            .{.id = .schema_dir_path, .names = .{.long = "schema-dir"}, .takes_value = .one},
             .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
             .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
@@ -59,6 +63,7 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
 
 const Builder = struct {
     source_dir_path: std.ArrayList(?core.FilePath),
+    schema_dir_path: ?core.FilePath = null,
     output_dir_path: ?core.FilePath = null,
     watch: bool = false,
 
@@ -95,6 +100,15 @@ const Builder = struct {
             }
         }
 
+        const schema_dir_path: ?core.FilePath = path: {
+            if (self.schema_dir_path) |path| {
+                break:path try base_dir.realpathAlloc(allocator, path);
+            }
+            else {
+                break:path null;
+            }
+        };
+
         const output_dir_path = path: {
             if (self.output_dir_path == null) {
                 log.warn("Need to specify output folder", .{});
@@ -108,6 +122,7 @@ const Builder = struct {
 
         return .{
             .source_dir_path = try sources.toOwnedSlice(),
+            .schema_dir_path = schema_dir_path,
             .output_dir_path = output_dir_path,
             .watch = self.watch,
         };

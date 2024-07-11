@@ -51,7 +51,7 @@ pub fn main() !void {
             },
             .{
                 .path = exe_prefix ++ "-" ++ "duckdb-extract-sl",
-                .extra_args = &.{},
+                .extra_args = &.{@tagName(.schema_dir_path)},
                 .managed = false,
             },
         },
@@ -66,7 +66,13 @@ pub fn main() !void {
 
     var runner = try Runner.init(allocator, setting);
 
-    var stages = try config.spawnStages(allocator, setting.general, setting.command.generate);
+    var stages = switch (try config.spawnStages(allocator, setting.general, setting.command.generate) ) {
+        .help => |help_setting| {
+            try help_setting.help(std.io.getStdErr().writer());
+            std.process.exit(3);
+        },
+        .success => |stages| stages,
+    };
     defer stages.deinit();
 
     try runner.run(config.stageCount(), setting);

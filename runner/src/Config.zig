@@ -3,6 +3,7 @@ const core = @import("core");
 const clap = @import("clap");
 
 const log = core.Logger.TraceDirect(@import("build_options").app_context);
+const help = @import("./settings/help.zig");
 
 const GeneralSetting = @import("./settings/commands/GeneralSetting.zig");
 const GenerateSetting = @import("./settings/commands/Generate.zig");
@@ -50,9 +51,10 @@ pub const StageProcess = struct {
     }
 };
 
-pub fn spawnStages(self: Config, allocator: std.mem.Allocator, general_setting: GeneralSetting, generate_setting: GenerateSetting) !StageProcess {
+pub fn spawnStages(self: Config, allocator: std.mem.Allocator, general_setting: GeneralSetting, generate_setting: GenerateSetting) !core.settings.LoadResult(StageProcess, help.ArgHelpSetting) {
     var arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
 
     var entries = std.ArrayList(StageProcess.Entry).init(arena.allocator());
     defer entries.deinit();
@@ -68,7 +70,7 @@ pub fn spawnStages(self: Config, allocator: std.mem.Allocator, general_setting: 
 
     WatchStage: {
         const stage = self.stage_watch;
-        try initStageProcess(
+        _ = try initStageProcess(
             managed_allocator, app_dir, stage, 
             general_setting, generate_setting,
             &entries
@@ -77,21 +79,31 @@ pub fn spawnStages(self: Config, allocator: std.mem.Allocator, general_setting: 
     }
     ExtractStage: {
         for (self.stage_extract) |stage| {
-            try initStageProcess(
+            const result = initStageProcess(
                 managed_allocator, app_dir, stage, 
                 general_setting, generate_setting,
                 &entries
             );
+            
+            switch (try result) {
+                .help => |help_setting| return .{ .help = help_setting },
+                .success => {},
+            }
         }
         break :ExtractStage;
     }
     GenerateStage: {
         for (self.stage_generate) |stage| {
-            try initStageProcess(
+            const result = initStageProcess(
                 managed_allocator, app_dir, stage, 
                 general_setting, generate_setting,
                 &entries
             );
+            
+            switch (try result) {
+                .help => |help_setting| return .{ .help = help_setting },
+                .success => {},
+            }
         }
         break :GenerateStage;
     }
@@ -101,16 +113,18 @@ pub fn spawnStages(self: Config, allocator: std.mem.Allocator, general_setting: 
     }
 
     return .{
-        .arena = arena,
-        .entries = try entries.toOwnedSlice(),
+        .success = .{
+            .arena = arena,
+            .entries = try entries.toOwnedSlice(),
+        }
     };
 }
 
 fn initStageProcess(
     allocator: std.mem.Allocator, base_dir: std.fs.Dir, stage: Stage, 
-    general_setting: GeneralSetting, generate_setting: GenerateSetting, entries: *std.ArrayList(StageProcess.Entry)) !void 
+    general_setting: GeneralSetting, generate_setting: GenerateSetting, entries: *std.ArrayList(StageProcess.Entry)) !core.settings.LoadResult(void, help.ArgHelpSetting) 
 {   
-    if (!stage.managed) return;
+    if (!stage.managed) return .success;
 
     var args = std.ArrayList(core.Symbol).init(allocator);
     defer args.deinit();
@@ -120,26 +134,30 @@ fn initStageProcess(
     request_channel: {
         const binder = EndpointConfigMap.get(@tagName(.req_rep));
         std.debug.assert(binder != null);
-        try binder.?(general_setting.stage_endpoints, &args);
+        _ = try binder.?(general_setting.stage_endpoints, &args);
         break :request_channel;
     }
     pub_sub_channel: {
         const binder = EndpointConfigMap.get(@tagName(.pub_sub));
         std.debug.assert(binder != null);
-        try binder.?(general_setting.stage_endpoints, &args);
+        _ = try binder.?(general_setting.stage_endpoints, &args);
         break :pub_sub_channel;
     }
     log_level: {
         const binder = GeneralConfigMap.get(@tagName(.log_level));
         std.debug.assert(binder != null);
-        try binder.?(general_setting, &args);
+        _ = try binder.?(general_setting, &args);
         break :log_level;
     }
     generate: {
         for (stage.extra_args) |extra| {
             const binder = GenerateConfigMap.get(extra);
             std.debug.assert(binder != null);
-            try binder.?(generate_setting, &args);
+            switch (try binder.?(generate_setting, &args)) {
+                .help => |help_setting| return .{ .help = help_setting },
+                .success => {},
+            }
+
         }
         break :generate;
     }
@@ -149,11 +167,13 @@ fn initStageProcess(
     process.stdout_behavior = .Ignore;
 
     try entries.append(process);
+
+    return .success;
 }
 
 fn ConfigBindMap(comptime SettingType: type) type {
     return struct {
-        pub const Fn = *const fn (setting: SettingType, args: *std.ArrayList(core.Symbol)) anyerror!void;
+        pub const Fn = *const fn (setting: SettingType, args: *std.ArrayList(core.Symbol)) anyerror!core.settings.LoadResult(void, help.ArgHelpSetting) ;
         pub const KV = struct {std.meta.FieldEnum(SettingType), Fn};
         
         pub fn init(comptime kvs: []const KV) std.StaticStringMap(Fn) {
@@ -192,6 +212,7 @@ const GeneralConfigMap =
 const GenerateConfigMap = 
     ConfigBindMap(GenerateSetting).init(&.{
         .{.source_dir_path, Binder.Generate.bindSourceDir},
+        .{.schema_dir_path, Binder.Generate.bindSchemaDir},
         .{.output_dir_path, Binder.Generate.bindOutputDir},
         .{.watch, Binder.Generate.bindWatchMode},
     })
@@ -201,47 +222,70 @@ const Binder = struct {
     const General = struct {
         const ArgId = GeneralSetting.StageArgId(.{});
         const decls = ArgId.Decls;
-        fn bindRequestChannel(eps: core.Endpoints, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindRequestChannel(eps: core.Endpoints, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .request_channel);
             try args.append("--" ++ decl.names.long.?);
-
             try args.append(eps.req_rep);
+
+            return .success;
         }
-        fn bindSubscribeChannel(eps: core.Endpoints, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindSubscribeChannel(eps: core.Endpoints, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .subscribe_channel);
             try args.append("--" ++ decl.names.long.?);
-
             try args.append(eps.pub_sub);
+
+            return .success;
         }
-        fn bindLogLevel(setting: GeneralSetting, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindLogLevel(setting: GeneralSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .log_level);
             try args.append("--" ++ decl.names.long.?);
-
             try args.append(@tagName(setting.log_level));
+
+            return .success;
         }
     };
     const Generate = struct {
         const ArgId = GenerateSetting.ArgId(.{});
         const decls = ArgId.Decls;
-        fn bindSourceDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindSourceDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .source_dir_path);
             try args.append("--" ++ decl.names.long.?);
 
             for (setting.source_dir_path) |path| {
                 try args.append(path);
             }
+    
+            return .success;
+    }
+        fn bindSchemaDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+            if (setting.schema_dir_path == null) {
+                log.warn("Need to specify `--schema-dir` arg", .{});
+                return .{
+                    .help = .{.tags = &.{ .cmd_generate, .cmd_general }, .command = .generate },
+                };
+            }
+
+            const decl = comptime findDecl(ArgId, decls, .schema_dir_path);
+            try args.append("--" ++ decl.names.long.?);
+            try args.append(setting.schema_dir_path.?);
+
+            return .success;
         }
-        fn bindOutputDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindOutputDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .output_dir_path);
             try args.append("--" ++ decl.names.long.?);
 
             try args.append(setting.output_dir_path);
+
+            return .success;
         }
-        fn bindWatchMode(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !void {
+        fn bindWatchMode(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             if (setting.watch) {
                 const decl = comptime findDecl(ArgId, decls, .watch);
                 try args.append("--" ++ decl.names.long.?);
             }
+
+            return .success;
         }
     };
 };

@@ -70,10 +70,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     
                     if (left_launching > 0) {
                         left_launching -= 1;
-                        traceLog.debug("Received launched: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received launched: '{s}' (left: {})", .{payload.stage_name, left_launching});
                     }
                     else {
-                        traceLog.debug("Received rebooted: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received rebooted: '{s}' (left: {})", .{payload.stage_name, left_launching});
                     }
 
                     if (left_launching <= 0) {
@@ -86,7 +86,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     if (left_launching > 0) {
                         left_launching -= 1;
-                        traceLog.debug("Received to failed launching: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received to failed launching: '{s}' (left: {})", .{payload.stage_name, left_launching});
                     }
                     if (left_launching <= 0) {
                         try self.onAfterLaunch();
@@ -100,10 +100,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
 
                     left_topic_stage -= 1;
-                    traceLog.debug("Receive 'topic' ({})", .{left_topic_stage});
+                    systemLog.debug("Receive 'topic' ({})", .{left_topic_stage});
+                    try dumpTopics(self.allocator, source_cache.topics);
 
                     if (left_topic_stage <= 0) {
-                        try dumpTopics(self.allocator, source_cache.topics);
                         try self.connection.dispatcher.post(.begin_watch_path);
                     }
                 },
@@ -111,7 +111,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
                     if (try source_cache.addNewEntry(path)) {
-                        traceLog.debug("Received source name: {s}, path: {s}, hash: {s}", .{path.name, path.path, path.hash});
+                        systemLog.debug("Received source name: {s}, path: {s}, hash: {s}", .{path.name, path.path, path.hash});
                         try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
                     }
                 },
@@ -120,13 +120,13 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
 
                     switch (try source_cache.update(payload)) {
                         .expired => {
-                            traceLog.debug("Content expired: {s}", .{payload.header.path});
+                            systemLog.debug("Content expired: {s}", .{payload.header.path});
                         },
                         .missing => {
-                            traceLog.debug("Waiting left content: {s}", .{payload.header.path});
+                            systemLog.debug("Waiting left content: {s}", .{payload.header.path});
                         },
                         .fulfil => {
-                            traceLog.debug("Source is ready: {s}", .{payload.header.name});
+                            systemLog.debug("Source is ready: {s}", .{payload.header.name});
                             if (try source_cache.ready(payload.header)) {
                                 try self.connection.dispatcher.post(.ready_topic_body);
                             }
@@ -153,22 +153,23 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .ready_generate => {
                     if (source_cache.ready_queue.dequeue()) |source| {
                         defer source.deinit();
-                        traceLog.debug("Send source: {s}", .{source.header.name});
+                        systemLog.debug("Send source: {s}", .{source.header.name});
                         try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
                     }
                     else {
+                        // delay 1 cycle
                         try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
                     }
                 },
                 .finish_topic_body => {
                     if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
-                        traceLog.debug("No more sources", .{});
+                        systemLog.debug("No more sources", .{});
                         try self.connection.dispatcher.reply(item.socket, .quit);
     
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                     else {
-                        traceLog.debug("Wait receive next source", .{});
+                        systemLog.debug("Wait receive next source", .{});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
@@ -176,10 +177,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
                     left_launched -= 1;
-                    traceLog.debug("Quit acceptrd: {s} (left: {})", .{payload.stage_name, left_launched});
+                    systemLog.debug("Quit acceptrd: {s} (left: {})", .{payload.stage_name, left_launched});
 
                     if (left_launched <= 0) {
-                        traceLog.debug("All Quit acceptrd", .{});
+                        systemLog.debug("All Quit acceptrd", .{});
                         try self.connection.dispatcher.state.done();
                     }
                 },
@@ -281,17 +282,13 @@ const PayloadCacheManager = struct {
     }
 
     pub fn update(self: *PayloadCacheManager, topic_body: core.EventPayload.TopicBody) !CacheStatus {
-        const entry = try self.cache.getOrPut(topic_body.header.path);
+        if (self.cache.get(topic_body.header.path)) |entry| {
+            if (entry.isExpired(topic_body.header.hash)) return .expired;
 
-        if (entry.found_existing) {
-            if (entry.value_ptr.*.isExpired(topic_body.header.hash)) return .expired;
-        }
-        else {
-            entry.value_ptr.* = try Entry.init(self.arena.allocator(), topic_body.header, self.topics);
-            entry.key_ptr.* = entry.value_ptr.*.path.path;
+            return entry.update(topic_body.bodies);
         }
 
-        return entry.value_ptr.*.update(topic_body.bodies);
+        return .expired;
     }
 
     pub fn ready(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !bool {

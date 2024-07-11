@@ -42,6 +42,18 @@ pub fn build(b: *std.Build) !void {
         b.installArtifact(exe_stage);
         break :stage_duck_db_extract_ph;
     }
+    stage_duck_db_extract_sl: {
+        const dep = b.dependency("stage_duckdb_extract_sl", .{
+            .target = target,
+            .optimize = optimize,
+            .exe_prefix = exe_prefix,
+            .zmq_prefix = zmq_prefix,
+            .duckdb_prefix = duckdb_prefix,
+        });
+        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-sl"}));
+        b.installArtifact(exe_stage);
+        break :stage_duck_db_extract_sl;
+    }
     stage: {
         const dep = b.dependency("stage_ts_generate", .{
             .target = target,
@@ -92,6 +104,7 @@ pub fn build(b: *std.Build) !void {
             test_fright_sc,
             "--source-dir=./_sql-examples",
             "--output-dir=./_dump/ts",
+            "--schema-dir=./_schema-examples",
         });
 
         const run_step = b.step("test-run", "Run the app as test frighting");

@@ -11,6 +11,8 @@ enum WorkerResultCode {
     describe_filed,
 };
 
+#define topic_select_list "select-list"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

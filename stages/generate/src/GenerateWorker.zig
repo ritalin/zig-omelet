@@ -59,6 +59,8 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         },
         .result_set => |field_types| {
             try builder.applyResultSets(field_types);
+            // TODO: 
+            try sendLog(self.allocator, socket, .warn, "applyResultSets is not implemented", .{});
         },
     };
 

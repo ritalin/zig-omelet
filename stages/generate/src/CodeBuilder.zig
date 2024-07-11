@@ -79,7 +79,6 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
 pub fn applyResultSets(self: *Self, fields: []const FieldTypePair) !void {
     _ = self;
     _ = fields;
-    unreachable;
 }
 
 pub fn build(self: Self) !void {
@@ -140,14 +139,15 @@ pub const Parser = struct {
         };
     }
 
-    fn parsePlaceholder(allocator: std.mem.Allocator, json: Symbol) ![]const FieldTypePair {
-        const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, json, .{});
+    fn parsePlaceholder(allocator: std.mem.Allocator, content: Symbol) ![]const FieldTypePair {
+        const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, content, .{});
         return result.value;
     }
 
-    fn parseResultSet(allocator: std.mem.Allocator, json: Symbol) ![]const FieldTypePair {
-        const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, json, .{});
-        return result.value;
+    fn parseResultSet(allocator: std.mem.Allocator, content: Symbol) ![]const FieldTypePair {
+        _ = allocator;
+        _ = content;
+        return &.{};
     }
 
     pub const ResultWalker = struct {

@@ -77,9 +77,19 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
 
                     if (left_launching <= 0) {
-                        traceLog.debug("Received launched all", .{});
-                        // collect topics
-                        try self.connection.dispatcher.post(.request_topic);
+                        try self.onAfterLaunch();
+                    }
+                },
+                .failed_launching => |payload| {
+                    try self.connection.dispatcher.reply(item.socket, .ack);
+                    try self.connection.dispatcher.state.receiveTerminate();
+
+                    if (left_launching > 0) {
+                        left_launching -= 1;
+                        traceLog.debug("Received to failed launching: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                    }
+                    if (left_launching <= 0) {
+                        try self.onAfterLaunch();
                     }
                 },
                 .topic => |payload| {
@@ -186,6 +196,18 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     }
 
     systemLog.debug("terminated", .{});
+}
+
+fn onAfterLaunch(self: Self) !void {
+    if (self.connection.dispatcher.state.level.terminating) {
+        traceLog.debug("Stopping launch process", .{});
+        try self.connection.dispatcher.post(.quit_all);
+    }
+    else {
+        traceLog.debug("Received launched all", .{});
+        // collect topics
+        try self.connection.dispatcher.post(.request_topic);
+    }
 }
 
 fn dumpTopics(allocator: std.mem.Allocator, topics: std.BufSet) !void {

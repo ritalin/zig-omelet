@@ -46,6 +46,7 @@
         .stage_runner = .{ .path = "./runner" },
         .stage_watch_files = .{ .path = "./stages/watch-files" },
         .stage_duckdb_extract_ph = .{ .path = "./stages/duckdb-extract-ph" },
+        .stage_duckdb_extract_sl = .{ .path = "./stages/duckdb-extract-sl" },
         .stage_ts_generate = .{ .path = "./stages/generate" },
     },
 

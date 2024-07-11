@@ -5,7 +5,8 @@
 
 enum WorkerResultCode {
     no_error = 0,
-    schema_file_not_found,
+    schema_dir_not_found,
+    schema_load_failed,
     invalid_sql,
     describe_filed,
 };
@@ -17,8 +18,9 @@ extern "C" {
 typedef struct Database *DatabaseRef;
 typedef struct Collector *CollectorRef;
 
-int32_t initDatabase(const char *schema_dir_path, size_t schema_dir_len, DatabaseRef *handle);
+int32_t initDatabase(DatabaseRef *handle);
 void deinitDatabase(DatabaseRef handle);
+int32_t loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len);
 
 int32_t initCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle);
 void deinitCollector(CollectorRef handle);

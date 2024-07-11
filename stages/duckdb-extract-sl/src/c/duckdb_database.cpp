@@ -21,8 +21,8 @@ static auto extensionAccepted(const std:: string& ext) -> bool {
     return canonical_ext == ".sql";
 }
 
-static auto initSchemaInternal(duckdb::Connection& conn, const fs::path& schema_file_path) -> void {
-    if (! extensionAccepted(schema_file_path.extension())) return;
+static auto initSchemaInternal(duckdb::Connection& conn, const fs::path& schema_file_path) -> WorkerResultCode {
+    if (! extensionAccepted(schema_file_path.extension())) return no_error;
 
     auto file = std::ifstream(schema_file_path);
     auto content = std::string(
@@ -30,7 +30,13 @@ static auto initSchemaInternal(duckdb::Connection& conn, const fs::path& schema_
         std::istreambuf_iterator<char>()
     );
 
-    conn.Query(content);
+    try {
+        conn.Query(content);
+        return no_error;
+    }
+    catch (const duckdb::Exception& ex) {
+        return schema_load_failed;
+    }
 }
 
 // --------------------------------------------------------------------------------------------------------------
@@ -44,7 +50,7 @@ auto Database::connect() -> duckdb::Connection {
 auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
     std::error_code err;
     if (! fs::exists(schema_dir, err)) {
-        return schema_file_not_found;
+        return schema_dir_not_found;
     }
 
     auto conn = this->connect();
@@ -52,7 +58,8 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
 
     for(auto& entry: dir) {
         if (entry.is_regular_file()) {
-            initSchemaInternal(conn, entry.path());
+            auto err = initSchemaInternal(conn, entry.path());
+            if (err != no_error) return err;
         }
     }
 
@@ -64,21 +71,22 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
 // --------------------------------------------------------------------------------------------------------------
 
 extern "C" {
-    auto initDatabase(const char *schema_dir_path, size_t schema_dir_len, DatabaseRef *handle) -> int32_t {
+    auto initDatabase(DatabaseRef *handle) -> int32_t {
         *handle = nullptr;
 
         auto db = new worker::Database();
-        auto result = db->loadSchemaAll(std::string(schema_dir_path, schema_dir_len));
+        *handle = reinterpret_cast<DatabaseRef>(db);
 
-        if (result == 0) {
-            *handle = reinterpret_cast<DatabaseRef>(db);
-        }
-
-        return result;
+        return 0;
     }
 
     auto deinitDatabase(DatabaseRef handle) -> void {
         delete reinterpret_cast<worker::Database *>(handle);
+    }
+
+    auto loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len) -> int32_t {
+        auto db = reinterpret_cast<worker::Database *>(handle);
+        return db->loadSchemaAll(std::string(schema_dir_path, schema_dir_len));
     }
 }
 

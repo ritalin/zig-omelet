@@ -18,8 +18,6 @@ pub fn build(b: *std.Build) void {
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
 
-    std.debug.print("[ts-generate/zmq_prefix] {s}\n", .{zmq_prefix});
-
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
     const dep_core = b.dependency("lib_core", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });

@@ -11,12 +11,12 @@ var level_filter = resetFilter(.info);
 pub fn withAppContext(comptime app_context: Symbol) type {
     return struct {
         allocator: std.mem.Allocator,
-        dispatcher: *Connection.EventDispatcher,
+        dispatcher: *Connection.EventDispatcher(app_context),
         stand_alone: bool,
 
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, dispatcher: *Connection.EventDispatcher, stand_alone: bool) Self {
+        pub fn init(allocator: std.mem.Allocator, dispatcher: *Connection.EventDispatcher(app_context), stand_alone: bool) Self {
             return .{
                 .allocator = allocator,
                 .dispatcher = dispatcher,
@@ -36,11 +36,13 @@ pub fn withAppContext(comptime app_context: Symbol) type {
                     Stage.log(log_level, app_context, buf.items);
                 }
 
-                try self.dispatcher.post(.{
-                    .log = try types.EventPayload.Log.init(
-                        self.allocator, log_level, app_context, buf.items
+                const event: types.Event = .{
+                    .log = try types.Event.Payload.Log.init(
+                        self.allocator, .{log_level, buf.items}
                     )
-                });
+                };
+
+                try self.dispatcher.post(event);
             }
         }
     };

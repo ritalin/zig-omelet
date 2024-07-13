@@ -113,13 +113,17 @@ pub const Writer = struct {
     }
 
     pub fn writeSlice(self: *Self, comptime T: type, values: []const T) !usize {
-        var write_size = try self.writeLength(4, values.len);
+        var write_size = try self.writeSliceHeader(values.len);
 
         for (values) |value| {
             write_size += try self.writeContainerField(T, value);
         }
 
         return write_size;
+    }
+
+    pub inline fn writeSliceHeader(self: *Self, len: usize) !usize {
+        return self.writeLength(4, len);
     }
 
     pub fn writeTuple(self: *Self, comptime T: type, values: T) !usize {
@@ -456,7 +460,7 @@ pub const ReadMemberType = enum {
                         return .Slice;
                     }
                 }
-                @panic(std.fmt.comptimePrint("Unexpected pointer type: {s}\n", .{@typeName(T)}));
+                @compileError(std.fmt.comptimePrint("Unexpected pointer type: {s}\n", .{@typeName(T)}));
             },
             .Struct => |t| {
                 if (t.is_tuple) {
@@ -465,7 +469,7 @@ pub const ReadMemberType = enum {
             },
             else => {}
         }
-        @panic(std.fmt.comptimePrint("Unupported type: {s}\n", .{@typeName(T)}));
+        @compileError(std.fmt.comptimePrint("Unsupported type: {s}\n", .{@typeName(T)}));
     }
 };
 

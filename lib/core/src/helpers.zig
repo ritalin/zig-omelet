@@ -6,6 +6,7 @@ const cbor = @import("./decode_event_cbor.zig");
 const encodeEvent = cbor.encodeEvent;
 const decodeEvent = cbor.decodeEvent;
 
+const StageName = types.Symbol;
 const WAIT_TIME: u64 = 25_000; //nsec
 
 /// make temporary folder for ipc socket
@@ -126,15 +127,14 @@ pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !voi
 }
 
 /// Send event type only
-pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.Event) !void {
+pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, from: StageName, ev: types.Event) !void {
     const data = try encodeEvent(allocator, ev);
     defer allocator.free(data);
     
-    try sendEventTypeInternal(allocator, socket, std.meta.activeTag(ev), true);
+    try sendEventTypeInternal(allocator, socket, ev.tag(), true);
+    try sendPayloadInternal(allocator, socket, from, true);
     try sendPayloadInternal(allocator, socket, data, true);
     try sendPayloadInternal(allocator, socket, "", false);
-
-    // std.time.sleep(WAIT_TIME);
 }
 
 fn sendEventTypeInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.EventType, has_more: bool) !void {
@@ -162,7 +162,7 @@ fn sendPayloadInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, paylo
 }
 
 /// Receive event type only
-pub fn receiveEventType(socket: *zmq.ZSocket) !types.EventType {
+fn receiveEventType(socket: *zmq.ZSocket) !types.EventType {
     var frame = try socket.receive(.{});
     defer frame.deinit();
 
@@ -194,12 +194,27 @@ fn receivePayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Sym
 }
 
 /// Receive event
-pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Event {    
+pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !struct{StageName, types.Event} {    
+    // event type
     const event_type = try receiveEventType(socket);
+    // from
+    const from = try receivePayload(allocator, socket);
+    // payload
     const data = try receivePayload(allocator, socket);
     defer allocator.free(data);
+    // empty
     const term = try receivePayload(allocator, socket);
     defer allocator.free(term);
 
-    return decodeEvent(allocator, event_type, data);
+    return .{from, try decodeEvent(allocator, event_type, data)};
+}
+
+const SocketTypes = std.enums.EnumFieldStruct(zmq.ZSocketType, bool, false);
+const SocketTypeSet = std.enums.EnumSet(zmq.ZSocketType);
+
+fn hasSocketType(socket: *zmq.ZSocket, socket_types: SocketTypes) !bool {
+    var opt: zmq.ZSocketOption = .{.SocketType = undefined};
+    try socket.getSocketOption(&opt);
+
+    return SocketTypeSet.init(socket_types).contains(opt.SocketType);
 }

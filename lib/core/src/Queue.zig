@@ -41,7 +41,7 @@ pub fn Queue(comptime Entry: type) type {
             return if (self.queue.first) |node| node.data else null;
         }
 
-        pub fn revert(self: *Self, entry: Entry) !void {
+        pub fn prepend(self: *Self, entry: Entry) !void {
             const node = try self.allocator.create(std.TailQueue(Entry).Node);
 
             node.data = entry;

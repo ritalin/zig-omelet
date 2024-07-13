@@ -32,6 +32,7 @@ pub fn main() !void {
     defer setting.deinit();
 
     core.Logger.filterWith(setting.general.log_level);
+    // core.Logger.filterWith(.trace);
 
     try core.makeIpcChannelRoot(setting.general.stage_endpoints);
     defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
@@ -52,7 +53,7 @@ pub fn main() !void {
             .{
                 .path = exe_prefix ++ "-" ++ "duckdb-extract-sl",
                 .extra_args = &.{@tagName(.schema_dir_path)},
-                .managed = false,
+                .managed = true,
             },
         },
         .stage_generate = &.{

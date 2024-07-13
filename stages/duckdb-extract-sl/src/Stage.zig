@@ -27,7 +27,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     try connection.subscribe_socket.addFilters(.{
         .request_topic = true,
         .source_path = true,
-        .end_watch_path = true,
+        .finish_source_path = true,
         .quit_all = true,
         .quit = true,
     });
@@ -66,16 +66,12 @@ pub fn run(self: *Self, setting: Setting) !void {
     
     launch: {
         if (try self.tryLoadSchema(setting.schema_dir_path)) {
-            try self.connection.dispatcher.post(.{
-                .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
-            });
-            break :launch;
+            try self.connection.dispatcher.post(.launched);
         }
         else {
-            try self.connection.dispatcher.post(.{
-                .failed_launching = try core.EventPayload.Stage.init(self.allocator, app_context),
-            });
+            try self.connection.dispatcher.post(.failed_launching);
         }
+        break :launch;
     }
 
     while (self.connection.dispatcher.isReady()) {
@@ -92,7 +88,7 @@ pub fn run(self: *Self, setting: Setting) !void {
             
             switch (item.event) {
                 .request_topic => {
-                    const topic = try core.EventPayload.Topic.init(
+                    const topic = try core.Event.Payload.Topic.init(
                         self.allocator, &.{c.topic_select_list}
                     );
                     
@@ -111,9 +107,9 @@ pub fn run(self: *Self, setting: Setting) !void {
                     defer self.allocator.free(payload);
 
                     const event: core.Event = .{
-                        .topic_body = try core.EventPayload.TopicBody.init(
+                        .topic_body = try core.Event.Payload.TopicBody.init(
                             self.allocator,
-                            path.name, path.path, path.hash,
+                            path.values(),
                             &.{ .{c.topic_select_list, payload} }
                         ),
                     };
@@ -121,19 +117,23 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.connection.dispatcher.post(event);
                     try self.logger.log(.trace, "End worker process", .{});
                 },
-                .end_watch_path => {
+                .finish_source_path => {
                     // if (body_lookup.count() == 0) 
                     {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                         try self.connection.dispatcher.state.receiveTerminate();
                 },
-                .quit, .quit_all => {
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
-                    });
+                .quit => {
+                    // if (body_lookup.count() == 0) 
+                    {
+                        try self.connection.dispatcher.quitAccept();
+                    }
                 },
-
+                .quit_all => {
+                    try self.connection.dispatcher.quitAccept();
+                    try self.connection.pull_sink_socket.stop();
+                },
                 else => {
                     try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
                 },

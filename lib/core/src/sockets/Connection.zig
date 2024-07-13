@@ -24,10 +24,16 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
         request_socket: *zmq.ZSocket,
         subscribe_socket: *SubscribeSocket,
         pull_sink_socket: *PullSinkSocket.Worker(WorkerType),
-        dispatcher: *EventDispatcher,
+        dispatcher: *EventDispatcher(stage_name),
 
         pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
-            const request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
+            var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
+            request_socket_opt: {
+                const opt:zmq.ZSocketOption = .{.RoutingId = @constCast(stage_name)}; 
+                try request_socket.setSocketOption(opt);
+                break:request_socket_opt;
+            }
+
             const subscribe_socket = try SubscribeSocket.init(allocator, context);
             const pull_sink_socket = try PullSinkSocket.Worker(WorkerType).init(allocator, context);
 
@@ -37,7 +43,7 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
                 .request_socket = request_socket,
                 .subscribe_socket = subscribe_socket,
                 .pull_sink_socket = pull_sink_socket,
-                .dispatcher = try EventDispatcher.init(
+                .dispatcher = try EventDispatcher(stage_name).init(
                     allocator, request_socket, 
                     &.{request_socket, subscribe_socket.socket, pull_sink_socket.socket},
                     onDispatch
@@ -65,13 +71,12 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
             try self.pull_sink_socket.connect();
         }
 
-        fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
+        fn onDispatch(dispatcher: *EventDispatcher(stage_name)) !?EventDispatcher(stage_name).Entry {
             while (true) {
                 while (dispatcher.receive_queue.dequeue()) |*entry| {
                     switch (entry.event) {
                         .ack => {
                             defer entry.deinit();
-                            Trace.debug("Received 'ack'", .{});
                             try dispatcher.approve();
                         },
                         .nack => {
@@ -79,31 +84,18 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
                             try dispatcher.revertFromPending();
                         },
                         else => {
-                            Trace.debug("Received command: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.receive_queue.count()});
-
-                            if (entry.event.tag() == .quit) {
-                                try dispatcher.approve();
-
-                                if (dispatcher.state.level.done) {
-                                    continue;
-                                }
-                                else {
-                                    try dispatcher.state.readyQuit();
-                                }
+                            if (dispatcher.state.level.done) {
+                                continue;
                             }
-                            else if (entry.event.tag() == .quit_all) {
-                                if (dispatcher.state.level.done) {
-                                    continue;
-                                }
-                                else {
-                                    // TODO terminate worker thread
-                                    try dispatcher.state.readyQuit();
-                                }
+                            else {
+                                try dispatcher.tryReadyQuit(entry.event);
                             }
 
                             return .{ 
+                                .allocator = entry.allocator,
                                 .socket = entry.socket, 
                                 .kind = .post,
+                                .from = entry.from,
                                 .event = entry.event
                             };
                         }
@@ -117,13 +109,10 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
                             continue;
                         }
 
-                        if (entry.event.tag() == .quit_accept) {
-                            try dispatcher.state.done();
-                        }
                         Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
                         try dispatcher.receive_pending.enqueue(entry);
 
-                        helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
+                        helpers.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
                             else => {
                                 Trace.debug("Unexpected error on sending: {}", .{err});
                                 return err;
@@ -143,11 +132,14 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
 
                 while (it.next()) |item| {
                     const event = try helpers.receiveEventWithPayload(dispatcher.allocator, item.socket);
-                    defer event.deinit();
+
+                    Trace.debug("Received command: {} ({})", .{std.meta.activeTag(event[1]), dispatcher.receive_queue.count()});
 
                     try dispatcher.receive_queue.enqueue(.{
+                        .allocator = dispatcher.allocator, 
                         .kind = .response,
-                        .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
+                        .from = event[0],
+                        .socket = item.socket, .event = event[1]
                     });
                 }
             }
@@ -157,203 +149,263 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
     };
 }
 
-pub const Server = struct {
-    allocator: std.mem.Allocator,
-    send_socket: *zmq.ZSocket,
-    reply_socket: *zmq.ZSocket,
-    dispatcher: *EventDispatcher,
+pub fn Server(comptime stage_name: types.Symbol) type {
+    const Trace = Logger.TraceDirect(stage_name);
 
-    const Self = @This();
+    return struct {
+        allocator: std.mem.Allocator,
+        send_socket: *zmq.ZSocket,
+        reply_socket: *zmq.ZSocket,
+        dispatcher: *EventDispatcher(stage_name),
 
-    pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
-        const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
-        const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
+        const Self = @This();
 
-        const self = try allocator.create(Self);
-        self.* = .{
-            .allocator = allocator,
-            .send_socket = send_socket,
-            .reply_socket = reply_socket,
-            .dispatcher = try EventDispatcher.init(allocator, send_socket, &.{reply_socket}, onDispatch),
-        };
+        pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
+            const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
+            const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
 
-        return self;
-    }
+            const self = try allocator.create(Self);
+            self.* = .{
+                .allocator = allocator,
+                .send_socket = send_socket,
+                .reply_socket = reply_socket,
+                .dispatcher = try EventDispatcher(stage_name).init(allocator, send_socket, &.{reply_socket}, onDispatch),
+            };
 
-    pub fn deinit(self: *Self) void {
-        self.reply_socket.deinit();
-        self.send_socket.deinit();
-        self.dispatcher.deinit();     
-        self.allocator.destroy(self);
-    }
+            return self;
+        }
 
-    pub fn bind(self: *Self, endpoints: types.Endpoints) !void {
-        try self.send_socket.bind(endpoints.pub_sub);
-        try self.reply_socket.bind(endpoints.req_rep);
-    }
+        pub fn deinit(self: *Self) void {
+            self.reply_socket.deinit();
+            self.send_socket.deinit();
+            self.dispatcher.deinit();     
+            self.allocator.destroy(self);
+        }
 
-    fn onDispatch(dispatcher: *EventDispatcher) !?EventDispatcher.Entry {
-        while (true) {
-            while (dispatcher.receive_queue.dequeue()) |entry| {
-                return entry;
-            }
+        pub fn bind(self: *Self, endpoints: types.Endpoints) !void {
+            try self.send_socket.bind(endpoints.pub_sub);
+            try self.reply_socket.bind(endpoints.req_rep);
+        }
 
-            if (dispatcher.send_queue.dequeue()) |*entry| {
-                defer entry.deinit();
+        fn onDispatch(dispatcher: *EventDispatcher(stage_name)) !?EventDispatcher(stage_name).Entry {
+            while (true) {
+                while (dispatcher.receive_queue.dequeue()) |entry| {
+                    return entry;
+                }
 
-                helpers.sendEvent(dispatcher.allocator, entry.socket, entry.event) catch |err| switch (err) {
-                    else => {
-                        // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
-                        return err;
+                if (dispatcher.send_queue.dequeue()) |*entry| {
+                    defer entry.deinit();
+
+                    Trace.debug("{s}: {} from [{s}] ({}) ", .{
+                        if (entry.kind == .reply) "Reply" else "Post",
+                        std.meta.activeTag(entry.event), 
+                        entry.from,
+                        dispatcher.send_queue.count()
+                    });
+
+                    helpers.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
+                        else => {
+                            // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
+                            return err;
+                        }
+                    };
+
+                    if (entry.kind == .reply) {
+                        continue;
                     }
-                };
-
-                if (entry.kind == .reply) {
+                }
+                else if (dispatcher.receive_queue.hasMore()) {
                     continue;
                 }
+                else if (dispatcher.state.level.done) {
+                    break;
+                }
+
+                var it = try dispatcher.polling.poll();
+                defer it.deinit();
+
+                while (it.next()) |item| {
+                    const event = helpers.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
+                        // error.InvalidResponse => {
+                        //     try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
+                        //     continue;
+                        // },
+                        else => return err,
+                    };
+
+                    Trace.debug("Received command: {} from [{s}]", .{
+                        event[1].tag(), 
+                        std.mem.sliceTo(event[0], 0),
+                    });
+
+                    try dispatcher.receive_queue.enqueue(.{
+                        .allocator = dispatcher.allocator,
+                        .kind = .response,
+                        .socket = item.socket, 
+                        .from = event[0],
+                        .event = event[1]
+                    });
+                }
             }
-            else if (dispatcher.receive_queue.hasMore()) {
-                continue;
-            }
-            else if (dispatcher.state.level.done) {
-                break;
-            }
 
-            var it = try dispatcher.polling.poll();
-            defer it.deinit();
-
-            while (it.next()) |item| {
-                const event = helpers.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
-                    // error.InvalidResponse => {
-                    //     try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
-                    //     continue;
-                    // },
-                    else => return err,
-                };
-                defer event.deinit();
-
-                try dispatcher.receive_queue.enqueue(.{
-                    .kind = .response,
-                    .socket = item.socket, .event = try event.clone(dispatcher.allocator) 
-                });
-            }
-        }
-
-        return null;     
-    }
-};
-
-pub const EventDispatcher = struct {
-    const DispatchFn = *const fn (dispatcher: *EventDispatcher) anyerror!?Entry;
-
-    allocator: std.mem.Allocator,
-    send_queue: EventQueue(Entry),
-    receive_queue: EventQueue(Entry),
-    receive_pending: EventQueue(Entry),
-    polling: zmq.ZPolling,
-    send_socket: *zmq.ZSocket,
-    on_dispatch: DispatchFn,
-    state: State,
-
-    pub const State = struct {
-        level: std.enums.EnumFieldStruct(enum {booting, ready, terminating, quitting, done}, bool, false),
-
-        pub fn ready(self: *State) !void {
-            self.level.ready = true;
-        }
-        pub fn receiveTerminate(self: *State) !void {
-            self.level.terminating = true;
-        }
-        pub fn readyQuit(self: *State) !void {
-            self.level.quitting = true;
-        }
-        pub fn done(self: *State) !void {
-            self.level.done = true;
+            return null;     
         }
     };
+}
 
-    pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !*EventDispatcher {
-        const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
-        defer allocator.free(polling_sockets);
+pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
+    return struct {
+        const DispatchFn = *const fn (dispatcher: *Self) anyerror!?Entry;
+        const Self = @This();
 
-        for (receive_sockets, 0..) |socket, i| {
-            polling_sockets[i] = zmq.ZPolling.Item.fromSocket(socket, .{ .PollIn = true });
-        }
+        allocator: std.mem.Allocator,
+        send_queue: EventQueue(Entry),
+        receive_queue: EventQueue(Entry),
+        receive_pending: EventQueue(Entry),
+        polling: zmq.ZPolling,
+        send_socket: *zmq.ZSocket,
+        on_dispatch: DispatchFn,
+        state: State,
 
-        const self = try allocator.create(EventDispatcher);
-        self.* = .{
-            .allocator = allocator,
-            .send_queue = EventQueue(Entry).init(allocator),
-            .receive_queue = EventQueue(Entry).init(allocator),
-            .receive_pending = EventQueue(Entry).init(allocator),
-            .polling = try zmq.ZPolling.init(allocator, polling_sockets, .{}), 
-            .send_socket = send_socket, 
-            .on_dispatch = on_dispatch,
-            .state = .{ .level = .{.booting = true} },
+        pub const State = struct {
+            level: std.enums.EnumFieldStruct(enum {booting, ready, terminating, quitting, done}, bool, false),
+
+            pub inline fn ready(self: *State) !void {
+                self.level.ready = true;
+            }
+            pub inline fn receiveTerminate(self: *State) !void {
+                try self.ready();
+                self.level.terminating = true;
+            }
+            pub inline fn readyQuit(self: *State) !void {
+                try self.receiveTerminate();
+                self.level.quitting = true;
+            }
+            pub inline fn done(self: *State) !void {
+                try self.readyQuit();
+                self.level.done = true;
+            }
         };
 
-        return self;
-    }
+        pub fn init(allocator: std.mem.Allocator, send_socket: *zmq.ZSocket, receive_sockets: []const *zmq.ZSocket, on_dispatch: DispatchFn) !*Self {
+            const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
+            defer allocator.free(polling_sockets);
 
-    pub fn deinit(self: *EventDispatcher) void {
-        self.send_queue.deinit();
-        self.receive_queue.deinit();
-        self.receive_pending.deinit();
-        self.polling.deinit();
-        self.allocator.destroy(self);
-    }
+            for (receive_sockets, 0..) |socket, i| {
+                polling_sockets[i] = zmq.ZPolling.Item.fromSocket(socket, .{ .PollIn = true });
+            }
 
-    pub fn post(self: *EventDispatcher, event: types.Event) !void {
-        try self.send_queue.enqueue(.{ 
-            .kind = .post,
-            .socket = self.send_socket, .event = event
-        });
-    }
+            const self = try allocator.create(Self);
+            self.* = .{
+                .allocator = allocator,
+                .send_queue = EventQueue(Entry).init(allocator),
+                .receive_queue = EventQueue(Entry).init(allocator),
+                .receive_pending = EventQueue(Entry).init(allocator),
+                .polling = try zmq.ZPolling.init(allocator, polling_sockets, .{}), 
+                .send_socket = send_socket, 
+                .on_dispatch = on_dispatch,
+                .state = .{ .level = .{.booting = true} },
+            };
 
-    pub fn reply(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
-        try self.send_queue.enqueue(.{ 
-            .kind = .reply,
-            .socket = socket, .event = event
-        });
-    }
-
-    pub fn delay(self: *EventDispatcher, socket: *zmq.ZSocket, event: types.Event) !void {
-        try self.receive_queue.revert(.{
-            .kind = .response,
-            .socket = socket, .event = event
-        });
-    }
-
-    pub fn approve(self: *EventDispatcher) !void {
-        if (self.receive_pending.dequeue()) |*prev| {
-            prev.deinit();
+            return self;
         }
-    }
 
-    pub fn revertFromPending(self: *EventDispatcher) !void {
-        if (self.receive_pending.dequeue()) |entry| {
-            try self.send_queue.revert(entry);
+        pub fn deinit(self: *Self) void {
+            self.send_queue.deinit();
+            self.receive_queue.deinit();
+            self.receive_pending.deinit();
+            self.polling.deinit();
+            self.allocator.destroy(self);
         }
-    }
 
-    pub fn isReady(self: *EventDispatcher) bool {
-        if (self.receive_queue.hasMore()) return true;
-        if (self.send_queue.hasMore()) return true;
-
-        return ! self.state.level.done;
-    }
-
-    pub fn dispatch(self: *EventDispatcher) !?Entry {
-        return self.on_dispatch(self);
-    }
-
-    pub const Entry = struct {
-        socket: *zmq.ZSocket,
-        kind: enum { post, reply, response},
-        event: types.Event,
-
-        pub fn deinit(self: @This()) void {
-            self.event.deinit();
+        pub fn post(self: *Self, event: types.Event) !void {
+            try self.send_queue.enqueue(.{ 
+                .allocator = self.allocator,
+                .kind = .post,
+                .socket = self.send_socket, 
+                .from = try self.allocator.dupe(u8, stage_name), 
+                .event = event,
+            });
         }
+
+        pub fn reply(self: *Self, socket: *zmq.ZSocket, event: types.Event) !void {
+            try self.send_queue.prepend(.{ 
+                .allocator = self.allocator,
+                .kind = .reply,
+                .socket = socket, 
+                .from = try self.allocator.dupe(u8, stage_name), 
+                .event = event,
+            });
+        }
+
+        pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: types.Event) !void {
+            try self.receive_queue.prepend(.{
+                .allocator = self.allocator,
+                .kind = .response,
+                .socket = socket, 
+                .from = try self.allocator.dupe(u8, from), 
+                .event = try event.clone(self.allocator)
+            });
+        }
+
+        pub fn tryReadyQuit(self: *Self, event: types.Event) !void {
+            if (event.tag() == .quit) {
+                try self.approve();
+                try self.state.readyQuit();
+            }
+            else if (event.tag() == .quit_all) {
+                try self.state.readyQuit();
+            }
+        }
+
+        pub fn quitAccept(self: *Self) !void {
+            try self.send_queue.prepend(.{
+                .allocator = self.allocator,
+                .kind = .post,
+                .socket = self.send_socket, 
+                .from = try self.allocator.dupe(u8, stage_name),
+                .event = .quit_accept,
+            });
+        }
+
+        pub fn approve(self: *Self) !void {
+            if (self.receive_pending.dequeue()) |*prev| {
+                defer prev.deinit();
+
+                if (prev.event.tag() == .quit_accept) {
+                    try self.state.done();
+                }
+            }
+        }
+
+        pub fn revertFromPending(self: *Self) !void {
+            if (self.receive_pending.dequeue()) |entry| {
+                try self.send_queue.prepend(entry);
+            }
+        }
+
+        pub fn isReady(self: *Self) bool {
+            if (self.receive_queue.hasMore()) return true;
+            if (self.send_queue.hasMore()) return true;
+
+            return ! self.state.level.done;
+        }
+
+        pub fn dispatch(self: *Self) !?Entry {
+            return self.on_dispatch(self);
+        }
+
+        pub const Entry = struct {
+            allocator: std.mem.Allocator,
+            socket: *zmq.ZSocket,
+            kind: enum { post, reply, response},
+            from: types.Symbol,
+            event: types.Event,
+
+            pub fn deinit(self: @This()) void {
+                self.allocator.free(self.from);
+                self.event.deinit();
+            }
+        };
     };
-};
+}

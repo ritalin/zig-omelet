@@ -20,9 +20,13 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
     var connection = try Connection.init(allocator, &ctx);
+
+    // try connection.subscribe_socket.socket.setSocketOption(.{.Subscribe=""});
+
     try connection.subscribe_socket.addFilters(.{
-        .begin_watch_path = true,
+        .ready_watch_path = true,
         .quit = true,
+        .quit_all = true,
     });
     try connection.connect(setting.endpoints);
 
@@ -55,9 +59,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 
     launch: {
-        try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
-        });
+        try self.connection.dispatcher.post(.launched);
         break :launch;
     }
 
@@ -76,14 +78,16 @@ pub fn run(self: *Self, setting: Setting) !void {
             defer item.deinit();
             
             switch (item.event) {
-                .begin_watch_path => {
+                .ready_watch_path => {
                     try self.sendAllFiles(setting.sources);
-                    try self.connection.dispatcher.post(.end_watch_path);
+                    try self.connection.dispatcher.post(.finish_watch_path);
                 },
-                .quit, .quit_all => {
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
-                    });
+                .quit => {
+                    try self.connection.dispatcher.quitAccept();
+                },
+                .quit_all => {
+                    try self.connection.dispatcher.quitAccept();
+                    try self.connection.pull_sink_socket.stop();
                 },
                 else => {
                     try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
@@ -136,8 +140,8 @@ fn sendFile(self: *Self, base_dir: std.fs.Dir, file_path: core.FilePath, prefix:
 
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
-        .source_path = try core.EventPayload.SourcePath.init(
-            self.allocator, name, file_path_abs, hash, 1
+        .source_path = try core.Event.Payload.SourcePath.init(
+            self.allocator, .{name, file_path_abs, hash, 1}
         ),
     });
 }

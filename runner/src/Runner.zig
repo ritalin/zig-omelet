@@ -15,12 +15,12 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.Connection.Server,
+connection: *core.sockets.Connection.Server(app_context),
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
 
-    var connection = try core.sockets.Connection.Server.init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Server(app_context).init(allocator, &ctx);
     try connection.bind(setting.general.runner_endpoints);
 
     return .{
@@ -62,31 +62,29 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
         if (_item) |*item| {
             defer item.deinit();
 
-            traceLog.debug("Received command: {}", .{std.meta.activeTag(item.event)});
-
             switch (item.event) {
-                .launched => |payload| {
+                .launched => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
                     
                     if (left_launching > 0) {
                         left_launching -= 1;
-                        systemLog.debug("Received launched: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received launched: '{s}' (left: {})", .{item.from, left_launching});
                     }
                     else {
-                        systemLog.debug("Received rebooted: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received rebooted: '{s}' (left: {})", .{item.from, left_launching});
                     }
 
                     if (left_launching <= 0) {
                         try self.onAfterLaunch();
                     }
                 },
-                .failed_launching => |payload| {
+                .failed_launching => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
                     try self.connection.dispatcher.state.receiveTerminate();
 
                     if (left_launching > 0) {
                         left_launching -= 1;
-                        systemLog.debug("Received to failed launching: '{s}' (left: {})", .{payload.stage_name, left_launching});
+                        systemLog.debug("Received to failed launching: '{s}' (left: {})", .{item.from, left_launching});
                     }
                     if (left_launching <= 0) {
                         try self.onAfterLaunch();
@@ -104,7 +102,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try dumpTopics(self.allocator, source_cache.topics);
 
                     if (left_topic_stage <= 0) {
-                        try self.connection.dispatcher.post(.begin_watch_path);
+                        try self.connection.dispatcher.post(.ready_watch_path);
                     }
                 },
                 .source_path => |path| {
@@ -115,8 +113,21 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
                     }
                 },
+                .finish_watch_path => {
+                    traceLog.debug("Watching stage finished", .{});
+                    if (oneshot) {
+                        // request quit for Watch stage
+                        traceLog.debug("Request quit for Watching stage", .{});
+                        try self.connection.dispatcher.reply(item.socket, .quit);
+                        try self.connection.dispatcher.state.receiveTerminate();
+                    }
+                    else {
+                        try self.connection.dispatcher.reply(item.socket, .ack);
+                    }
+                },
                 .topic_body => |payload| {
-                    try self.connection.dispatcher.reply(item.socket, .ack);
+                    // delay 1 cycle
+                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path);
 
                     switch (try source_cache.update(payload)) {
                         .expired => {
@@ -134,50 +145,56 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .invalid_topic_body => |payload| {
-                    log(payload.log_level, payload.log_from, payload.log_content);
+                    log(payload.log.level, item.from, payload.log.content);
 
                     try source_cache.dismiss(payload.header);
-                    try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
+                    // delay 1 cycle
+                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path);
                 },
-                .end_watch_path => {
-                    traceLog.debug("Received finished somewhere", .{});
-                    if (oneshot) {
-                        try self.connection.dispatcher.state.receiveTerminate();
-                        try self.connection.dispatcher.reply(item.socket, .quit);
-                        try self.connection.dispatcher.post(.end_watch_path);
+                .pending_finish_source_path => {
+                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
+                        systemLog.debug("No more source path", .{});
+                        try self.connection.dispatcher.reply(item.socket, .ack);
+                        try self.connection.dispatcher.post(.finish_source_path);
                     }
                     else {
+                        systemLog.debug("Wait receive next source path", .{});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
+                .finish_topic_body => {
+                    // request quit for Extract stage
+                    try self.connection.dispatcher.reply(item.socket, .quit);
+                },
                 .ready_generate => {
                     if (source_cache.ready_queue.dequeue()) |source| {
-                        defer source.deinit();
                         systemLog.debug("Send source: {s}", .{source.header.name});
-                        try self.connection.dispatcher.reply(item.socket, .{.topic_body = try source.clone(self.allocator)});
+                        try self.connection.dispatcher.reply(item.socket, .{.topic_body = source});
                     }
                     else {
                         // delay 1 cycle
-                        try self.connection.dispatcher.delay(item.socket, .finish_topic_body);
+                        try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_topic_body);
                     }
                 },
-                .finish_topic_body => {
-                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
+                .pending_finish_topic_body => {
+                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.isEmpty())) {
                         systemLog.debug("No more sources", .{});
-                        try self.connection.dispatcher.reply(item.socket, .quit);
-    
-                        try self.connection.dispatcher.post(.finish_topic_body);
+                        try self.connection.dispatcher.reply(item.socket, .finish_topic_body);
                     }
                     else {
                         systemLog.debug("Wait receive next source", .{});
                         try self.connection.dispatcher.reply(item.socket, .ack);
                     }
                 },
-                .quit_accept => |payload| {
+                .finish_generate => {
+                    // request quit for Generate stage
+                    try self.connection.dispatcher.reply(item.socket, .quit);
+                },
+                .quit_accept => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
                     left_launched -= 1;
-                    systemLog.debug("Quit acceptrd: {s} (left: {})", .{payload.stage_name, left_launched});
+                    systemLog.debug("Quit acceptrd: {s} (left: {})", .{item.from, left_launched});
 
                     if (left_launched <= 0) {
                         systemLog.debug("All Quit acceptrd", .{});
@@ -186,7 +203,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 },
                 .log => |payload| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
-                    log(payload.level, payload.from, payload.content);
+                    log(payload.level, item.from, payload.content);
                 },
                 else => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
@@ -235,7 +252,7 @@ const PayloadCacheManager = struct {
     arena: *std.heap.ArenaAllocator,
     cache: std.StringHashMap(*Entry),
     topics: std.BufSet,
-    ready_queue: core.Queue(core.EventPayload.TopicBody),
+    ready_queue: core.Queue(core.Event.Payload.TopicBody),
 
     pub const CacheStatus = enum {
         expired, missing, fulfil
@@ -250,7 +267,7 @@ const PayloadCacheManager = struct {
             .arena = arena,
             .topics = std.BufSet.init(managed_allocator),
             .cache = std.StringHashMap(*Entry).init(managed_allocator),
-            .ready_queue = core.Queue(core.EventPayload.TopicBody).init(managed_allocator),
+            .ready_queue = core.Queue(core.Event.Payload.TopicBody).init(managed_allocator),
         };
     }
 
@@ -265,23 +282,25 @@ const PayloadCacheManager = struct {
         child.destroy(self.arena);
     }
 
-    fn addNewEntry(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !bool {
-        const entry = try self.cache.getOrPut(path.path);
+    fn addNewEntry(self: *PayloadCacheManager, source: core.Event.Payload.SourcePath) !bool {
+        const allocator = self.arena.allocator();
+
+        const path = try allocator.dupe(u8, source.path);
+        defer allocator.free(path);
+        const entry = try self.cache.getOrPut(path);
 
         if (entry.found_existing) {
-
-            if (entry.value_ptr.*.isExpired(path.hash)) return false;
-
+            if (! entry.value_ptr.*.isExpired(source.hash)) return false;
             entry.value_ptr.*.deinit();
         }
         
-        entry.value_ptr.* = try Entry.init(self.arena.allocator(), path, self.topics);
-        entry.key_ptr.* = entry.value_ptr.*.path.path;
+        entry.value_ptr.* = try Entry.init(allocator, source, self.topics);
+        entry.key_ptr.* = entry.value_ptr.*.source.path;
 
         return true;
     }
 
-    pub fn update(self: *PayloadCacheManager, topic_body: core.EventPayload.TopicBody) !CacheStatus {
+    pub fn update(self: *PayloadCacheManager, topic_body: core.Event.Payload.TopicBody) !CacheStatus {
         if (self.cache.get(topic_body.header.path)) |entry| {
             if (entry.isExpired(topic_body.header.hash)) return .expired;
 
@@ -291,14 +310,14 @@ const PayloadCacheManager = struct {
         return .expired;
     }
 
-    pub fn ready(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !bool {
+    pub fn ready(self: *PayloadCacheManager, path: core.Event.Payload.SourcePath) !bool {
         if (self.cache.fetchRemove(path.path)) |kv| {
             var entry: *Entry = kv.value;
             defer entry.deinit();
 
             const a = self.arena.allocator();
 
-            const bodies = try a.alloc(core.EventPayload.TopicBody.Item.Values, entry.contents.count());
+            const bodies = try a.alloc(core.StructView(core.Event.Payload.TopicBody.Item), entry.contents.count());
             defer a.free(bodies);
             
             var it = entry.contents.iterator();
@@ -310,34 +329,37 @@ const PayloadCacheManager = struct {
             }
 
             try self.ready_queue.enqueue(
-                try core.EventPayload.TopicBody.init(a, entry.path.name, entry.path.path, entry.path.hash, bodies)
+                try core.Event.Payload.TopicBody.init(a, entry.source.values(), bodies)
             );
 
-            // return self.cache.fetchRemove(path.path) != null;
+            return true;
         }
 
         return false;
     }
 
-    pub fn dismiss(self: *PayloadCacheManager, path: core.EventPayload.SourcePath) !void {
+    pub fn dismiss(self: *PayloadCacheManager, path: core.Event.Payload.SourcePath) !void {
         if (self.cache.fetchRemove(path.path)) |kv| {
             var entry = kv.value;
             defer entry.deinit();
-            // _ = self.cache.fetchRemove(path.path);
         }
+    }
+
+    pub fn isEmpty(self: PayloadCacheManager) bool {
+        return (self.cache.count() == 0) and (self.ready_queue.count() == 0);
     }
 
     const Entry = struct {
         allocator: std.mem.Allocator, 
-        path: core.EventPayload.SourcePath,
+        source: core.Event.Payload.SourcePath,
         left_topics: std.BufSet,
         contents: std.BufMap,
 
-        pub fn init(allocator: std.mem.Allocator, path: core.EventPayload.SourcePath, topics: std.BufSet) !*Entry {
+        pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.SourcePath, topics: std.BufSet) !*Entry {
             const self = try allocator.create(Entry);
             self.* =  .{
                 .allocator = allocator,
-                .path = try path.clone(allocator),
+                .source = try source.clone(allocator),
                 .left_topics = try topics.cloneWithAllocator(allocator),
                 .contents = std.BufMap.init(allocator),
             };
@@ -348,16 +370,16 @@ const PayloadCacheManager = struct {
         pub fn deinit(self: *Entry) void {
             self.contents.deinit();
             self.left_topics.deinit();
-            self.path.deinit();
+            self.source.deinit();
             self.allocator.destroy(self);
             self.* = undefined;
         }
 
         pub fn isExpired(self: *Entry, hash: Symbol) bool {
-            return ! std.mem.eql(u8, self.path.hash, hash);
+            return ! std.mem.eql(u8, self.source.hash, hash);
         }
 
-        pub fn update(self: *Entry, bodies: []const core.EventPayload.TopicBody.Item) !CacheStatus {
+        pub fn update(self: *Entry, bodies: []const core.Event.Payload.TopicBody.Item) !CacheStatus {
             for (bodies) |body| {
                 try self.contents.put(body.topic, body.content);
                 self.left_topics.remove(body.topic);
@@ -391,7 +413,7 @@ test "Runner#1" {
     // launched
     try core.sendEvent(
         allocator, send_socket,
-        .{.launched = try core.EventPayload.Stage.init(allocator, "TEST")}
+        .{.launched = try core.Event.Payload.Stage.init(allocator, "TEST")}
     );
     event = try core.receiveEventWithPayload(allocator, send_socket);
     std.debug.print("[C:Rec] {}\n", .{event});
@@ -399,7 +421,7 @@ test "Runner#1" {
     // quit
     try core.sendEvent(
         allocator, send_socket,
-        .{.quit_accept = try core.EventPayload.Stage.init(allocator, "TEST")}
+        .{.quit_accept = try core.Event.Payload.Stage.init(allocator, "TEST")}
     );
 
     t.join();

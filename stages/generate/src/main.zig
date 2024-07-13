@@ -6,7 +6,7 @@ const Setting = @import("./Setting.zig");
 const log = core.Logger.TraceDirect(@import("build_options").app_context);
 
 pub fn main() !void {
-    var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
+    var gpa = (std.heap.GeneralPurposeAllocator(.{.stack_trace_frames=12}){});
     defer {
         log.debug("Leak? {}", .{gpa.deinit()});
     }

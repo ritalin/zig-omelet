@@ -14,7 +14,7 @@ const ExtractWorker = @import("./ExtractWorker.zig");
 const Self = @This();
 
 allocator: std.mem.Allocator,
-context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む
+context: *zmq.ZContext, // TODO 初期化をConnectionに組み込む?
 connection: *Connection,
 logger: Logger,
 
@@ -26,7 +26,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     try connection.subscribe_socket.addFilters(.{
         .request_topic = true,
         .source_path = true,
-        .end_watch_path = true,
+        .finish_source_path = true,
         .quit_all = true,
         .quit = true,
     });
@@ -57,9 +57,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 
     launch: {
-        try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
-        });
+        try self.connection.dispatcher.post(.launched);
         break :launch;
     }
 
@@ -82,7 +80,7 @@ pub fn run(self: *Self, setting: Setting) !void {
             
             switch (item.event) {
                 .request_topic => {
-                    const topic = try core.EventPayload.Topic.init(
+                    const topic = try core.Event.Payload.Topic.init(
                         self.allocator, &.{ExtractWorker.Topics.Query, ExtractWorker.Topics.Placeholder}
                     );
                     
@@ -102,7 +100,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.connection.pull_sink_socket.spawn(worker);
                 },
                 .worker_result => |result| {
-                    const event = try self.processWorkerResult(result.content, &body_lookup);
+                    const event = try self.processWorkerResult(item.from, result.content, &body_lookup);
                     try self.connection.dispatcher.post(event);
 
                     try self.logger.log(.trace, "End worker process", .{});
@@ -111,7 +109,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
                 },
-                .end_watch_path => {
+                .finish_source_path => {
                     if (body_lookup.count() == 0) {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
@@ -119,10 +117,14 @@ pub fn run(self: *Self, setting: Setting) !void {
                         try self.connection.dispatcher.state.receiveTerminate();
                     }
                 },
-                .quit, .quit_all => {
-                    try self.connection.dispatcher.post(.{
-                        .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
-                    });
+                .quit => {
+                    if (body_lookup.count() == 0) {
+                        try self.connection.dispatcher.quitAccept();
+                    }
+                },
+                .quit_all => {
+                    try self.connection.dispatcher.quitAccept();
+                    try self.connection.pull_sink_socket.stop();
                 },
                 .log => |log| {
                     try self.logger.log(log.level, "{s}", .{log.content});
@@ -140,7 +142,7 @@ const WorkerResultTags = std.StaticStringMap(core.EventType).initComptime(.{
     .{"log", .log},
 });
 
-fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !core.Event {
+fn processWorkerResult(self: *Self, from: Symbol, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !core.Event {
     var reader = core.CborStream.Reader.init(result_content);
 
     const event_tag = try reader.readString();
@@ -159,10 +161,10 @@ fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringH
         if (WorkerResultTags.get(event_tag)) |tag| {
             switch (tag) {
                 .topic_body => {
-                    return try processParseResult(self.allocator, &reader, entry);
+                    return try processParseResult(self.allocator, from, &reader, entry);
                 },
                 .log => {
-                    return try processLogResult(self.allocator, &reader, entry);
+                    return try processLogResult(self.allocator, from, &reader, entry);
                 },
                 else => unreachable,
             }
@@ -170,37 +172,37 @@ fn processWorkerResult(self: *Self, result_content: Symbol, lookup: *std.StringH
     }
 
     return .{
-        .log = try core.EventPayload.Log.init(self.allocator, .warn, app_context, "Unknown worker result"),
+        .log = try core.Event.Payload.Log.init(self.allocator, .{.warn, "Unknown worker result"}),
     };
 }
 
-fn processParseResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+fn processParseResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+    _ = from;
     const item_count = try reader.readUInt(u32);
     const item_index = try reader.readUInt(u32);
 
     defer entry.item_count = item_count;
 
-    const result = try reader.readSlice(allocator, core.EventPayload.TopicBody.Item.Values);
+    const result = try reader.readSlice(allocator, core.StructView(core.Event.Payload.TopicBody.Item));
     defer allocator.free(result);
 
-    var topic_body = try core.EventPayload.TopicBody.init(allocator, entry.path.name, entry.path.path, entry.path.hash, result);
+    var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), result);
     return .{
         .topic_body = topic_body.withNewIndex(item_index, item_count),
     };
 }
 
-fn processLogResult(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+fn processLogResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
     const log_level = try reader.readString();
-    const from = try reader.readString();
     const content = try reader.readString();
     
     const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{app_context, from});
     defer allocator.free(full_from);
 
     return .{
-        .invalid_topic_body = try core.EventPayload.InvalidTopicBody.init(allocator, 
-            entry.path.name, entry.path.path, entry.path.hash,
-            stringToLogLevel(log_level), full_from, content
+        .invalid_topic_body = try core.Event.Payload.InvalidTopicBody.init(allocator, 
+            entry.path.values(),
+            .{stringToLogLevel(log_level), content}
         ),
     };
 }
@@ -210,7 +212,7 @@ fn stringToLogLevel(s: core.Symbol) core.LogLevel {
 }
 
 const LookupEntry = struct {
-    path: core.EventPayload.SourcePath,
+    path: core.Event.Payload.SourcePath,
     ref_count: usize,
     item_count: usize,
 };

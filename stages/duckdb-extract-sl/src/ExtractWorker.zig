@@ -27,7 +27,7 @@ const ResultSet = struct { core.Symbol, core.Symbol, bool };
 pub fn run(self: *Self, socket: *zmq.ZSocket) !core.Symbol {
     const result_set: []const ResultSet = &.{
         .{"a", "INTEGER", true },
-        .{"b", "VARCHAR", true },
+        .{"b", "VARCHAR", false },
     };
 
     var writer = try core.CborStream.Writer.init(self.allocator);

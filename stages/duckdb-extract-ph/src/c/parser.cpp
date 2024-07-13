@@ -329,6 +329,10 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
         auto event_type = std::string("worker_result");
         zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
+    from: {
+        auto from = std::string("extract-task");
+        zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
+    }
     payload: {
         std::vector<char> buf;
 
@@ -374,6 +378,10 @@ static auto sendLog(void *socket, const std::string& id, const std::string& log_
         auto event_type = std::string("worker_result");
         ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
+    from: {
+        auto from = std::string("extract-task");
+        zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
+    }
     payload: {
         CborEncoder payload_encoder;
 
@@ -385,9 +393,6 @@ static auto sendLog(void *socket, const std::string& id, const std::string& log_
         }
         log_level: {
             payload_encoder.addString(log_level);
-        }
-        log_from: {
-            payload_encoder.addString("task");
         }
         log_content: {
             payload_encoder.addString(std::format("{} ({})", msg, id));

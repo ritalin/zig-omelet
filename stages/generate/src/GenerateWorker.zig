@@ -7,12 +7,12 @@ const CodeBuilder = @import("./CodeBuilder.zig");
 const Self = @This();
 
 allocator: std.mem.Allocator,
-source: core.EventPayload.TopicBody,
+source: core.Event.Payload.TopicBody,
 output_base_path: core.FilePath,
 output_path: core.FilePath,
 is_new: bool,
 
-pub fn init(allocator: std.mem.Allocator, source: core.EventPayload.TopicBody, output_dir_path: core.FilePath) !*Self {
+pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, output_dir_path: core.FilePath) !*Self {
     const output_base_path = try std.fs.cwd().realpathAlloc(allocator, output_dir_path);
     const output_path = try allocator.dupe(u8, trimExtension(source.header.name));
 
@@ -59,8 +59,6 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         },
         .result_set => |field_types| {
             try builder.applyResultSets(field_types);
-            // TODO: 
-            try sendLog(self.allocator, socket, .warn, "applyResultSets is not implemented", .{});
         },
     };
 
@@ -97,11 +95,11 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     defer self.allocator.free(payload);
 
     const event: core.Event = .{
-        .worker_result = try core.EventPayload.WorkerResult.init(self.allocator, payload),
+        .worker_result = try core.Event.Payload.WorkerResult.init(self.allocator, .{payload}),
     };
     defer event.deinit();
 
-    try core.sendEvent(self.allocator, socket, event);
+    try core.sendEvent(self.allocator, socket, "task", event);
 }
 
 fn sendLog(allocator: std.mem.Allocator, socket: *zmq.ZSocket, log_level: core.LogLevel, comptime fmt: []const u8, args: anytype) !void {
@@ -109,10 +107,10 @@ fn sendLog(allocator: std.mem.Allocator, socket: *zmq.ZSocket, log_level: core.L
     defer allocator.free(message);
 
     const log: core.Event = .{
-        .log = try core.EventPayload.Log.init(allocator, log_level, "task", message),
+        .log = try core.Event.Payload.Log.init(allocator, .{log_level, message}),
     };
     defer log.deinit();
-    try core.sendEvent(allocator, socket, log);
+    try core.sendEvent(allocator, socket, "task", log);
 }
 
 fn trimExtension(name: core.Symbol) core.Symbol {

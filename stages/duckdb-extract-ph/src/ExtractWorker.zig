@@ -49,10 +49,10 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         defer self.allocator.free(message);
 
         const log: core.Event = .{
-            .log = try core.EventPayload.Log.init(self.allocator, .err, "task", message),
+            .log = try core.Event.Payload.Log.init(self.allocator, .{.err, message}),
         };
         defer log.deinit();
-        try core.sendEvent(self.allocator, socket, log);
+        try core.sendEvent(self.allocator, socket, "task", log);
         return;
     };
     defer file.close();

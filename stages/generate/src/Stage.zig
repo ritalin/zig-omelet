@@ -57,13 +57,11 @@ pub fn run(self: *Self, setting: Setting) !void {
         break :dump_setting;
     }
     launch: {
-        try self.connection.dispatcher.post(.{
-            .launched = try core.EventPayload.Stage.init(self.allocator, app_context),
-        });
+        try self.connection.dispatcher.post(.launched);
         break :launch;
     }
 
-    var lookup = std.StringHashMap(core.EventPayload.SourcePath).init(self.allocator);
+    var lookup = std.StringHashMap(core.Event.Payload.SourcePath).init(self.allocator);
     defer lookup.deinit();
 
     try self.connection.dispatcher.state.ready();
@@ -82,12 +80,12 @@ pub fn run(self: *Self, setting: Setting) !void {
 
             switch (item.event) {
                 .ready_topic_body => {
-                    try self.logger.log(.err, "Ready for generating", .{});
+                    try self.logger.log(.debug, "Ready for generating", .{});
                     try self.connection.dispatcher.post(.ready_generate);
                 },
                 .topic_body => |source| {
                     try self.connection.dispatcher.approve();
-                    try self.logger.log(.trace, "Accept source: `{s}`", .{source.header.path});
+                    try self.logger.log(.debug, "Accept source: `{s}`", .{source.header.path});
 
                     const path = try source.header.clone(self.allocator);
                     try lookup.put(path.path, path);
@@ -106,18 +104,25 @@ pub fn run(self: *Self, setting: Setting) !void {
                     }
                 },
                 .finish_topic_body => {
-                    try self.connection.dispatcher.state.receiveTerminate();
-
+                    try self.connection.dispatcher.approve();
                     if (lookup.count() == 0) {
-                        try self.connection.dispatcher.post(.ready_generate);
+                        if (!self.connection.dispatcher.state.level.terminating) {
+                            try self.connection.dispatcher.state.receiveTerminate();
+                            try self.connection.dispatcher.post(.finish_generate);
+                        }
+                    }
+                    else {
+                        try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
                     }
                 },
-                .quit, .quit_all => {
+                .quit => {
                     if (lookup.count() == 0) {
-                        try self.connection.dispatcher.post(.{
-                            .quit_accept = try core.EventPayload.Stage.init(self.allocator, app_context),
-                        });
+                        try self.connection.dispatcher.quitAccept();
                     }
+                },
+                .quit_all => {
+                    try self.connection.dispatcher.quitAccept();
+                    try self.connection.pull_sink_socket.stop();
                 },
                 .log => |log| {
                     try self.logger.log(log.level, "{s}", .{log.content});
@@ -130,7 +135,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 }
 
-fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.StringHashMap(core.EventPayload.SourcePath)) !void {
+fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
     var reader = core.CborStream.Reader.init(result_content);
 
     const source_path = try reader.readString();

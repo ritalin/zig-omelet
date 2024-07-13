@@ -54,6 +54,11 @@ pub fn Worker(comptime WorkerType: type) type {
             try self.pool.spawn(runWorker, .{self, worker, self.endpoint});
         }
 
+        pub fn stop(self: *Self) !void {
+            self.pool.deinit();
+            try self.pool.init(.{.allocator = self.allocator, .n_jobs = 0});
+        }
+
         pub fn workerSocket(self: *Self) !*zmq.ZSocket {
             return zmq.ZSocket.init(.Push, self.context);
         }

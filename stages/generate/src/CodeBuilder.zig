@@ -13,6 +13,7 @@ output_dir: std.fs.Dir,
 
 query: ?Symbol,
 parameters: ?Symbol,
+result_set: ?Symbol,
 
 pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !Self {
     const dir = dir: {
@@ -26,6 +27,7 @@ pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_d
         .output_dir = dir,
         .query = null,
         .parameters = null,
+        .result_set = null,
     };
 }
 
@@ -34,6 +36,7 @@ pub fn deinit(self: *Self) void {
 
     if (self.query) |x| self.allocator.free(x);
     if (self.parameters) |x| self.allocator.free(x);
+    if (self.result_set) |x| self.allocator.free(x);
 }
 
 pub fn applyQuery(self: *Self, query: Symbol) !void {
@@ -48,10 +51,10 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
     defer buf.deinit();
     var writer = buf.writer();
 
-    try writer.writeAll("export type Parameter = {\n");
-
     const INDENT_LEVEL = 2;
     const temp_allocator = arena.allocator();
+
+    try writer.writeAll((" " ** INDENT_LEVEL) ++ "export type Parameter = {\n");
 
     // `  1: number | null`,
     for (parameters) |p| {
@@ -68,17 +71,46 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
         const ts_type = TypeMappingRules.get(key) orelse {
             return error.UnsupportedDbType;
         };
-        try writer.print((" " ** INDENT_LEVEL) ++ "{s}: {s} | null,\n", .{field, ts_type});
+        try writer.print((" " ** (INDENT_LEVEL * 2)) ++ "{s}: {s} | null,\n", .{field, ts_type});
     }
 
-    try writer.writeAll("}");
+    try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
     
     self.parameters = try buf.toOwnedSlice();
 }
 
-pub fn applyResultSets(self: *Self, fields: []const FieldTypePair) !void {
-    _ = self;
-    _ = fields;
+pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
+    if (result_set.len == 0) return;
+
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+
+    var buf = std.ArrayList(u8).init(self.allocator);
+    defer buf.deinit();
+    var writer = buf.writer();
+    
+    const INDENT_LEVEL = 2;
+    const temp_allocator = arena.allocator();
+
+    try writer.writeAll((" " ** INDENT_LEVEL) ++ "export type ResultSet = {\n");
+
+    // a: number | null
+    for (result_set) |c| {
+        // TODO: supports camelCase
+        const field = try std.ascii.allocLowerString(temp_allocator, c.field_name);
+        const key = try std.ascii.allocUpperString(temp_allocator, c.field_type);
+
+        const ts_type = TypeMappingRules.get(key) orelse {
+            return error.UnsupportedDbType;
+        };
+        try writer.print((" " ** (INDENT_LEVEL*2)) ++ "{s}: {s} {s},\n", .{
+            field, ts_type,
+            if (c.nullable) "| null" else ""
+        });
+    }
+    try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
+    
+    self.result_set = try buf.toOwnedSlice();
 }
 
 pub fn build(self: Self) !void {
@@ -88,9 +120,10 @@ pub fn build(self: Self) !void {
         };
     }
     types: {
-        writeTypescriptTypes(self.output_dir, self.parameters) catch {
+        writeTypescriptTypes(self.output_dir, &.{self.parameters, self.result_set}) catch {
             return error.TypeFileGenerationFailed;
         };
+
         break :types;
     }
 }
@@ -102,15 +135,17 @@ fn writeQuery(output_dir: std.fs.Dir, query: Symbol) !void {
     try file.writeAll(query);
 }
 
-fn writeTypescriptTypes(output_dir: std.fs.Dir, parameters_: ?Symbol) !void {
+fn writeTypescriptTypes(output_dir: std.fs.Dir, type_defs: []const ?Symbol) !void {
     var file = try output_dir.createFile("types.ts", .{});
     defer file.close();
     var writer = file.writer();
 
     try writer.print("export namespace {s} {{\n", .{Namespace});
 
-    if (parameters_) |parameters| {
-        try writer.print("{s}\n", .{parameters});
+    for (type_defs) |t_| {
+        if (t_) |type_def| {
+            try writer.print("{s}\n", .{type_def});
+        }
     }
 
     try writer.writeAll("}");
@@ -119,7 +154,7 @@ fn writeTypescriptTypes(output_dir: std.fs.Dir, parameters_: ?Symbol) !void {
 pub const Target = union(enum) {
     query: Symbol,
     parameter: []const FieldTypePair,
-    result_set: []const FieldTypePair,
+    result_set: []const ResultSetColumn,
 };
 
 pub const FieldTypePair = struct {
@@ -127,8 +162,14 @@ pub const FieldTypePair = struct {
     field_type: ?Symbol = null,
 };
 
+pub const ResultSetColumn = struct {
+    field_name: Symbol,
+    field_type: Symbol,
+    nullable: bool,
+};
+
 pub const Parser = struct {
-    pub fn beginParse(allocator: std.mem.Allocator, source_bodies: []const core.EventPayload.TopicBody.Item) !ResultWalker {
+    pub fn beginParse(allocator: std.mem.Allocator, source_bodies: []const core.Event.Payload.TopicBody.Item) !ResultWalker {
         const arena = try allocator.create(std.heap.ArenaAllocator);
         arena.* = std.heap.ArenaAllocator.init(allocator);
 
@@ -144,15 +185,27 @@ pub const Parser = struct {
         return result.value;
     }
 
-    fn parseResultSet(allocator: std.mem.Allocator, content: Symbol) ![]const FieldTypePair {
-        _ = allocator;
-        _ = content;
-        return &.{};
+    fn parseResultSet(allocator: std.mem.Allocator, content: Symbol) ![]const ResultSetColumn {
+        var reader = core.CborStream.Reader.init(content);
+
+        const values = try reader.readSlice(allocator, core.StructView(ResultSetColumn));
+
+        var result_set = try allocator.alloc(ResultSetColumn, values.len);
+
+        for (values, 0..) |v, i| {
+            result_set[i] = .{
+                .field_name = v[0],
+                .field_type = v[1],
+                .nullable = v[2],
+            };
+        }
+
+        return result_set;
     }
 
     pub const ResultWalker = struct {
         arena: *std.heap.ArenaAllocator,
-        source_bodies: []const core.EventPayload.TopicBody.Item,
+        source_bodies: []const core.Event.Payload.TopicBody.Item,
         index: usize,
 
         pub fn deinit(self: *ResultWalker) void {
@@ -194,7 +247,7 @@ test "parse query" {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
     
-    const source_bodies: []const core.EventPayload.TopicBody.Item = &.{.{
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
         .topic = "query",
         .content = "select $1, $2 from foo where kind = $3",
     }};
@@ -301,7 +354,7 @@ test "parse parameter" {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
-    const source_bodies: []const core.EventPayload.TopicBody.Item = &.{.{
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
         .topic = "placeholder",
         .content = "[{\"field_name\":\"id\", \"field_type\":\"bigint\"}, {\"field_name\":\"name\", \"field_type\":\"varchar\"}]"
     }};
@@ -339,7 +392,7 @@ test "parse parameter with any type" {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
-    const source_bodies: []const core.EventPayload.TopicBody.Item = &.{.{
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
         .topic = "placeholder",
         .content = "[{\"field_name\":\"id\", \"field_type\":\"bigint\"}, {\"field_name\":\"name\"}]"
     }};
@@ -363,6 +416,92 @@ test "parse parameter with any type" {
         const result = walk_result.?;
         try std.testing.expectEqual(.parameter, std.meta.activeTag(result));
         try std.testing.expectEqualDeep(expect, result.parameter);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
+
+fn resultSetToCbor(allocator: std.mem.Allocator, result_set: []const ResultSetColumn) !core.Symbol {
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeSliceHeader(result_set.len);
+
+    for (result_set) |c| {
+        _ = try writer.writeTuple(core.StructView(ResultSetColumn), .{c.field_name, c.field_type, c.nullable});
+    }
+
+    return writer.buffer.toOwnedSlice();
+}
+
+test "parse empty result set" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expect: []const ResultSetColumn = &.{};
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "select-list",
+        .content = try resultSetToCbor(arena.allocator(), expect),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.result_set, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expect, result.result_set);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
+
+test "parse result set" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expect: []const ResultSetColumn = &.{
+        .{.field_name = "a", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "b", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "select-list",
+        .content = try resultSetToCbor(arena.allocator(), expect),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.result_set, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expect, result.result_set);
         break :assert;
     }
     assert: {
@@ -396,10 +535,10 @@ test "generate name parameter code" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  id: number | null,
-        \\  name: string | null,
-        \\}
+        \\  export type Parameter = {
+        \\    id: number | null,
+        \\    name: string | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);
@@ -429,10 +568,10 @@ test "generate name parameter code for upper case field" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  id: number | null,
-        \\  name: string | null,
-        \\}
+        \\  export type Parameter = {
+        \\    id: number | null,
+        \\    name: string | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);
@@ -462,10 +601,10 @@ test "generate name parameter code from lower-case" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  id: number | null,
-        \\  name: string | null,
-        \\}
+        \\  export type Parameter = {
+        \\    id: number | null,
+        \\    name: string | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);
@@ -495,10 +634,10 @@ test "generate name parameter code with any type" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  id: any | null,
-        \\  name: any | null,
-        \\}
+        \\  export type Parameter = {
+        \\    id: any | null,
+        \\    name: any | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);
@@ -528,10 +667,10 @@ test "generate positional parameter code" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  1: number | null,
-        \\  2: string | null,
-        \\}
+        \\  export type Parameter = {
+        \\    1: number | null,
+        \\    2: string | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);
@@ -561,10 +700,10 @@ test "generate positional parameter code with any type" {
     const result = apply_result.?;
 
     const expect = 
-        \\export type Parameter = {
-        \\  1: any | null,
-        \\  2: any | null,
-        \\}
+        \\  export type Parameter = {
+        \\    1: any | null,
+        \\    2: any | null,
+        \\  }
     ;
 
     try std.testing.expectEqualStrings(expect, result);

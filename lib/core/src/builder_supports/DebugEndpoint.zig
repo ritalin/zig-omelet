@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const types = @import("./types.zig");
+const types = @import("../types.zig");
 
 // /// (control) Server -> Client
 const CMD_S2C_BIND_PORT = std.fmt.comptimePrint("ipc://{s}/default/cmd_s2c", .{types.CHANNEL_ROOT});

@@ -149,3 +149,6 @@ fn resetFilter(level: types.LogLevel) types.LogLevelSet {
     return filter;
 }
 
+pub fn stringToLogLevel(s: types.Symbol) types.LogLevel {
+    return std.meta.stringToEnum(types.LogLevel, s) orelse .err;
+}

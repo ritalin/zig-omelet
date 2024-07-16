@@ -1,6 +1,9 @@
 const std = @import("std");
 
-pub const DebugEndpoint = @import("./src/DebugEndpoint.zig");
+pub const builder_supports = struct {
+    pub const DebugEndpoint = @import("./src/builder_supports/DebugEndpoint.zig");
+    pub const LazyPath = @import("./src/builder_supports/LazyPath.zig");
+};
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -17,8 +20,10 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
     // const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
+
+    std.debug.print("**** lib_core/zmq_prefix {s}\n", .{zmq_prefix});
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
@@ -111,7 +116,7 @@ pub fn build(b: *std.Build) void {
             break:native_config;
         }
         zmq_native_config: {
-            mod_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            mod_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "lib"}) });
             mod_unit_tests.linkSystemLibrary("zmq");
             break:zmq_native_config;
         }

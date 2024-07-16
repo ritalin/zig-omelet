@@ -9,13 +9,17 @@ public:
 public:
     auto addUInt(uint64_t value) -> void;
     auto addString(std::string value) -> void;
+    auto addBool(bool value) -> void;
     auto addArrayHeader(size_t len) -> void;
     auto addStringPair(const std::string& key, const std::string& value) -> void;
+    auto addBinaryPair(const std::string& key, const std::vector<char>& value) -> void;
     auto addUIntPair(const std::string& key, uint64_t value) -> void;
     auto concatBinary(const CborEncoder& encoder) -> void;
+    auto concatBinary(const std::vector<char>& buffer) -> void;
 public:
     auto static encodeUInt(uint64_t value) -> std::vector<char>;
+    auto static encodeBool(bool value) -> std::vector<char>;
 public:
-    auto rawBuffer() const -> std::string;
-    auto build() const -> std::string;
+    auto rawBuffer() const -> std::vector<char>;
+    auto build() const -> std::vector<char>;
 };

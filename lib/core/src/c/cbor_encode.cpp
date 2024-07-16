@@ -10,12 +10,12 @@ struct CborTypes {
     static const uint64_t MAP = 5;
 };
 
-const size_t MAX_HEADER_SIZE = 9;
+const size_t MAX_BUFFER_SIZE = 9;
 
-auto cborHeader(uint32_t id, size_t len) -> std::string {
+static auto cborHeader(uint32_t id, size_t len) -> std::string {
     cbor_writer_t writer;
-    char buf[MAX_HEADER_SIZE] = {}; 
-    cbor_writer_init(&writer, buf, MAX_HEADER_SIZE);   
+    char buf[MAX_BUFFER_SIZE] = {}; 
+    cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
 
     cbor_encode_unsigned_integer(&writer, len);
 
@@ -26,10 +26,21 @@ auto cborHeader(uint32_t id, size_t len) -> std::string {
 
 auto CborEncoder::encodeUInt(uint64_t value) -> std::vector<char> {
     cbor_writer_t writer;
-    char buf[] = {0, 0}; 
-    cbor_writer_init(&writer, buf, 2);   
+    char buf[MAX_BUFFER_SIZE] = {}; 
+    cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
 
     cbor_encode_unsigned_integer(&writer, value);
+
+    auto b = reinterpret_cast<char*>(writer.buf);
+    return std::vector<char>(b, b + writer.bufidx);
+}
+
+auto CborEncoder::encodeBool(bool value) -> std::vector<char> {
+    cbor_writer_t writer;
+    char buf[] = {0}; 
+    cbor_writer_init(&writer, buf, 1);
+
+    cbor_encode_bool(&writer, value);
 
     auto b = reinterpret_cast<char*>(writer.buf);
     return std::vector<char>(b, b + writer.bufidx);
@@ -51,16 +62,43 @@ auto CborEncoder::addString(std::string value) -> void {
     }
 }
 
+auto CborEncoder::addBool(bool value) -> void {
+    auto data = std::move(CborEncoder::encodeBool(value));
+    std::move(data.begin(), data.end(), std::back_inserter(this->buf));
+}
+
 auto CborEncoder::addArrayHeader(size_t len) -> void {
     auto header = std::move(cborHeader(CborTypes::ARRAY, len));
     std::move(header.begin(), header.end(), std::back_inserter(this->buf));
 }
 
 auto CborEncoder::concatBinary(const CborEncoder& encoder) -> void {
-    std::copy(encoder.buf.begin(), encoder.buf.end(), std::back_inserter(this->buf));
+    this->concatBinary(encoder.buf);
+}
+
+auto CborEncoder::concatBinary(const std::vector<char>& buffer) -> void {
+    std::copy(buffer.begin(), buffer.end(), std::back_inserter(this->buf));
 }
 
 auto CborEncoder::addStringPair(const std::string& key, const std::string& value) -> void {
+    auto inserter = std::back_inserter(this->buf);
+    tuple: {
+        auto header = std::move(cborHeader(CborTypes::ARRAY, 2));
+        inserter = std::move(header.begin(), header.end(), inserter);
+    }
+    key: {
+        auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
+        inserter = std::move(header.begin(), header.end(), inserter);
+        inserter = std::copy(key.begin(), key.end(), inserter);
+    }
+    value: {
+        auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
+        inserter = std::move(header.begin(), header.end(), inserter);
+        inserter = std::copy(value.begin(), value.end(), inserter);
+    }
+}
+
+auto CborEncoder::addBinaryPair(const std::string& key, const std::vector<char>& value) -> void {
     auto inserter = std::back_inserter(this->buf);
     tuple: {
         auto header = std::move(cborHeader(CborTypes::ARRAY, 2));
@@ -95,10 +133,10 @@ auto CborEncoder::addUIntPair(const std::string& key, uint64_t value) -> void {
     }
 }
 
-auto CborEncoder::rawBuffer() const -> std::string {
-    return std::string(this->buf.begin(), this->buf.end());
+auto CborEncoder::rawBuffer() const -> std::vector<char> {
+    return std::move(std::vector<char>(this->buf));
 }
-auto CborEncoder::build() const -> std::string {
+auto CborEncoder::build() const -> std::vector<char> {
     CborEncoder encoder;
     auto inserter = std::back_inserter(encoder.buf);
     header: {
@@ -109,5 +147,5 @@ auto CborEncoder::build() const -> std::string {
         inserter = std::copy(this->buf.begin(), this->buf.end(), inserter);
     }
 
-    return encoder.rawBuffer();
+    return std::move(encoder.buf);
 }

@@ -202,13 +202,9 @@ fn processLogResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.Cb
     return .{
         .invalid_topic_body = try core.Event.Payload.InvalidTopicBody.init(allocator, 
             entry.path.values(),
-            .{stringToLogLevel(log_level), content}
+            .{core.Logger.stringToLogLevel(log_level), content}
         ),
     };
-}
-
-fn stringToLogLevel(s: core.Symbol) core.LogLevel {
-    return std.meta.stringToEnum(core.LogLevel, s) orelse .err;
 }
 
 const LookupEntry = struct {

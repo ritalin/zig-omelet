@@ -193,14 +193,25 @@ pub const Parser = struct {
         var result_set = try allocator.alloc(ResultSetColumn, values.len);
 
         for (values, 0..) |v, i| {
+            const field_name = 
+                if (try isLiteral(allocator, v[0])) try allocator.dupe(u8, v[0]) 
+                else try std.fmt.allocPrint(allocator, "\"{s}\"", .{v[0]})
+            ;
+
             result_set[i] = .{
-                .field_name = v[0],
+                .field_name = field_name,
                 .field_type = v[1],
                 .nullable = v[2],
             };
         }
 
         return result_set;
+    }
+
+    fn isLiteral(allocator: std.mem.Allocator, symbol: Symbol) !bool {
+        var tz = std.zig.Tokenizer.init(try allocator.dupeZ(u8, symbol));
+        
+        return tz.next().loc.end == symbol.len;
     }
 
     pub const ResultWalker = struct {
@@ -486,6 +497,49 @@ test "parse result set" {
     const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
         .topic = "select-list",
         .content = try resultSetToCbor(arena.allocator(), expect),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.result_set, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expect, result.result_set);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
+
+test "parse result set with aliasless field name" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const source: []const ResultSetColumn = &.{
+        .{.field_name = "Cast(a as INTEGER)", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "bar_baz", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    const expect: []const ResultSetColumn = &.{
+        .{.field_name = "\"Cast(a as INTEGER)\"", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "bar_baz", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "select-list",
+        .content = try resultSetToCbor(arena.allocator(), source),
     }};
 
     var iter: Parser.ResultWalker = .{

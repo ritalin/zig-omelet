@@ -368,7 +368,7 @@ auto PlaceholderCollector::finish(const WalkResult& result) -> void {
 
         auto encode_result = payload_encoder.build();
 
-        zmq_send(socket, encode_result.data(), encode_result.length(), ZMQ_SNDMORE);
+        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);
         zmq_send(socket, "", 0, 0);    
     }
 }
@@ -399,7 +399,7 @@ static auto sendLog(void *socket, const std::string& id, const std::string& log_
         }
 
         auto encode_result = payload_encoder.build();
-        zmq_send(socket, encode_result.c_str(), encode_result.length(), ZMQ_SNDMORE);    
+        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);    
         zmq_send(socket, "", 0, 0);    
     }
 }

@@ -17,7 +17,7 @@ allocator: std.mem.Allocator,
 context: *zmq.ZContext,
 connection: *Connection,
 logger: Logger,
-db: c.DatabaseRef,
+database: c.DatabaseRef,
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);
@@ -43,12 +43,12 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .context = ctx,
         .connection = connection,
         .logger = logger,
-        .db = database,
+        .database = database,
     };
 }
 
 pub fn deinit(self: *Self) void {
-    c.deinitDatabase(self.db);
+    c.deinitDatabase(self.database);
     self.connection.deinit();
     self.context.deinit();
     self.allocator.destroy(self.context);
@@ -73,6 +73,9 @@ pub fn run(self: *Self, setting: Setting) !void {
         }
         break :launch;
     }
+
+    var body_lookup = std.StringHashMap(LookupEntry).init(self.allocator);
+    defer body_lookup.deinit();
 
     while (self.connection.dispatcher.isReady()) {
         const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
@@ -101,32 +104,27 @@ pub fn run(self: *Self, setting: Setting) !void {
                     try self.logger.log(.debug, "Accept source path: {s}", .{path.path});
                     try self.logger.log(.trace, "Begin worker process", .{});
 
-                    const worker = try ExtractWorker.init(self.allocator, path.path);
-                    defer worker.deinit();
-                    const payload = try worker.run(try self.connection.pull_sink_socket.workerSocket());
-                    defer self.allocator.free(payload);
+                    const p1 = try path.clone(self.allocator);
+                    try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0, .item_count = 1});
 
-                    const event: core.Event = .{
-                        .topic_body = try core.Event.Payload.TopicBody.init(
-                            self.allocator,
-                            path.values(),
-                            &.{ .{c.topic_select_list, payload} }
-                        ),
-                    };
-
+                    const worker = try ExtractWorker.init(self.allocator, self.database, path.path);
+                    try self.connection.pull_sink_socket.spawn(worker);
+                },
+                .worker_result => |result| {
+                    const event = try self.processWorkerResult(item.from, result.content, &body_lookup);
                     try self.connection.dispatcher.post(event);
                     try self.logger.log(.trace, "End worker process", .{});
                 },
                 .finish_source_path => {
-                    // if (body_lookup.count() == 0) 
-                    {
+                    if (body_lookup.count() == 0) {
                         try self.connection.dispatcher.post(.finish_topic_body);
                     }
+                    else {
                         try self.connection.dispatcher.state.receiveTerminate();
+                    }
                 },
                 .quit => {
-                    // if (body_lookup.count() == 0) 
-                    {
+                    if (body_lookup.count() == 0) {
                         try self.connection.dispatcher.quitAccept();
                     }
                 },
@@ -143,7 +141,7 @@ pub fn run(self: *Self, setting: Setting) !void {
 }
 
 fn tryLoadSchema(self: *Self, schema_dir_path: core.FilePath) !bool {
-    const err = c.loadSchema(self.db, schema_dir_path.ptr, schema_dir_path.len);
+    const err = c.loadSchema(self.database, schema_dir_path.ptr, schema_dir_path.len);
     switch (err) {
         c.schema_dir_not_found => {
             try self.logger.log(.err, "Launch failed. Invalid schema location.", .{});
@@ -156,3 +154,78 @@ fn tryLoadSchema(self: *Self, schema_dir_path: core.FilePath) !bool {
 
     return err == c.no_error;
 }
+
+const WorkerResultTags = std.StaticStringMap(core.EventType).initComptime(.{
+    .{"topic_body", .topic_body}, 
+    .{"log", .log},
+});
+
+fn processWorkerResult(self: *Self, from: Symbol, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !core.Event {
+    var reader = core.CborStream.Reader.init(result_content);
+
+    const event_tag = try reader.readString();
+    const source_path = try reader.readString();
+
+    if (lookup.getPtr(source_path)) |entry| {
+        defer {
+            if (entry.ref_count == entry.item_count) {
+                var path = entry.path;
+                _ = lookup.remove(source_path);
+                path.deinit();
+            }
+        }
+        defer entry.ref_count += 1;
+
+        if (WorkerResultTags.get(event_tag)) |tag| {
+            switch (tag) {
+                .topic_body => {
+                    return try processParseResult(self.allocator, from, &reader, entry);
+                },
+                .log => {
+                    return try processLogResult(self.allocator, from, &reader, entry);
+                },
+                else => unreachable,
+            }
+        }
+    }
+
+    return .{
+        .log = try core.Event.Payload.Log.init(self.allocator, .{.warn, "Unknown worker result"}),
+    };
+}
+
+fn processParseResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+    _ = from;
+    const item_count = try reader.readUInt(u32);
+    const item_index = try reader.readUInt(u32);
+
+    defer entry.item_count = item_count;
+
+    const result = try reader.readTuple(core.StructView(core.Event.Payload.TopicBody.Item));
+
+    var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), &.{result});
+    return .{
+        .topic_body = topic_body.withNewIndex(item_index, item_count),
+    };
+}
+
+fn processLogResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
+    const log_level = try reader.readString();
+    const content = try reader.readString();
+    
+    const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{app_context, from});
+    defer allocator.free(full_from);
+
+    return .{
+        .invalid_topic_body = try core.Event.Payload.InvalidTopicBody.init(allocator, 
+            entry.path.values(),
+            .{core.Logger.stringToLogLevel(log_level), content}
+        ),
+    };
+}
+
+const LookupEntry = struct {
+    path: core.Event.Payload.SourcePath,
+    ref_count: usize,
+    item_count: usize,
+};

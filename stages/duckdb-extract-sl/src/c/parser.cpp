@@ -8,14 +8,17 @@
 #define MAGIC_ENUM_RANGE_MAX (std::numeric_limits<uint8_t>::max())
 
 #include <magic_enum/magic_enum.hpp>
+#include <zmq.h>
 
+#include "cbor_encode.hpp"
 #include "duckdb_database.hpp"
 #include "duckdb_worker.h"
 
 #include <iostream>
+#include <format>
 
-#include "yyjson.hpp"
-#include "json_serializer.hpp"
+// #include "yyjson.hpp"
+// #include "json_serializer.hpp"
 
 class SelectListCollector {
 public:
@@ -36,8 +39,15 @@ private:
 
 struct DescribeResult {
     std::string field_name;
-    std::optional<std::string> field_type;
+    std::string field_type;
     bool nullable;
+};
+
+struct WorkerResult {
+    std::string id;
+    std::size_t stmt_offset;
+    std::size_t stmt_count;
+    std::vector<DescribeResult> describes;
 };
 
 auto borrowConnection(SelectListCollector& collector) -> duckdb::Connection& {
@@ -67,7 +77,7 @@ static auto hydrateDescribeResult(const SelectListCollector& collector, const du
 
         results.push_back({
             row.GetValue<std::string>(0),
-            std::make_optional(row.GetValue<std::string>(1)),
+            row.GetValue<std::string>(1),
             row.GetValue<std::string>(2) == "YES",
         });
     }
@@ -301,12 +311,90 @@ static auto describeSelectStatement(SelectListCollector& collector, duckdb::Sele
     return ::describeSelectStatementInternal(collector, stmt, results);
 }
 
-static auto sendLog(void *socket, const std::string& log_level, const std::string& message) -> void {
+static auto sendLog(void *socket, const std::string& log_level, const std::string& id, const std::string& message) -> void {
+    event_type: {
+        auto event_type = std::string("worker_result");
+        ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+    }
+    from: {
+        auto from = std::string("extract-task");
+        zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
+    }
+    payload: {
+        CborEncoder payload_encoder;
 
+        event_tag: {
+            payload_encoder.addString("log");
+        }
+        source_path: {
+            payload_encoder.addString(id);
+        }
+        log_level: {
+            payload_encoder.addString(log_level);
+        }
+        log_content: {
+            payload_encoder.addString(std::format("{} ({})", message, id));
+        }
+
+        auto encode_result = payload_encoder.build();
+        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);    
+        zmq_send(socket, "", 0, 0);    
+    }
 }
 
-static auto sendWorkerResult(const std::optional<void *>& socket, int32_t index, const std::vector<DescribeResult>& results) -> void {
+static auto encodeDescribeResult(const std::vector<DescribeResult>& describes) -> std::vector<char> {
+    CborEncoder encoder;
 
+    encoder.addArrayHeader(describes.size());
+
+    for (auto& desc: describes) {
+        encoder.addArrayHeader(3);
+        encoder.addString(desc.field_name);
+        encoder.addString(desc.field_type);
+        encoder.addBool(desc.nullable);
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
+static auto sendWorkerResult(const std::optional<void *>& socket_, int32_t index, const WorkerResult& result) -> void {
+    if (!socket_) return;
+
+    auto socket = socket_.value();
+
+    event_type: {
+        auto event_type = std::string("worker_result");
+        zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+    }
+    from: {
+        auto from = std::string("extract-task");
+        zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
+    }
+    payload: {
+        std::vector<char> buf;
+
+        CborEncoder payload_encoder;
+        result_tag: {
+            payload_encoder.addString("topic_body");
+        }
+        work_id: {
+            payload_encoder.addString(result.id);
+        }
+        stmt_count: {
+            payload_encoder.addUInt(result.stmt_count);
+        }
+        stmt_offset: {
+            payload_encoder.addUInt(result.stmt_offset);
+        }
+        topic_body: {
+            payload_encoder.addBinaryPair(topic_select_list, encodeDescribeResult(result.describes));
+        }
+
+        auto encode_result = payload_encoder.build();
+
+        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);
+        zmq_send(socket, "", 0, 0);    
+    }
 }
 
 auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
@@ -319,14 +407,15 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
             auto& stmt = stmts[0];
             const int32_t index = 1;
 
-            std::vector<DescribeResult> results;
+            std::vector<DescribeResult> describes;
 
             if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-                describeSelectStatement(*this, stmt->Cast<duckdb::SelectStatement>(), results);
+                describeSelectStatement(*this, stmt->Cast<duckdb::SelectStatement>(), describes);
             }
 
+            WorkerResult result = {this->id, 1, stmts.size(), std::move(describes)};
             // send as worker result
-            ::sendWorkerResult(this->socket, 1, results);
+            ::sendWorkerResult(this->socket, 1, result);
         }
 
         return no_error;
@@ -341,7 +430,7 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
 
 auto SelectListCollector::warn(const std::string& message) -> void {
     if (this->socket) {
-        ::sendLog(this->socket.value(), "warn", message);
+        ::sendLog(this->socket.value(), "warn", this->id, message);
     }
     else {
         std::cout << std::format("warn: {}", message) << std::endl;
@@ -349,7 +438,7 @@ auto SelectListCollector::warn(const std::string& message) -> void {
 }
 auto SelectListCollector::err(const std::string& message) -> void {
     if (this->socket) {
-        ::sendLog(this->socket.value(), "err", message);
+        ::sendLog(this->socket.value(), "err", this->id, message);
     }
     else {
         std::cout << std::format("err: {}", message) << std::endl;

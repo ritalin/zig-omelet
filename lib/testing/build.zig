@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt";
+    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
 
     lib_module: {
         const mod = b.addModule("runner", .{
@@ -30,9 +30,9 @@ pub fn build(b: *std.Build) void {
                     "catch2_session_run.cpp",
                 }
             });
-            mod.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/lib"})});
-            mod.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "catch2/include"})});
-            mod.linkSystemLibrary("catch2", .{});
+            mod.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "lib"})});
+            mod.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "include"})});
+            mod.linkSystemLibrary("Catch2", .{});
             break:catch2_native_config;
         }
         break:lib_module;

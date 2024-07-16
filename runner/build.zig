@@ -16,13 +16,15 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
 
+    std.debug.print("**** runner/zmq_prefix {s}\n", .{zmq_prefix});
+
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
 
-    const dep_core = b.dependency("lib_core", .{});
+    const dep_core = b.dependency("lib_core", .{ .zmq_prefix = zmq_prefix });
 
     const app_context = "runner";
     const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context});
@@ -41,7 +43,7 @@ pub fn build(b: *std.Build) void {
         });
 
         zmq_native_config: {
-            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "lib"}) });
             exe.linkSystemLibrary("zmq");
             exe.linkLibC();
             break:zmq_native_config;
@@ -77,7 +79,7 @@ pub fn build(b: *std.Build) void {
             }
 
             // Apply zmq communication cannel
-            try @import("lib_core").DebugEndpoint.applyStageChannel(run_cmd);
+            try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(run_cmd);
 
             // This creates a build step. It will be visible in the `zig build --help` menu,
             // and can be selected like this: `zig build run`
@@ -107,7 +109,7 @@ pub fn build(b: *std.Build) void {
     // exe_unit_tests.addIncludePath(b.path("../../vendor/json/include"));
 
         zmq_native_config: {
-            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "zmq/lib"}) });
+            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "lib"}) });
             exe_unit_tests.linkSystemLibrary("zmq");
             break:zmq_native_config;
         }
@@ -133,4 +135,4 @@ pub fn build(b: *std.Build) void {
 }
 
 // re-exports
-pub const applyRunnerChannel = @import("lib_core").DebugEndpoint.applyRunnerChannel;
+pub const applyRunnerChannel = @import("lib_core").builder_supports.DebugEndpoint.applyRunnerChannel;

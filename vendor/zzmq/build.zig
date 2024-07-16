@@ -11,8 +11,8 @@ pub fn build(b: *std.Build) !void {
     const prefix = b.option([]const u8, "zmq_prefix", "zmq installed path");
     
     if (prefix) |p| {
-        mod_zmq.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/include" }) } );
-        mod_zmq.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/lib" }) });
+        mod_zmq.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "include" }) } );
+        mod_zmq.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "lib" }) });
     }
 
 
@@ -23,8 +23,8 @@ pub fn build(b: *std.Build) !void {
     });
 
     if (prefix) |p| {
-        lib_test.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/include" }) } );
-        lib_test.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "zmq/lib" }) });
+        lib_test.addIncludePath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "include" }) } );
+        lib_test.addLibraryPath(.{ .cwd_relative = b.pathResolve(&[_][]const u8 { p, "lib" }) });
     }
 
     lib_test.linkSystemLibrary("zmq");

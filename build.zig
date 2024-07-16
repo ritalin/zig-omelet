@@ -16,8 +16,9 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix: []const u8 = "omelet";
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
-    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
+    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt/duckdb";
+    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
     
     stage_watch_files: {
         const dep = b.dependency("stage_watch_files", .{
@@ -37,6 +38,7 @@ pub fn build(b: *std.Build) !void {
             .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
             .duckdb_prefix = duckdb_prefix,
+            .catch2_prefix = catch2_prefix,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-ph"}));
         b.installArtifact(exe_stage);
@@ -49,6 +51,7 @@ pub fn build(b: *std.Build) !void {
             .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
             .duckdb_prefix = duckdb_prefix,
+            .catch2_prefix = catch2_prefix,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-sl"}));
         b.installArtifact(exe_stage);

@@ -16,11 +16,13 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt";
+    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
+
+    std.debug.print("**** generate/zmq_prefix {s}\n", .{zmq_prefix});
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
-    const dep_core = b.dependency("lib_core", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
+    const dep_lib_core = b.dependency("lib_core", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
 
     const app_context = "ts-generate";
     const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
@@ -38,7 +40,7 @@ pub fn build(b: *std.Build) void {
         });
 
         zmq_native_config: {
-            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "lib"}) });
             exe.linkSystemLibrary("zmq");
             exe.linkLibC();
             exe.linkLibCpp();
@@ -47,7 +49,8 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
-            exe.root_module.addImport("core", dep_core.module("core"));
+            exe.root_module.addImport("core", dep_lib_core.module("core"));
+            exe.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
         }
@@ -85,7 +88,7 @@ pub fn build(b: *std.Build) void {
             test_fright_cmd.step.dependOn(b.getInstallStep());
 
             // Apply zmq communication cannel
-            try @import("lib_core").DebugEndpoint.applyStageChannel(test_fright_cmd);
+            try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(test_fright_cmd);
             test_fright_cmd.addArgs(&.{
                 "--output-dir=../../_dump/ts",
                 "--log-level=trace",
@@ -113,14 +116,15 @@ pub fn build(b: *std.Build) void {
             break:native_config;
         }
         zmq_native_config: {
-            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
+            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "lib"}) });
             exe_unit_tests.linkSystemLibrary("zmq");
             break:zmq_native_config;
         }
         import_modules: {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
-            exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
+            exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
+            exe_unit_tests.root_module.addImport("cbor_cpp_support", dep_lib_core.module("cbor_cpp_support"));
             exe_unit_tests.root_module.addOptions("build_options", build_options);
             break:import_modules;
         } 

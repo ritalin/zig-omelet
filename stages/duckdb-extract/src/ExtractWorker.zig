@@ -1,7 +1,7 @@
 const std = @import("std");
 const zmq = @import("zmq");
 const core = @import("core");
-const c = @import("./duckdb_worker.zig");
+const c = @import("worker_runtime");
 
 const Self = @This();
 

@@ -4,7 +4,7 @@ const core = @import("core");
 
 const Setting = @import("./Setting.zig");
 const app_context = @import("build_options").app_context;
-const c = @import("./duckdb_worker.zig");
+const c = @import("worker_runtime");
 const ExtractWorker = @import("./ExtractWorker.zig");
 
 const Symbol = core.Symbol;

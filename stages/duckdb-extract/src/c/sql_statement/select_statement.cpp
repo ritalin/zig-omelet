@@ -6,9 +6,9 @@
 
 #include <magic_enum/magic_enum.hpp>
 
-
 #include "duckdb_binder_support.hpp"
 
+namespace worker {
 
 static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -> std::string {
     if (expr->alias != "") {
@@ -33,22 +33,22 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
     case duckdb::ExpressionClass::CAST: 
         {
             auto& cast_expr = expr->Cast<duckdb::CastExpression>();
-            ::walkExpressionInternal(cast_expr.child, depth+1, zmq_channel);
+            walkExpressionInternal(cast_expr.child, depth+1, zmq_channel);
         }
         break;
     case duckdb::ExpressionClass::COMPARISON:
         {
             auto& cmp_expr = expr->Cast<duckdb::ComparisonExpression>();
-            ::walkExpressionInternal(cmp_expr.left, depth+1, zmq_channel);
-            ::walkExpressionInternal(cmp_expr.right, depth+1, zmq_channel);
+            walkExpressionInternal(cmp_expr.left, depth+1, zmq_channel);
+            walkExpressionInternal(cmp_expr.right, depth+1, zmq_channel);
         }
         break;
     case duckdb::ExpressionClass::BETWEEN:
         {
             auto& between_expr = expr->Cast<duckdb::BetweenExpression>();
-            ::walkExpressionInternal(between_expr.input, depth+1, zmq_channel);
-            ::walkExpressionInternal(between_expr.lower, depth+1, zmq_channel);
-            ::walkExpressionInternal(between_expr.upper, depth+1, zmq_channel);
+            walkExpressionInternal(between_expr.input, depth+1, zmq_channel);
+            walkExpressionInternal(between_expr.lower, depth+1, zmq_channel);
+            walkExpressionInternal(between_expr.upper, depth+1, zmq_channel);
         }
         break;
     case duckdb::ExpressionClass::CASE:
@@ -57,12 +57,12 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
 
             // whrn-then clause
             for (auto& case_check: case_expr.case_checks) {
-                ::walkExpressionInternal(case_check.when_expr, depth+1, zmq_channel);
-                ::walkExpressionInternal(case_check.then_expr, depth+1, zmq_channel);
+                walkExpressionInternal(case_check.when_expr, depth+1, zmq_channel);
+                walkExpressionInternal(case_check.then_expr, depth+1, zmq_channel);
             }
             
             // else clause
-            ::walkExpressionInternal(case_expr.else_expr, depth+1, zmq_channel);
+            walkExpressionInternal(case_expr.else_expr, depth+1, zmq_channel);
         }
         break;
     case duckdb::ExpressionClass::CONJUNCTION:
@@ -70,7 +70,7 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
             auto& conj_expr = expr->Cast<duckdb::ConjunctionExpression>();
             
             for (auto& child: conj_expr.children) {
-                ::walkExpressionInternal(child, depth+1, zmq_channel);
+                walkExpressionInternal(child, depth+1, zmq_channel);
             }
         }
         break;
@@ -79,20 +79,20 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
             auto& fn_expr = expr->Cast<duckdb::FunctionExpression>();
 
             for (auto& child: fn_expr.children) {
-                ::walkExpressionInternal(child, depth+1, zmq_channel);
+                walkExpressionInternal(child, depth+1, zmq_channel);
             }
 
             // order by(s)
-            ::walkOrderBysNodeInternal(fn_expr.order_bys, depth+1, zmq_channel);
+            walkOrderBysNodeInternal(fn_expr.order_bys, depth+1, zmq_channel);
         }
         break;
     case duckdb::ExpressionClass::SUBQUERY:
         {
             auto& sq_expr = expr->Cast<duckdb::SubqueryExpression>();
-            ::walkSelectStatementInternal(*sq_expr.subquery, depth+1, zmq_channel);
+            walkSelectStatementInternal(*sq_expr.subquery, depth+1, zmq_channel);
 
             if (sq_expr.subquery_type == duckdb::SubqueryType::ANY) {
-                ::walkExpressionInternal(sq_expr.child, depth+1, zmq_channel);
+                walkExpressionInternal(sq_expr.child, depth+1, zmq_channel);
             }
         }
         break;
@@ -109,19 +109,19 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
 
 static auto walkOrderBysNodeInternal(duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth, ZmqChannel& zmq_channel) -> void {
     for (auto& order_by: order_bys->orders) {
-        ::walkExpressionInternal(order_by.expression, depth, zmq_channel);
+        walkExpressionInternal(order_by.expression, depth, zmq_channel);
     }
 }
 
 static auto walkSelectListItem(duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth, ZmqChannel& zmq_channel) -> void {
     if (expr->HasParameter() || expr->HasSubquery()) {
         if (depth > 0) {
-            ::walkExpressionInternal(expr, depth, zmq_channel);
+            walkExpressionInternal(expr, depth, zmq_channel);
         }
         else {
             auto new_alias = keepColumnName(expr);
 
-            ::walkExpressionInternal(expr, depth, zmq_channel);
+            walkExpressionInternal(expr, depth, zmq_channel);
 
             if (expr->ToString() != new_alias) {
                 expr->alias = new_alias;
@@ -142,21 +142,21 @@ static auto walkTableRef(duckdb::unique_ptr<duckdb::TableRef>& table_ref, uint32
     case duckdb::TableReferenceType::TABLE_FUNCTION:
         {
             auto& table_fn = table_ref->Cast<duckdb::TableFunctionRef>();
-            ::walkExpressionInternal(table_fn.function, depth, zmq_channel);
+            walkExpressionInternal(table_fn.function, depth, zmq_channel);
         }
         break;
     case duckdb::TableReferenceType::JOIN:
         {
             auto& join_ref = table_ref->Cast<duckdb::JoinRef>();
-            ::walkTableRef(join_ref.left, depth+1, zmq_channel);
-            ::walkTableRef(join_ref.right, depth+1, zmq_channel);
-            ::walkExpressionInternal(join_ref.condition, depth+1, zmq_channel);
+            walkTableRef(join_ref.left, depth+1, zmq_channel);
+            walkTableRef(join_ref.right, depth+1, zmq_channel);
+            walkExpressionInternal(join_ref.condition, depth+1, zmq_channel);
         }
         break;
     case duckdb::TableReferenceType::SUBQUERY:
         {
             auto& sq_ref = table_ref->Cast<duckdb::SubqueryRef>();
-            ::walkSelectStatementInternal(*sq_ref.subquery, 0, zmq_channel);
+            walkSelectStatementInternal(*sq_ref.subquery, 0, zmq_channel);
         }
         break;
     default:
@@ -171,13 +171,13 @@ static auto walkSelectStatementInternal(duckdb::SelectStatement& stmt, uint32_t 
         {
             auto& select_node =  stmt.node->Cast<duckdb::SelectNode>();
             for (auto& expr: select_node.select_list) {
-                ::walkSelectListItem(expr, depth, zmq_channel);
+                walkSelectListItem(expr, depth, zmq_channel);
             }
             form_clause: {
-                ::walkTableRef(select_node.from_table, depth+1, zmq_channel);
+                walkTableRef(select_node.from_table, depth+1, zmq_channel);
             }
             if (select_node.where_clause) {
-                ::walkExpressionInternal(select_node.where_clause, depth+1, zmq_channel);
+                walkExpressionInternal(select_node.where_clause, depth+1, zmq_channel);
             }
             if (select_node.groups.group_expressions.size() > 0) {
                 zmq_channel.warn(std::format("[TODO] Unsupported group by clause (depth: {})", depth));
@@ -197,7 +197,9 @@ static auto walkSelectStatementInternal(duckdb::SelectStatement& stmt, uint32_t 
 }
 
 auto walkSelectStatement(duckdb::SelectStatement& stmt, ZmqChannel zmq_channel) -> void {
-    ::walkSelectStatementInternal(stmt, 0, zmq_channel);
+    walkSelectStatementInternal(stmt, 0, zmq_channel);
+}
+
 }
 
 #ifndef DISABLE_CATCH2_TEST
@@ -209,6 +211,7 @@ auto walkSelectStatement(duckdb::SelectStatement& stmt, ZmqChannel zmq_channel) 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+using namespace worker;
 using namespace Catch::Matchers;
 
 auto runTest(const std::string sql, const std::string expected) -> void {

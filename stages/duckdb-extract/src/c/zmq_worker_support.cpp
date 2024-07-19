@@ -1,10 +1,11 @@
 #include <iostream>
-
 #include <zmq.h>
 
 #include "duckdb_worker.h"
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
+
+namespace worker {
 
 ZmqChannel::ZmqChannel(std::optional<void *> socket, const std::string& id, const std::string& from): socket(socket), id(id), from(from) {}
 
@@ -20,7 +21,7 @@ auto ZmqChannel::warn(std::string message) -> void {
         return;
     }
     else {
-        ::sendWorkerLog(this->socket.value(), this->id, this->from, "warn", message);
+        sendWorkerLog(this->socket.value(), this->id, this->from, "warn", message);
     }
 }
 
@@ -30,7 +31,7 @@ auto ZmqChannel::err(std::string message) -> void {
         return;
     }
     else {
-        ::sendWorkerLog(this->socket.value(), this->id, this->from, "err", message);
+        sendWorkerLog(this->socket.value(), this->id, this->from, "err", message);
     }
 }
 
@@ -44,10 +45,10 @@ auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, std::ve
 
     event_type: {
         auto event_type = std::string("worker_result");
-        zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+        ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
     from: {
-        zmq_send(socket, this->from.data(), this->from.length(), ZMQ_SNDMORE);    
+        ::zmq_send(socket, this->from.data(), this->from.length(), ZMQ_SNDMORE);    
     }
     payload: {
         std::vector<char> buf;
@@ -71,8 +72,8 @@ auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, std::ve
 
         auto encode_result = payload_encoder.build();
 
-        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);
-        zmq_send(socket, "", 0, 0);    
+        ::zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);
+        ::zmq_send(socket, "", 0, 0);    
     }
 }
 
@@ -82,7 +83,7 @@ static auto sendWorkerLog(void *socket, const std::string& id, const std::string
         ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
     from: {
-        zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
+        ::zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
     }
     payload: {
         CborEncoder payload_encoder;
@@ -101,7 +102,9 @@ static auto sendWorkerLog(void *socket, const std::string& id, const std::string
         }
 
         auto encode_result = payload_encoder.build();
-        zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);    
-        zmq_send(socket, "", 0, 0);    
+        ::zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);    
+        ::zmq_send(socket, "", 0, 0);    
     }
+}
+
 }

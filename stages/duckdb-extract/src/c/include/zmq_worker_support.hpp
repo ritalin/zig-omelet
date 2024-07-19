@@ -3,6 +3,8 @@
 #include <optional>
 #include <string>
 
+namespace worker {
+
 class ZmqChannel {
 public:
     ZmqChannel(std::optional<void *> socket, const std::string& id, const std::string& from);
@@ -18,3 +20,5 @@ private:
     std::string id;
     std::string from;
 };
+
+}

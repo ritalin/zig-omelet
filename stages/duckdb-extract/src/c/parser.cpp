@@ -1,4 +1,3 @@
-
 #include <duckdb.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
@@ -18,8 +17,7 @@
 
 #include "cbor_encode.hpp"
 
-// #include "yyjson.hpp"
-// #include "json_serializer.hpp"
+namespace worker {
 
 class SelectListCollector {
 public:
@@ -86,7 +84,7 @@ static auto describeSelectStatementInternal(SelectListCollector& collector, cons
         auto params = duckdb::vector<duckdb::Value>(param_count);
         
         auto query_result = prepares_stmt->Execute(params);
-        ::hydrateDescribeResult(collector, query_result, results);
+        hydrateDescribeResult(collector, query_result, results);
 
 
         return no_error;
@@ -106,8 +104,8 @@ static auto describeSelectStatementInternal(SelectListCollector& collector, cons
 }
 
 static auto describeSelectStatement(SelectListCollector& collector, duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
-    ::prependDescribeKeyword(stmt);
-    return ::describeSelectStatementInternal(collector, stmt, results);
+    prependDescribeKeyword(stmt);
+    return describeSelectStatementInternal(collector, stmt, results);
 }
 
 static auto encodeDescribeResult(const std::vector<DescribeResult>& describes) -> std::vector<char> {
@@ -129,9 +127,9 @@ auto SelectListCollector::messageChannel(const std::string& from) -> ZmqChannel 
     return ZmqChannel(this->socket, this->id, from);
 }
 
-static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel zmq_channel) -> void {
+static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& zmq_channel) -> void {
     if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-        ::walkSelectStatement(stmt->Cast<duckdb::SelectStatement>(), std::move(zmq_channel));
+        walkSelectStatement(stmt->Cast<duckdb::SelectStatement>(), std::move(zmq_channel));
     }
     else {
         zmq_channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
@@ -148,7 +146,7 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
             auto& stmt = stmts[0];
             const int32_t index = 1;
             
-            ::walkSQLStatement(stmt, std::move(this->messageChannel("worker.parse")));
+            walkSQLStatement(stmt, std::move(this->messageChannel("worker.parse")));
             auto stmt_copy = stmt->Copy();
 
 
@@ -193,6 +191,8 @@ extern "C" {
     }
 }
 
+}
+
 #ifndef DISABLE_CATCH2_TEST
 
 // -------------------------
@@ -202,6 +202,7 @@ extern "C" {
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+using namespace worker;
 using namespace Catch::Matchers;
 
 TEST_CASE("Error SQL") {

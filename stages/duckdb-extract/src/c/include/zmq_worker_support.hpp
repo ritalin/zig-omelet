@@ -11,7 +11,7 @@ public:
 public:
     static auto unitTestChannel() -> ZmqChannel;
 public:
-    auto sendWorkerResult(size_t stmt_offset, size_t stmt_count, std::vector<char> payload) -> void;
+    auto sendWorkerResult(size_t stmt_offset, size_t stmt_count, const std::string& topic, std::vector<char> payload) -> void;
 public:
     auto warn(std::string message) -> void;
     auto err(std::string message) -> void;

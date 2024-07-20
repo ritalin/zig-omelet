@@ -35,7 +35,7 @@ auto ZmqChannel::err(std::string message) -> void {
     }
 }
 
-auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, std::vector<char> payload) -> void {
+auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, const std::string& topic, std::vector<char> payload) -> void {
     if (! this->socket) {
         std::cout << std::format("worker_result/payload: {}", std::string(payload.begin(), payload.end())) << std::endl;
         return;
@@ -67,7 +67,7 @@ auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, std::ve
             payload_encoder.addUInt(stmt_offset);
         }
         topic_body: {
-            payload_encoder.addBinaryPair(topic_select_list, payload);
+            payload_encoder.addBinaryPair(topic, payload);
         }
 
         auto encode_result = payload_encoder.build();

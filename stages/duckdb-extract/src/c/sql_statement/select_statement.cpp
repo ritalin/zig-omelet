@@ -90,7 +90,7 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
     case duckdb::ExpressionClass::SUBQUERY:
         {
             auto& sq_expr = expr->Cast<duckdb::SubqueryExpression>();
-            
+
             // left (if any)
             if (sq_expr.subquery_type == duckdb::SubqueryType::ANY) {
                 walkExpressionInternal(collector, sq_expr.child, depth+1);
@@ -199,7 +199,7 @@ static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::S
 auto ParameterCollector::walkSelectStatement(duckdb::SelectStatement& stmt) -> ParameterCollector::Result {
     walkSelectStatementInternal(*this, stmt, 0);
 
-    return {.type = StatementType::Select, .lookup{}};
+    return {.type = StatementType::Select, .lookup = swapMapEntry(this->map)};
 }
 
 }
@@ -227,8 +227,26 @@ auto runTest(const std::string sql, const std::string expected, const ParameterC
         .walkSelectStatement(stmt->Cast<duckdb::SelectStatement>())
     ;
 
-    SECTION("result") {
+    SECTION("Walk result") {
         CHECK_THAT(stmt->ToString(), Equals(expected));
+    }
+    SECTION("Statement type") {
+        CHECK(param_result.type == ParameterCollector::StatementType::Select);
+    }
+    SECTION("Placeholder map") {
+        SECTION("map size") {
+            CHECK(param_result.lookup.size() == lookup.size());
+        }
+        SECTION("map entries") {
+            for (int i = 1; auto [positional, name]: param_result.lookup) {
+                SECTION(std::format("positional key exists#{}", i)) {
+                    CHECK(lookup.contains(positional));
+                }
+                SECTION(std::format("named value exists#{}", i)) {
+                    CHECK_THAT(name, Equals(lookup.at(positional)));
+                }
+            }
+        }
     }
 }
 
@@ -267,7 +285,7 @@ TEST_CASE("Auto incremental positional parameter") {
 TEST_CASE("Named parameter") {
     std::string sql("select $value as a from Foo where kind = $kind");
     std::string expected("SELECT $1 AS a FROM Foo WHERE (kind = $2)");
-    ParameterCollector::ParamNameLookup lookup{ {"1","value"}, {"kind","2"} };
+    ParameterCollector::ParamNameLookup lookup{ {"1","value"}, {"2", "kind"} };
 
     runTest(sql, expected, lookup);
 }

@@ -23,17 +23,28 @@ auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
     return (bool)view ? ParameterCollector::ParameterType::Positional : ParameterCollector::ParameterType::Named;
 }
 
+auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string> {
+    auto swap_entries = map | std::views::transform([](auto pair) -> std::unordered_map<std::string, std::string>::value_type {  
+        auto [key, value] = pair;
+        return {value, key};
+    });
+
+    return std::unordered_map<std::string, std::string>(swap_entries.begin(), swap_entries.end());
+}
+
 auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
-    if (this->param_type == ParameterCollector::ParameterType::Positional) {
+    if (this->map.contains(old_name)) {
+        return this->map[old_name];
+    }    
+    else if (this->param_type == ParameterCollector::ParameterType::Positional) {
+        this->map[old_name] = old_name;
         return old_name;
     }
-    else if (this->map.contains(old_name)) {
-        return this->map[old_name];
-    }
+    
     else {
         ++this->gen_position;
         auto next = std::to_string(*this->gen_position);
-        map[old_name] = next;
+        this->map[old_name] = next;
 
         return next;
     }

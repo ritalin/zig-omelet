@@ -92,7 +92,7 @@ pub fn run(self: *Self, setting: Setting) !void {
             switch (item.event) {
                 .request_topic => {
                     const topic = try core.Event.Payload.Topic.init(
-                        self.allocator, &.{c.topic_select_list}
+                        self.allocator, &.{c.topic_query, c.topic_placeholder, c.topic_select_list}
                     );
                     
                     topics: {

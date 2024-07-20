@@ -11,6 +11,8 @@ enum WorkerResultCode {
     describe_filed,
 };
 
+#define topic_query "query"
+#define topic_placeholder "placeholder"
 #define topic_select_list "select-list"
 
 #ifdef __cplusplus

@@ -6,16 +6,16 @@
 #define MAGIC_ENUM_RANGE_MAX (std::numeric_limits<uint8_t>::max())
 
 #include <magic_enum/magic_enum.hpp>
-#include <zmq.h>
 
 #include "duckdb_worker.h"
 #include "duckdb_database.hpp"
-#include "zmq_worker_support.hpp"
+#include "duckdb_params_collector.hpp"
+
 #include "duckdb_binder_support.hpp"
+#include "zmq_worker_support.hpp"
+#include "cbor_encode.hpp"
 
 #include <iostream>
-
-#include "cbor_encode.hpp"
 
 namespace worker {
 
@@ -123,17 +123,21 @@ static auto encodeDescribeResult(const std::vector<DescribeResult>& describes) -
     return std::move(encoder.rawBuffer());
 }
 
-auto SelectListCollector::messageChannel(const std::string& from) -> ZmqChannel {
-    return ZmqChannel(this->socket, this->id, from);
-}
+static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel& channel) -> ParameterCollector::Result {
+    ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
-static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& zmq_channel) -> void {
     if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-        walkSelectStatement(stmt->Cast<duckdb::SelectStatement>(), std::move(zmq_channel));
+        return collector.walkSelectStatement(stmt->Cast<duckdb::SelectStatement>());
     }
     else {
-        zmq_channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
+        collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
+
+        return {.type = ParameterCollector::StatementType::Invalid, .lookup{}};
     }
+}
+
+auto SelectListCollector::messageChannel(const std::string& from) -> ZmqChannel {
+    return ZmqChannel(this->socket, this->id, from);
 }
 
 auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
@@ -144,9 +148,17 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
         // for (auto& stmt: stmts) {
         if (stmts.size() > 0) {
             auto& stmt = stmts[0];
-            const int32_t index = 1;
+            const int32_t stmt_offset = 1;
+            const int32_t stmt_size = 1;
             
-            walkSQLStatement(stmt, std::move(this->messageChannel("worker.parse")));
+            auto zmq_channel = this->messageChannel("worker.parse");
+            auto param_result = walkSQLStatement(stmt, zmq_channel);
+
+            send_query: {
+                auto q = stmt->ToString();
+                zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_query, std::vector<char>(q.cbegin(), q.cend()));
+            }
+
             auto stmt_copy = stmt->Copy();
 
 
@@ -158,7 +170,7 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
             }
 
             // send as worker result
-            this->messageChannel("worker.bind").sendWorkerResult(index, stmts.size(), std::move(encodeDescribeResult(describes)));
+            this->messageChannel("worker.bind").sendWorkerResult(stmt_offset, stmts.size(), topic_select_list, std::move(encodeDescribeResult(describes)));
         }
 
         return no_error;

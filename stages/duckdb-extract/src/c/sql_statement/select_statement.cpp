@@ -6,6 +6,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 
+#include "duckdb_params_collector.hpp"
 #include "duckdb_binder_support.hpp"
 
 namespace worker {
@@ -19,36 +20,36 @@ static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -
     }
 }
 
-static auto walkOrderBysNodeInternal(duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth, ZmqChannel& zmq_channel) -> void;
-static auto walkSelectStatementInternal(duckdb::SelectStatement& stmt, uint32_t depth, ZmqChannel& zmq_channel) -> void;
+static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void;
+static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void;
 
-static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth, ZmqChannel& zmq_channel) -> void {
+static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
     switch (expr->expression_class) {
     case duckdb::ExpressionClass::PARAMETER:
         {
             auto& param_expr = expr->Cast<duckdb::ParameterExpression>();
-            param_expr.identifier = "1";
+            param_expr.identifier = collector.ofPosition(param_expr.identifier);
         }
         break;
     case duckdb::ExpressionClass::CAST: 
         {
             auto& cast_expr = expr->Cast<duckdb::CastExpression>();
-            walkExpressionInternal(cast_expr.child, depth+1, zmq_channel);
+            walkExpressionInternal(collector, cast_expr.child, depth+1);
         }
         break;
     case duckdb::ExpressionClass::COMPARISON:
         {
             auto& cmp_expr = expr->Cast<duckdb::ComparisonExpression>();
-            walkExpressionInternal(cmp_expr.left, depth+1, zmq_channel);
-            walkExpressionInternal(cmp_expr.right, depth+1, zmq_channel);
+            walkExpressionInternal(collector, cmp_expr.left, depth+1);
+            walkExpressionInternal(collector, cmp_expr.right, depth+1);
         }
         break;
     case duckdb::ExpressionClass::BETWEEN:
         {
             auto& between_expr = expr->Cast<duckdb::BetweenExpression>();
-            walkExpressionInternal(between_expr.input, depth+1, zmq_channel);
-            walkExpressionInternal(between_expr.lower, depth+1, zmq_channel);
-            walkExpressionInternal(between_expr.upper, depth+1, zmq_channel);
+            walkExpressionInternal(collector, between_expr.input, depth+1);
+            walkExpressionInternal(collector, between_expr.lower, depth+1);
+            walkExpressionInternal(collector, between_expr.upper, depth+1);
         }
         break;
     case duckdb::ExpressionClass::CASE:
@@ -57,12 +58,12 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
 
             // whrn-then clause
             for (auto& case_check: case_expr.case_checks) {
-                walkExpressionInternal(case_check.when_expr, depth+1, zmq_channel);
-                walkExpressionInternal(case_check.then_expr, depth+1, zmq_channel);
+                walkExpressionInternal(collector, case_check.when_expr, depth+1);
+                walkExpressionInternal(collector, case_check.then_expr, depth+1);
             }
             
             // else clause
-            walkExpressionInternal(case_expr.else_expr, depth+1, zmq_channel);
+            walkExpressionInternal(collector, case_expr.else_expr, depth+1);
         }
         break;
     case duckdb::ExpressionClass::CONJUNCTION:
@@ -70,7 +71,7 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
             auto& conj_expr = expr->Cast<duckdb::ConjunctionExpression>();
             
             for (auto& child: conj_expr.children) {
-                walkExpressionInternal(child, depth+1, zmq_channel);
+                walkExpressionInternal(collector, child, depth+1);
             }
         }
         break;
@@ -79,21 +80,23 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
             auto& fn_expr = expr->Cast<duckdb::FunctionExpression>();
 
             for (auto& child: fn_expr.children) {
-                walkExpressionInternal(child, depth+1, zmq_channel);
+                walkExpressionInternal(collector, child, depth+1);
             }
 
             // order by(s)
-            walkOrderBysNodeInternal(fn_expr.order_bys, depth+1, zmq_channel);
+            walkOrderBysNodeInternal(collector, fn_expr.order_bys, depth+1);
         }
         break;
     case duckdb::ExpressionClass::SUBQUERY:
         {
             auto& sq_expr = expr->Cast<duckdb::SubqueryExpression>();
-            walkSelectStatementInternal(*sq_expr.subquery, depth+1, zmq_channel);
-
+            
+            // left (if any)
             if (sq_expr.subquery_type == duckdb::SubqueryType::ANY) {
-                walkExpressionInternal(sq_expr.child, depth+1, zmq_channel);
+                walkExpressionInternal(collector, sq_expr.child, depth+1);
             }
+            // right
+            walkSelectStatementInternal(collector, *sq_expr.subquery, depth+1);
         }
         break;
     case duckdb::ExpressionClass::CONSTANT:
@@ -102,38 +105,35 @@ static auto walkExpressionInternal(duckdb::unique_ptr<duckdb::ParsedExpression>&
         break;
     case duckdb::ExpressionClass::OPERATOR:
     default: 
-        zmq_channel.warn(std::format("[TODO] Unsupported expression class: {} (depth: {})", magic_enum::enum_name(expr->expression_class), depth));
+        collector.channel.warn(std::format("[TODO] Unsupported expression class: {} (depth: {})", magic_enum::enum_name(expr->expression_class), depth));
         break;
     }
 }
 
-static auto walkOrderBysNodeInternal(duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth, ZmqChannel& zmq_channel) -> void {
+static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void {
     for (auto& order_by: order_bys->orders) {
-        walkExpressionInternal(order_by.expression, depth, zmq_channel);
+        walkExpressionInternal(collector, order_by.expression, depth);
     }
 }
 
-static auto walkSelectListItem(duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth, ZmqChannel& zmq_channel) -> void {
+static auto walkSelectListItem(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
     if (expr->HasParameter() || expr->HasSubquery()) {
         if (depth > 0) {
-            walkExpressionInternal(expr, depth, zmq_channel);
+            walkExpressionInternal(collector, expr, depth);
         }
         else {
             auto new_alias = keepColumnName(expr);
 
-            walkExpressionInternal(expr, depth, zmq_channel);
+            walkExpressionInternal(collector, expr, depth);
 
             if (expr->ToString() != new_alias) {
                 expr->alias = new_alias;
             }
-
-            // TODO: record untyped patameter column (untyped == no type casting)
-
         }
     }
 }
 
-static auto walkTableRef(duckdb::unique_ptr<duckdb::TableRef>& table_ref, uint32_t depth, ZmqChannel& zmq_channel) -> void {
+static auto walkTableRef(ParameterCollector& collector, duckdb::unique_ptr<duckdb::TableRef>& table_ref, uint32_t depth) -> void {
     switch (table_ref->type) {
     case duckdb::TableReferenceType::BASE_TABLE:
     case duckdb::TableReferenceType::EMPTY_FROM:
@@ -142,62 +142,64 @@ static auto walkTableRef(duckdb::unique_ptr<duckdb::TableRef>& table_ref, uint32
     case duckdb::TableReferenceType::TABLE_FUNCTION:
         {
             auto& table_fn = table_ref->Cast<duckdb::TableFunctionRef>();
-            walkExpressionInternal(table_fn.function, depth, zmq_channel);
+            walkExpressionInternal(collector, table_fn.function, depth);
         }
         break;
     case duckdb::TableReferenceType::JOIN:
         {
             auto& join_ref = table_ref->Cast<duckdb::JoinRef>();
-            walkTableRef(join_ref.left, depth+1, zmq_channel);
-            walkTableRef(join_ref.right, depth+1, zmq_channel);
-            walkExpressionInternal(join_ref.condition, depth+1, zmq_channel);
+            walkTableRef(collector, join_ref.left, depth+1);
+            walkTableRef(collector, join_ref.right, depth+1);
+            walkExpressionInternal(collector, join_ref.condition, depth+1);
         }
         break;
     case duckdb::TableReferenceType::SUBQUERY:
         {
             auto& sq_ref = table_ref->Cast<duckdb::SubqueryRef>();
-            walkSelectStatementInternal(*sq_ref.subquery, 0, zmq_channel);
+            walkSelectStatementInternal(collector, *sq_ref.subquery, 0);
         }
         break;
     default:
-        zmq_channel.warn(std::format("[TODO] Unsupported table ref type: {} (depth: {})", magic_enum::enum_name(table_ref->type), depth));
+        collector.channel.warn(std::format("[TODO] Unsupported table ref type: {} (depth: {})", magic_enum::enum_name(table_ref->type), depth));
         break;
     }
 }
 
-static auto walkSelectStatementInternal(duckdb::SelectStatement& stmt, uint32_t depth, ZmqChannel& zmq_channel) -> void {
+static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void {
     switch (stmt.node->type) {
     case duckdb::QueryNodeType::SELECT_NODE: 
         {
             auto& select_node =  stmt.node->Cast<duckdb::SelectNode>();
             for (auto& expr: select_node.select_list) {
-                walkSelectListItem(expr, depth, zmq_channel);
+                walkSelectListItem(collector, expr, depth);
             }
             form_clause: {
-                walkTableRef(select_node.from_table, depth+1, zmq_channel);
+                walkTableRef(collector, select_node.from_table, depth+1);
             }
             if (select_node.where_clause) {
-                walkExpressionInternal(select_node.where_clause, depth+1, zmq_channel);
+                walkExpressionInternal(collector, select_node.where_clause, depth+1);
             }
             if (select_node.groups.group_expressions.size() > 0) {
-                zmq_channel.warn(std::format("[TODO] Unsupported group by clause (depth: {})", depth));
+                collector.channel.warn(std::format("[TODO] Unsupported group by clause (depth: {})", depth));
             }
             if (select_node.having) {
-                zmq_channel.warn(std::format("[TODO] Unsupported having clause (depth: {})", depth));
+                collector.channel.warn(std::format("[TODO] Unsupported having clause (depth: {})", depth));
             }
             if (select_node.sample) {
-                zmq_channel.warn(std::format("[TODO] Unsupported sample clause (depth: {})", depth));
+                collector.channel.warn(std::format("[TODO] Unsupported sample clause (depth: {})", depth));
             }
         }
         break;
     default: 
-        zmq_channel.warn(std::format("[TODO] Unsupported select node: {} (depth: {})", magic_enum::enum_name(stmt.node->type), depth));
+        collector.channel.warn(std::format("[TODO] Unsupported select node: {} (depth: {})", magic_enum::enum_name(stmt.node->type), depth));
         break;
     }
 }
 
-auto walkSelectStatement(duckdb::SelectStatement& stmt, ZmqChannel zmq_channel) -> void {
-    walkSelectStatementInternal(stmt, 0, zmq_channel);
+auto ParameterCollector::walkSelectStatement(duckdb::SelectStatement& stmt) -> ParameterCollector::Result {
+    walkSelectStatementInternal(*this, stmt, 0);
+
+    return {.type = StatementType::Select, .lookup{}};
 }
 
 }
@@ -214,182 +216,230 @@ auto walkSelectStatement(duckdb::SelectStatement& stmt, ZmqChannel zmq_channel) 
 using namespace worker;
 using namespace Catch::Matchers;
 
-auto runTest(const std::string sql, const std::string expected) -> void {
+auto runTest(const std::string sql, const std::string expected, const ParameterCollector::ParamNameLookup& lookup) -> void {
     auto database = duckdb::DuckDB(nullptr);
     auto conn = duckdb::Connection(database);
     auto stmts = conn.ExtractStatements(sql);
     auto& stmt = stmts[0];
 
-    ::walkSelectStatement(stmt->Cast<duckdb::SelectStatement>(), ZmqChannel::unitTestChannel());
+    auto param_result = 
+        ParameterCollector(evalParameterType(stmt), ZmqChannel::unitTestChannel())
+        .walkSelectStatement(stmt->Cast<duckdb::SelectStatement>())
+    ;
 
     SECTION("result") {
         CHECK_THAT(stmt->ToString(), Equals(expected));
     }
 }
 
-TEST_CASE("Convert positional parameter") {
+TEST_CASE("Positional parameter") {
     std::string sql("select $1 as a from Foo");
     std::string expected("SELECT $1 AS a FROM Foo");
-    
-    runTest(sql, expected);
+    ParameterCollector::ParamNameLookup lookup{ {"1","1"} };
+
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert positional parameter without alias") {
-    std::string sql("select $1 from Foo");
-    std::string expected("SELECT $1 FROM Foo");
+TEST_CASE("Positional parameter without alias") {
+    std::string sql("select $1 from Foo where kind = $2");
+    std::string expected("SELECT $1 FROM Foo WHERE (kind = $2)");
+    ParameterCollector::ParamNameLookup lookup{ {"1","1"}, {"2","2"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter") {
-    std::string sql("select $value as a from Foo");
-    std::string expected("SELECT $1 AS a FROM Foo");
-    
-    runTest(sql, expected);
+TEST_CASE("Positional parameter underdering") {
+    std::string sql("select $2 as a from Foo where kind = $1");
+    std::string expected("SELECT $2 AS a FROM Foo WHERE (kind = $1)");
+    ParameterCollector::ParamNameLookup lookup{ {"2","2"}, {"1","1"} };
+
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter with type cast") {
+TEST_CASE("Auto incremental positional parameter") {
+    std::string sql("select $2 as a, ? as b from Foo where kind = $1");
+    std::string expected("SELECT $2 AS a, $3 AS b FROM Foo WHERE (kind = $1)");
+    ParameterCollector::ParamNameLookup lookup{ {"2","2"}, {"3","3"}, {"1","1"} };
+
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter") {
+    std::string sql("select $value as a from Foo where kind = $kind");
+    std::string expected("SELECT $1 AS a FROM Foo WHERE (kind = $2)");
+    ParameterCollector::ParamNameLookup lookup{ {"1","value"}, {"kind","2"} };
+
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter with type cast") {
     std::string sql("select $value::int as a from Foo");
     std::string expected("SELECT CAST($1 AS INTEGER) AS a FROM Foo");
+    ParameterCollector::ParamNameLookup lookup{ {"1","value"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter without alias") {
+TEST_CASE("Named parameter without alias") {
     std::string sql("select $v, v from Foo");
     std::string expected(R"(SELECT $1 AS "$v", v FROM Foo)");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter with type cast without alias") {
+TEST_CASE("Named parameter with type cast without alias") {
     std::string sql("select $user_name::text, user_name from Foo");
     std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS "CAST($user_name AS VARCHAR)", user_name FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","user_name"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter as expr without alias") {
+TEST_CASE("Named duplicated parameter with type cast with alias") {
+    std::string sql("select $user_name::text u1, $u2_id::int as u2_id, $user_name::text u2, user_name from Foo");
+    std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS u1, CAST($2 AS INTEGER) AS u2_id, CAST($1 AS VARCHAR) AS u2, user_name FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","user_name"}, {"2","u2_id"} };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter as expr without alias") {
     std::string sql("select $x::int + $y::int from Foo");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) + CAST($1 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#");
-    
-    runTest(sql, expected);
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) + CAST($2 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
+   
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter inslude betteen without alias") {
+TEST_CASE("Named parameter include betteen without alias") {
     std::string sql("select $v::int between $x::int and $y::int from Foo");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($1 AS INTEGER) AND CAST($1 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#");
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($2 AS INTEGER) AND CAST($3 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter inslude case expr without alias#1") {
+TEST_CASE("Named parameter include case expr without alias#1") {
     std::string sql("select case when $v::int = 0 then $x::int else $y::int end from Foo");
-    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($1 AS INTEGER)) ELSE CAST($1 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
+    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter inslude case expr without alias#2") {
-    std::string sql("select case $v::int when 99 then $x::int else $y::int end from Foo");
-    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($1 AS INTEGER)) ELSE CAST($1 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
+TEST_CASE("Named parameter include case expr without alias#2") {
+    std::string sql("select case $v::int when 99 then $y::int else $x::int end from Foo");
+    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($y AS INTEGER)) ELSE CAST($x AS INTEGER) END" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","y"}, {"3","x"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter inslude logical operator without alias") {
+TEST_CASE("Named parameter include logical operator without alias") {
     std::string sql("select $x::int = 123 AND $y::text = 'abc' from Foo");
-    std::string expected(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($1 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#");
+    std::string expected(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($2 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in function args without alias") {
+TEST_CASE("Named parameter in function args without alias") {
     std::string sql("select string_agg(s, $sep::text) from Foo");
     std::string expected(R"#(SELECT string_agg(s, CAST($1 AS VARCHAR)) AS "string_agg(s, CAST($sep AS VARCHAR))" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","sep"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in function args without alias#2") {
+TEST_CASE("Named parameter in function args without alias#2") {
     std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
-    std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($1 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM range(0, 360, 30) AS t(n))#");
+    std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM range(0, 360, 30) AS t(n))#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in subquery without alias") {
+TEST_CASE("Named parameter in subquery without alias") {
     std::string sql(R"#(
         select (select Foo.v + Point.x + $offset::int from Point)
         from Foo
     )#");
     std::string expected(R"#(SELECT (SELECT ((Foo.v + Point.x) + CAST($1 AS INTEGER)) FROM Point) AS "(SELECT ((Foo.v + Point.x) + CAST($offset AS INTEGER)) FROM Point)" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","offset"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter without alias in exists clause") {
+TEST_CASE("Named parameter without alias in exists clause") {
     std::string sql(R"#(
         select exists (select Foo.v - Point.x > $diff::int from Point)
         from Foo
     )#");
     std::string expected(R"#(SELECT EXISTS(SELECT ((Foo.v - Point.x) > CAST($1 AS INTEGER)) FROM Point) AS "EXISTS(SELECT ((Foo.v - Point.x) > CAST($diff AS INTEGER)) FROM Point)" FROM Foo)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","diff"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter without alias in any clause") {
+TEST_CASE("Named parameter without alias in any clause") {
     std::string sql(R"#(
-        select $v::int = any(select * from range(0, 10, $step::int))
+        select $v::int = any(select * from range(0, 42, $step::int))
     )#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM range(0, 10, CAST($1 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM range(0, 10, CAST($step AS INTEGER))))")#");
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($step AS INTEGER))))")#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter without alias in any clause#2") {
+TEST_CASE("Named parameter without alias in any clause#2") {
     std::string sql(R"#(select $v::int = any(range(0, 10, $step::int)))#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($1 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($step AS INTEGER)))))")#");
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($step AS INTEGER)))))")#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in table function args") {
+TEST_CASE("Named parameter in table function args") {
     std::string sql("select id * 101 from range(0, 10, $step::int) t(id)");
     std::string expected("SELECT (id * 101) FROM range(0, 10, CAST($1 AS INTEGER)) AS t(id)");
+    ParameterCollector::ParamNameLookup lookup{ {"1","step"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in joined condition") {
+TEST_CASE("Named parameter in joined condition") {
     std::string sql("select * from Foo join Bar on Foo.v = Bar.v and Bar.x = $x::int");
     std::string expected("SELECT * FROM Foo INNER JOIN Bar ON (((Foo.v = Bar.v) AND (Bar.x = CAST($1 AS INTEGER))))");
+    ParameterCollector::ParamNameLookup lookup{ {"1","x"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in derived table (subquery)") {
+TEST_CASE("Named parameter in derived table (subquery)") {
     std::string sql(R"#(
         select * from (
             select $v::int, $s::text 
         ) v
     )#");
-    std::string expected(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($1 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
+    std::string expected(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($2 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","s"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter in where clause") {
+TEST_CASE("Named parameter in where clause") {
     std::string sql(R"#(
         select * from Foo
         where v = $v::int and kind = $k::int
     )#");
-    std::string expected("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($1 AS INTEGER)))");
+    std::string expected("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($2 AS INTEGER)))");
+    ParameterCollector::ParamNameLookup lookup{ {"1","v"}, {"2","k"} };
     
-    runTest(sql, expected);
+    runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Convert named parameter ????") {
+TEST_CASE("Named parameter ????") {
     // TODO: not implement
     // order by
     // window function

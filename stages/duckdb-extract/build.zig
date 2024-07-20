@@ -187,6 +187,7 @@ fn createWorkerModule(
                 "parser.cpp",
                 "duckdb_database.cpp",
                 "zmq_worker_support.cpp",
+                "duckdb_params_collector.cpp",
                 "sql_statement/select_statement.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},

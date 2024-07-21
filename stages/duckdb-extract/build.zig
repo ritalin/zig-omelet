@@ -189,6 +189,7 @@ fn createWorkerModule(
                 "zmq_worker_support.cpp",
                 "duckdb_params_collector.cpp",
                 "sql_statement/select_statement.cpp",
+                "resolve_params_type.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

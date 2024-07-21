@@ -1,7 +1,12 @@
+#include <optional>
+
 #include <duckdb.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
 #include <duckdb/parser/expression/list.hpp>
+#include <duckdb/planner/binder.hpp>
+#include <duckdb/planner/tableref/list.hpp>
+#include <duckdb/planner/bound_parameter_map.hpp>
 
 #define MAGIC_ENUM_RANGE_MAX (std::numeric_limits<uint8_t>::max())
 
@@ -19,11 +24,11 @@
 
 namespace worker {
 
-class SelectListCollector {
+class DescribeWorker {
 public:
     duckdb::Connection conn;
 public:
-    SelectListCollector(worker::Database *db, std::string id, std::optional<void *> socket) 
+    DescribeWorker(worker::Database *db, std::string id, std::optional<void *> socket) 
         : conn(std::move(db->connect())), id(id), socket(socket) {}
 public:
     auto execute(std::string query) -> WorkerResultCode;
@@ -57,7 +62,7 @@ static auto prependDescribeKeyword(duckdb::SelectStatement& stmt) -> void {
     stmt.n_param = 1;
 }
 
-static auto hydrateDescribeResult(const SelectListCollector& collector, const duckdb::unique_ptr<duckdb::QueryResult>& query_result, std::vector<DescribeResult>& results) -> void {
+static auto hydrateDescribeResult(const DescribeWorker& collector, const duckdb::unique_ptr<duckdb::QueryResult>& query_result, std::vector<DescribeResult>& results) -> void {
     for (auto& row: *query_result) {
         // TODO: dealing with untype
 
@@ -69,14 +74,14 @@ static auto hydrateDescribeResult(const SelectListCollector& collector, const du
     }
 }
 
-static auto describeSelectStatementInternal(SelectListCollector& collector, const duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
+static auto describeSelectStatementInternal(DescribeWorker& collector, const duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
     auto& conn = collector.conn;
 
     std::string err_message;
     WorkerResultCode err;
 
     try {
-        std::cout << std::format("Q: {}", stmt.ToString()) << std::endl;
+        // std::cout << std::format("Q: {}", stmt.ToString()) << std::endl;
         // auto prepares_stmt = std::move(conn.Prepare(stmt.Copy()));
         auto prepares_stmt = std::move(conn.Prepare(stmt.ToString()));
         // passes null value to all parameter(s)
@@ -103,7 +108,7 @@ static auto describeSelectStatementInternal(SelectListCollector& collector, cons
     return err;
 }
 
-static auto describeSelectStatement(SelectListCollector& collector, duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
+static auto describeSelectStatement(DescribeWorker& collector, duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
     prependDescribeKeyword(stmt);
     return describeSelectStatementInternal(collector, stmt, results);
 }
@@ -136,14 +141,49 @@ static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, Zmq
     }
 }
 
-auto SelectListCollector::messageChannel(const std::string& from) -> ZmqChannel {
+static auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, ParameterCollector::StatementType type) -> duckdb::unique_ptr<duckdb::BoundTableRef> {
+    if (type != ParameterCollector::StatementType::Select) {
+        return nullptr;
+    }
+
+    auto& node = stmt->Cast<duckdb::SelectStatement>().node;
+
+    if (node->type != duckdb::QueryNodeType::SELECT_NODE) {
+        return nullptr;
+    }
+
+    duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
+    duckdb::BoundParameterMap parameters(parameter_map);
+    
+    auto binder = duckdb::Binder::CreateBinder(context);
+
+    binder->SetCanContainNulls(true);
+    binder->parameters = &parameters;
+
+    return std::move(binder->Bind(*node->Cast<duckdb::SelectNode>().from_table));
+}
+
+static auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement {
+    duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
+    duckdb::BoundParameterMap parameters(parameter_map);
+    
+    auto binder = duckdb::Binder::CreateBinder(context);
+
+    binder->SetCanContainNulls(true);
+    binder->parameters = &parameters;
+
+    return std::move(binder->Bind(*stmt));
+}
+
+auto DescribeWorker::messageChannel(const std::string& from) -> ZmqChannel {
     return ZmqChannel(this->socket, this->id, from);
 }
 
-auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
+auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
     std::string message;
     try {
         auto stmts = this->conn.ExtractStatements(query);
+        auto zmq_channel = this->messageChannel("worker.parse");
 
         // for (auto& stmt: stmts) {
         if (stmts.size() > 0) {
@@ -151,22 +191,45 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
             const int32_t stmt_offset = 1;
             const int32_t stmt_size = 1;
             
-            auto zmq_channel = this->messageChannel("worker.parse");
             auto param_result = walkSQLStatement(stmt, zmq_channel);
+            auto q = stmt->ToString();
+            
+            std::vector<ParamEntry> param_type_result;
+            // column_type_result;
+            try {
+                this->conn.BeginTransaction();
+
+                auto bound_stmt = bindTypeToStatement(*this->conn.context, stmt->Copy());
+                auto bound_table = bindTypeToTableRef(*this->conn.context, stmt->Copy(), param_result.type);
+
+                param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
+                
+                if (bound_table) {
+                    // TODO: column_type_result = resolveColumnType(bound_result.stmt.plan, bound_table, r.binder);
+                }
+
+                this->conn.Commit();
+            }
+            catch (...) {
+                this->conn.Rollback();
+                throw;
+            }
 
             send_query: {
-                auto q = stmt->ToString();
                 zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_query, std::vector<char>(q.cbegin(), q.cend()));
+            }
+            placeholder: {
+                // TODO: zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_placeholder, encodePlaceholder(param_type_result));
+            }
+            select_list: {
+                // TODO: zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_select_list, encodeSelectList(column_type_result));
             }
 
             auto stmt_copy = stmt->Copy();
-
-
-
             std::vector<DescribeResult> describes;
 
-            if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-                describeSelectStatement(*this, stmt->Cast<duckdb::SelectStatement>(), describes);
+            if (stmt_copy->type == duckdb::StatementType::SELECT_STATEMENT) {
+                describeSelectStatement(*this, stmt_copy->Cast<duckdb::SelectStatement>(), describes);
             }
 
             // send as worker result
@@ -178,6 +241,9 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
     catch (const duckdb::ParserException& ex) {
         message = ex.what();
     }
+    catch (const duckdb::Exception& ex) {
+        message = ex.what();
+    }
     
     this->messageChannel("worker").err(message);
     return invalid_sql;
@@ -186,18 +252,18 @@ auto SelectListCollector::execute(std::string query) -> WorkerResultCode {
 extern "C" {
     auto initCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
-        auto collector = new SelectListCollector(db, std::string(id, id_len), socket ? std::make_optional(socket) : std::nullopt);
+        auto collector = new DescribeWorker(db, std::string(id, id_len), socket ? std::make_optional(socket) : std::nullopt);
 
         *handle = reinterpret_cast<CollectorRef>(collector);
         return 0;
     }
 
     auto deinitCollector(CollectorRef handle) -> void {
-        delete reinterpret_cast<SelectListCollector *>(handle);
+        delete reinterpret_cast<DescribeWorker *>(handle);
     }
 
     auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> void {
-        auto collector = reinterpret_cast<SelectListCollector *>(handle);
+        auto collector = reinterpret_cast<DescribeWorker *>(handle);
 
         collector->execute(std::string(query, query_len));
     }
@@ -221,7 +287,7 @@ TEST_CASE("Error SQL") {
     auto sql = std::string("SELT $1::int as a");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
     
     auto err = collector.execute(sql);
 
@@ -234,7 +300,7 @@ TEST_CASE("Prepend describe") {
     auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
 
     auto conn = db.connect();;
     auto stmts = conn.ExtractStatements(sql);
@@ -250,7 +316,7 @@ TEST_CASE("Not exist relation") {
     auto sql = std::string("SELECT $1::int as p from Origin");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
     auto stmts = std::move(collector.conn.ExtractStatements(sql));
 
     std::vector<DescribeResult> results;
@@ -265,7 +331,7 @@ TEST_CASE("Describe SELECT list") {
     auto sql = std::string("SELECT CAST($1 AS INTEGER) AS a, 123, CAST($2 AS VARCHAR) AS c");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
     auto stmts = std::move(collector.conn.ExtractStatements(sql));
 
     std::vector<DescribeResult> results;
@@ -323,7 +389,7 @@ TEST_CASE("Describe SELECT list with not null definition") {
     SKIP("(TODO) Need handling nullability manually"); 
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
 
     collector.conn.Query("CREATE TABLE Foo (x INTEGER NOT NULL, v VARCHAR)");
 
@@ -373,7 +439,7 @@ TEST_CASE("Describe SELECT list with untyped placeholder#1") {
     auto sql = std::string(R"#(SELECT $1 || CAST($2 AS VARCHAR) AS "($a || CAST($b AS VARCHAR))", 123 as b)#");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
     auto stmts = std::move(collector.conn.ExtractStatements(sql));
 
     std::vector<DescribeResult> results;
@@ -419,7 +485,7 @@ TEST_CASE("Describe SELECT list with untyped placeholder#2") {
     auto sql = std::string("SELECT v || $1, 123 as b FROM Foo");
 
     auto db = worker::Database();
-    auto collector = SelectListCollector(&db, "1", std::nullopt);
+    auto collector = DescribeWorker(&db, "1", std::nullopt);
     collector.conn.Query("CREATE TABLE Foo (x INTEGER NOT NULL, v VARCHAR)");
     auto stmts = std::move(collector.conn.ExtractStatements(sql));
 

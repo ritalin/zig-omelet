@@ -7,6 +7,6 @@
 
 
 
-auto resolveColumnType(duckdb::ClientContext context, duckdb::SQLStatement& stmt) -> duckdb::unique_ptr<duckdb::BoundTableRef> {
-    return duckdb::make_uniq(nullptr);
+auto resolveColumnType(duckdb::LogicalOprator& plan, const duckdb::BoundTableRef& table_ref) -> std::vector<ColumnEntry> {
+    return {};
 }

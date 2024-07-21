@@ -13,14 +13,14 @@ auto isNumeric(std::string text) -> bool {
     return std::ranges::all_of(text, [](char c){ return std::isdigit(c); });
 }
 
-auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> ParameterCollector::ParameterType {
+auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle {
     auto view = 
         stmt->named_param_map
          | std::views::keys
          | std::views::filter([](std::string name){ return isNumeric(name); })
     ;
     
-    return (bool)view ? ParameterCollector::ParameterType::Positional : ParameterCollector::ParameterType::Named;
+    return (bool)view ? StatementParameterStyle::Positional : StatementParameterStyle::Named;
 }
 
 auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string> {
@@ -36,7 +36,7 @@ auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
     if (this->map.contains(old_name)) {
         return this->map[old_name];
     }    
-    else if (this->param_type == ParameterCollector::ParameterType::Positional) {
+    else if (this->param_type == StatementParameterStyle::Positional) {
         this->map[old_name] = old_name;
         return old_name;
     }
@@ -64,7 +64,7 @@ auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
 using namespace worker;
 using namespace Catch::Matchers;
 
-auto runEvalParameterType(const std::string& query, ParameterCollector::ParameterType expected) -> void {
+auto runEvalParameterType(const std::string& query, StatementParameterStyle expected) -> void {
     duckdb::Parser parser;
     parser.ParseQuery(query);
 
@@ -76,13 +76,13 @@ auto runEvalParameterType(const std::string& query, ParameterCollector::Paramete
 TEST_CASE("All positional parameter") {
     std::string sql("SELECT $1::int, 123, $2::text FROM Foo where kind = $3");
 
-    runEvalParameterType(sql, ParameterCollector::ParameterType::Positional);
+    runEvalParameterType(sql, StatementParameterStyle::Positional);
 }
 
 TEST_CASE("All named parameter") {
     std::string sql("SELECT $id::int, 123, $name::text FROM Foo where kind = $kind");
     
-    runEvalParameterType(sql, ParameterCollector::ParameterType::Named);
+    runEvalParameterType(sql, StatementParameterStyle::Named);
 }
 
 #endif

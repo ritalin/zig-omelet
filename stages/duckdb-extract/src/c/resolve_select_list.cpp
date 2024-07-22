@@ -377,19 +377,28 @@ TEST_CASE("Select list only with unary op with null") {
     runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
 
-TEST_CASE("Select list only without alias") {
-    std::string sql("select 123, select 'abc'");
+TEST_CASE("Select list only with scalar function call") {
+    std::string sql("select concat('hello ', 'world ') as fn");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "fn", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
 
 TEST_CASE("Select list only with parameter without alias") {
     std::string sql(R"#(
-        select 123::bigint, 123, select $1::int as "CAST($seq AS INTEGER)"
+        select $1::int as "CAST($seq AS INTEGER)"
     )#");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "CAST($seq AS INTEGER)", .field_type = "INTEGER", .nullable = false},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
 
-TEST_CASE("Select list of star") {
-    std::string sql("select * from Foo");
-
-}
 
 #endif

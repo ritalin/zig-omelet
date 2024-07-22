@@ -299,7 +299,6 @@ TEST_CASE("Select list only with null#1") {
         {.field_name = "c", .field_type = "DATE", .nullable = true},
     };
 
-    std::cout << std::format("Select list only with null#1") << std::endl;
     auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
     runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
@@ -312,7 +311,6 @@ TEST_CASE("Select list only with null#2") {
         {.field_name = "c", .field_type = "VARCHAR", .nullable = true},
     };
 
-    std::cout << std::format("Select list only with null#2") << std::endl;
     auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
     runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
@@ -325,7 +323,36 @@ TEST_CASE("Select list only with null#3") {
         {.field_name = "c", .field_type = "BOOLEAN", .nullable = false},
     };
 
-    std::cout << std::format("Select list only with null#3") << std::endl;
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+}
+
+TEST_CASE("Select list only with coalesce#1") {
+    std::string sql("select coalesce(null, null, 10) as a");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+}
+
+TEST_CASE("Select list only with coalesce#2") {
+    std::string sql("select coalesce(null, null, null)::VARCHAR as a");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "a", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+}
+
+TEST_CASE("Select list only with coalesce#3") {
+    std::string sql("select coalesce(null, 42, null) as a");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+    };
+
     auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
     runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }

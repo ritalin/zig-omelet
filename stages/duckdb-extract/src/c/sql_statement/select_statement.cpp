@@ -231,7 +231,7 @@ auto runTest(const std::string sql, const std::string expected, const ParamNameL
         CHECK_THAT(stmt->ToString(), Equals(expected));
     }
     SECTION("Statement type") {
-        CHECK(param_result.type == ParameterCollector::StatementType::Select);
+        CHECK(param_result.type == StatementType::Select);
     }
     SECTION("Placeholder map") {
         SECTION("map size") {

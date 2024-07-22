@@ -11,7 +11,6 @@ namespace worker {
 
 class ParameterCollector {
 public:
-    enum class StatementType {Invalid, Select};
     struct Result {
         StatementType type;
         ParamNameLookup lookup;

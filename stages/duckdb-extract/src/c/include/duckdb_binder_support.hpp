@@ -25,6 +25,11 @@ struct ColumnEntry {
     bool nullable;
 };
 
+struct ColumnBindingPair {
+    duckdb::ColumnBinding from;
+    duckdb::ColumnBinding to;
+};
+
 auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle;
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
 auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string>;
@@ -34,5 +39,7 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry>;
+
+auto createColumnBindingLookup(std::vector<ColumnBindingPair>& lookup, duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> void;
 
 }

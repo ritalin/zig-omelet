@@ -1,7 +1,11 @@
+#include <ranges>
+
 #include <duckdb.hpp>
 #include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/expression/list.hpp>
 #include <duckdb/planner/tableref/list.hpp>
+#include <duckdb/parser/constraints/list.hpp>
+#include <duckdb/catalog/catalog_entry/list.hpp>
 
 #include "duckdb_binder_support.hpp"
 
@@ -30,6 +34,7 @@ protected:
 	auto VisitReplace(duckdb::BoundComparisonExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 	auto VisitReplace(duckdb::BoundOperatorExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundFunctionExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+	auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 
 private:
     auto VisitNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool;
@@ -38,6 +43,7 @@ private:
 private:
     duckdb::unique_ptr<duckdb::BoundTableRef> table_ref;
     std::stack<bool> nullable_result;
+    std::vector<ColumnBindingPair> column_binding_lookup;
 };
 
 auto SelectListVisitor::VisitExpressionChildren(duckdb::Expression& expr) -> void {
@@ -102,6 +108,63 @@ auto SelectListVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr, duck
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
+static auto hasNotNullConstraintInternal(duckdb::idx_t column_index, const duckdb::TableCatalogEntry& catalog) -> bool {
+    std::cout << std::format("Table/constraint: {}", catalog.GetConstraints().size()) << std::endl;
+    
+    auto null_constraints = 
+        catalog.GetConstraints()
+        | std::views::filter([](const duckdb::unique_ptr<duckdb::Constraint>& c) { return c->type == duckdb::ConstraintType::NOT_NULL; })
+        | std::views::transform([](const duckdb::unique_ptr<duckdb::Constraint>& c) { return c->Cast<duckdb::NotNullConstraint>(); })
+    ;
+    
+    return std::ranges::any_of(
+        null_constraints,
+        [&](auto x) { return x.index.index == column_index; }
+    );
+}
+
+static auto resolveColumnBinding(const std::vector<ColumnBindingPair>& lookup, const duckdb::ColumnBinding& from) -> std::optional<duckdb::ColumnBinding> {
+    auto iter = std::ranges::find_if(lookup, [&](const duckdb::ColumnBinding& binding) { return binding == from; }, &ColumnBindingPair::from);
+
+    return iter != lookup.end() ? std::make_optional(iter->to) : std::nullopt;
+}
+
+static auto hasNotNullConstraint(const duckdb::ColumnBinding& binding, const duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref) -> bool {
+    std::cout << std::format("Table/kind: {}", magic_enum::enum_name(table_ref->type)) << std::endl;
+    switch (table_ref->type) {
+    case duckdb::TableReferenceType::BASE_TABLE:
+        {
+            auto& base_table_ref = table_ref->Cast<duckdb::BoundBaseTableRef>();
+            if (base_table_ref.get->type != duckdb::LogicalOperatorType::LOGICAL_GET) {
+                throw duckdb::Exception(duckdb::ExceptionType::UNKNOWN_TYPE, std::format("Unexpected op type (“{}“) of duckdb::BaseTableRef", magic_enum::enum_name(base_table_ref.get->type)));
+            }
+
+            // auto& op = base_table_ref.get->Cast<duckdb::LogicalGet>();
+            // if (op.table_index != binding.table_index) return false;
+
+            // auto column_id = op.column_ids[binding.column_index];
+            // std::cout << std::format("Table/column_ids: {}, proj_ids: {}", op.column_ids.size(), op.projection_ids.size()) << std::endl;
+            // std::cout << std::format("Table/op: {}", magic_enum::enum_name(base_table_ref.get->type)) << std::endl;
+            return hasNotNullConstraintInternal(binding.column_index, base_table_ref.table);
+        }
+    default:
+        return false;
+    }
+}
+
+auto SelectListVisitor::VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    auto not_null = false;
+    auto binding = resolveColumnBinding(this->column_binding_lookup, expr.binding);
+    if (binding) {
+        not_null = hasNotNullConstraint(binding.value(), this->table_ref);
+    }
+    this->nullable_result.push(! not_null);
+
+    std::cout << std::format("Column/name: {}, nn: {}, depth: {}", expr.alias, not_null, this->nullable_result.size()) << std::endl;
+    std::cout << std::format("Column/index (from): (t:{}, c: {}), index(to): (t:{}, c: {})", expr.binding.table_index, expr.binding.column_index, binding.value().table_index, binding.value().column_index) << std::endl;
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
+}
+
 auto SelectListVisitor::VisitNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool {
     size_t depth = this->nullable_result.size();
 
@@ -132,7 +195,15 @@ auto SelectListVisitor::VisitNullability(duckdb::unique_ptr<duckdb::Expression>&
     return this->VisitNullabilityInternal(expr);
 }
 
+struct ColumnBindingHasher {
+    size_t operator()(duckdb::ColumnBinding binding) const {
+        return std::hash<std::string>{}(binding.ToString());
+    }
+};
+
 auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> std::vector<ColumnEntry> {
+    createColumnBindingLookup(this->column_binding_lookup, op);
+
     std::vector<ColumnEntry> result;
     result.reserve(op->expressions.size());
 
@@ -142,6 +213,7 @@ auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -
             .field_type = expr->return_type.ToString(),
             .nullable = this->VisitNullability(expr),
         };
+        std::cout << std::format("Entry/name: {}, type: {}, nullable: {}", entry.field_name, entry.field_type, entry.nullable) << std::endl << std::endl;
         result.emplace_back(std::move(entry));
     }
 
@@ -173,37 +245,8 @@ using namespace Catch::Matchers;
 using LogicalOperatorRef = duckdb::unique_ptr<duckdb::LogicalOperator>;
 using BoundTableRef = duckdb::unique_ptr<duckdb::BoundTableRef>;
 
-static auto runBindTypeToStatement(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> LogicalOperatorRef {
-    duckdb::BoundStatement bind_result;
-    try {
-        conn.BeginTransaction();
-        bind_result = bindTypeToStatement(*conn.context, std::forward<duckdb::unique_ptr<duckdb::SQLStatement>>(stmt));
-        conn.Commit();
-    }
-    catch (...) {
-        conn.Rollback();
-        throw;
-    }
-
-    return std::move(bind_result.plan);
-}
-
-static auto runBindTypeToTableRef(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, StatementType stmt_type) -> BoundTableRef {
-    duckdb::unique_ptr<duckdb::BoundTableRef> bind_result;
-    try {
-        conn.BeginTransaction();
-        bind_result = bindTypeToTableRef(*conn.context, std::forward<duckdb::unique_ptr<duckdb::SQLStatement>>(stmt), stmt_type);
-        conn.Commit();
-    }
-    catch (...) {
-        conn.Rollback();
-        throw;
-    }
-
-    return std::move(bind_result);
-}
-
-static auto runBindStatement(const std::string sql, const std::vector<std::string>& schemas) -> std::tuple<StatementType, LogicalOperatorRef, BoundTableRef> {
+static auto runBindStatement(const std::string sql, const std::vector<std::string>& schemas, const std::vector<ColumnEntry>& expected) -> void {
+// static auto runBindStatement(const std::string sql, const std::vector<std::string>& schemas) -> std::tuple<StatementType, LogicalOperatorRef, BoundTableRef> {
     auto db = duckdb::DuckDB(nullptr);
     auto conn = duckdb::Connection(db);
 
@@ -213,25 +256,30 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         }
     }
 
-    auto stmts = conn.ExtractStatements(sql);
-    auto stmt_type = evalStatementType(stmts[0]);
+    std::vector<ColumnEntry> column_result;
+    try {
+        conn.BeginTransaction();
 
-    return std::make_tuple<StatementType, LogicalOperatorRef, BoundTableRef>(
-        std::move(stmt_type),
-        runBindTypeToStatement(conn, std::move(stmts[0]->Copy())), 
-        runBindTypeToTableRef(conn, std::move(stmts[0]->Copy()), stmt_type)
-    );
-}
+        auto stmts = conn.ExtractStatements(sql);
+        auto stmt_type = evalStatementType(stmts[0]);
 
-static auto runResolveColumnTypeForSelectStatement(LogicalOperatorRef& op, BoundTableRef&& table_ref, StatementType stmt_type, const std::vector<ColumnEntry>& expected) -> void {
-    auto column_result = resolveColumnType(op, std::forward<BoundTableRef>(table_ref), stmt_type);
+        auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
+        auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
+
+        column_result = resolveColumnType(bound_statement.plan, std::forward<BoundTableRef>(bound_table_ref), stmt_type);
+        conn.Commit();
+    }
+    catch (...) {
+        conn.Rollback();
+        throw;
+    }
 
     SECTION("Result size") {
         REQUIRE(column_result.size() == expected.size());
     }
     SECTION("Result entries") {
         for (int i = 0; auto& entry: column_result) {
-            SECTION(std::format("entry#{}", i+1)) {
+            SECTION(std::format("entry#{} (`{}`)", i+1, entry.field_name)) {
                 SECTION("field name") {
                     CHECK_THAT(entry.field_name, Equals(expected[i].field_name));
                 }
@@ -259,24 +307,21 @@ TEST_CASE("Insert Statement") {
     std::string sql("insert into Foo values (42, 1, null, 'misc...')");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {schema});
-    runResolveColumnTypeForOtherStatement(op, std::move(table_ref), stmt_type);
+    runBindStatement(sql, {schema}, {});
 }
 
 TEST_CASE("Update Statement") {
     std::string sql("update Foo set kind = 2, xys = 101 where id = 42");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {schema});
-    runResolveColumnTypeForOtherStatement(op, std::move(table_ref), stmt_type);
+    runBindStatement(sql, {schema}, {});
 }
 
 TEST_CASE("Delete Statement") {
     std::string sql("delete from Foo where id = 42");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {schema});
-    runResolveColumnTypeForOtherStatement(op, std::move(table_ref), stmt_type);  
+    runBindStatement(sql, {schema}, {});
 }
 
 TEST_CASE("Select list only") {
@@ -287,8 +332,7 @@ TEST_CASE("Select list only") {
         {.field_name = "c", .field_type = "VARCHAR", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with null#1") {
@@ -299,8 +343,7 @@ TEST_CASE("Select list only with null#1") {
         {.field_name = "c", .field_type = "DATE", .nullable = true},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with null#2") {
@@ -311,8 +354,7 @@ TEST_CASE("Select list only with null#2") {
         {.field_name = "c", .field_type = "VARCHAR", .nullable = true},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with null#3") {
@@ -323,8 +365,7 @@ TEST_CASE("Select list only with null#3") {
         {.field_name = "c", .field_type = "BOOLEAN", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with coalesce#1") {
@@ -333,8 +374,7 @@ TEST_CASE("Select list only with coalesce#1") {
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with coalesce#2") {
@@ -343,8 +383,7 @@ TEST_CASE("Select list only with coalesce#2") {
         {.field_name = "a", .field_type = "VARCHAR", .nullable = true},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with coalesce#3") {
@@ -353,8 +392,7 @@ TEST_CASE("Select list only with coalesce#3") {
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with unary op") {
@@ -363,8 +401,7 @@ TEST_CASE("Select list only with unary op") {
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with unary op with null") {
@@ -373,8 +410,7 @@ TEST_CASE("Select list only with unary op with null") {
         {.field_name = "a", .field_type = "INTEGER", .nullable = true},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with scalar function call") {
@@ -383,8 +419,7 @@ TEST_CASE("Select list only with scalar function call") {
         {.field_name = "fn", .field_type = "VARCHAR", .nullable = true},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select list only with parameter without alias") {
@@ -396,9 +431,49 @@ TEST_CASE("Select list only with parameter without alias") {
         {.field_name = "CAST($seq AS INTEGER)", .field_type = "INTEGER", .nullable = false},
     };
 
-    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
-    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+    runBindStatement(sql, {}, expected);
 }
 
+TEST_CASE("Select from table#1 (with star expr)") {
+    std::string sql("select * from Foo");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
+        {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
+    };
+
+    runBindStatement(sql, {schema}, expected);
+}
+
+TEST_CASE("Select from table#2") {
+    std::string sql("select kind, xys from Foo");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
+    };
+
+    runBindStatement(sql, {schema}, expected);
+}
+
+TEST_CASE("Select from joined table") {
+
+}
+
+TEST_CASE("Select from derived table") {
+
+}
+
+TEST_CASE("Select from scalar subquery") {
+
+}
+
+TEST_CASE("Select from table function") {
+
+}
 
 #endif

@@ -33,6 +33,8 @@ protected:
 
 private:
     auto VisitNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool;
+    template <typename Expr>
+    auto VisitNullabilityChildren(Expr& expr, bool terminate_value) -> bool;
 private:
     duckdb::unique_ptr<duckdb::BoundTableRef> table_ref;
     std::stack<bool> nullable_result;
@@ -50,7 +52,7 @@ auto SelectListVisitor::VisitExpressionChildren(duckdb::Expression& expr) -> voi
 auto SelectListVisitor::VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     this->nullable_result.push(expr.value.IsNull());
 
-    return nullptr;
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
 auto SelectListVisitor::VisitReplace(duckdb::BoundComparisonExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
@@ -77,21 +79,10 @@ auto SelectListVisitor::VisitReplace(duckdb::BoundOperatorExpression &expr, duck
         break;
     case duckdb::ExpressionType::OPERATOR_COALESCE:
     case duckdb::ExpressionType::OPERATOR_NULLIF:
-        nullable = true;
-        for (auto& child: expr.children) {
-            if (! this->VisitNullabilityInternal(child)) {
-                nullable = false;
-                break;
-            }
-        }
+        nullable = this->VisitNullabilityChildren(expr, false);
         break;
     default: 
-        for (auto& child: expr.children) {
-            if (this->VisitNullabilityInternal(child)) {
-                nullable = true;
-                break;
-            }
-        }
+        nullable = this->VisitNullabilityChildren(expr, true);
         break;
     }
     
@@ -102,12 +93,7 @@ auto SelectListVisitor::VisitReplace(duckdb::BoundOperatorExpression &expr, duck
 
 auto SelectListVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     if (expr.is_operator) {
-        for (auto& child: expr.children) {
-            if (this->VisitNullabilityInternal(child)) {
-                this->nullable_result.push(true);
-                break;
-            }
-        }
+        this->nullable_result.push(this->VisitNullabilityChildren(expr, true));
     }
     else {
         this->nullable_result.push(true);
@@ -130,32 +116,34 @@ auto SelectListVisitor::VisitNullabilityInternal(duckdb::unique_ptr<duckdb::Expr
     return result;
 }
 
+template <typename Expr>
+auto SelectListVisitor::VisitNullabilityChildren(Expr& expr, bool terminate_value) -> bool {
+    for (auto& child: expr.children) {
+        if (this->VisitNullabilityInternal(child) == terminate_value) {
+            return terminate_value;
+        }
+    }
+
+    return (! terminate_value);
+}
+
 auto SelectListVisitor::VisitNullability(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool {
     this->nullable_result = {};
     return this->VisitNullabilityInternal(expr);
 }
 
 auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> std::vector<ColumnEntry> {
-    std::cout << std::format("op/type: {}", magic_enum::enum_name(op->type)) << std::endl;
-
     std::vector<ColumnEntry> result;
     result.reserve(op->expressions.size());
 
     for (size_t i = 0; auto& expr: op->expressions) {
-        std::cout << std::format("Expression/name: {}, class: {}", expr->alias, magic_enum::enum_name(expr->expression_class)) << std::endl;
-        std::cout << std::format("Expression/type: {}", magic_enum::enum_name(expr->type)) << std::endl;
-
         auto entry = ColumnEntry{
             .field_name = expr->alias,
             .field_type = expr->return_type.ToString(),
             .nullable = this->VisitNullability(expr),
         };
-        std::cout << std::format("Expression/nullable: {}", entry.nullable) << std::endl;
         result.emplace_back(std::move(entry));
-        std::cout << std::format("") << std::endl;
     }
-    std::cout << std::format("") << std::endl;
-
 
     return std::move(result);
 }

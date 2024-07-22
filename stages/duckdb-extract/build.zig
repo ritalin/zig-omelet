@@ -190,7 +190,7 @@ fn createWorkerModule(
                 "duckdb_params_collector.cpp",
                 "sql_statement/select_statement.cpp",
                 "resolve_params_type.cpp",
-                "ressolve_select_list.cpp",
+                "resolve_select_list.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

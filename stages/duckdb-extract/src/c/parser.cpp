@@ -91,7 +91,6 @@ static auto describeSelectStatementInternal(DescribeWorker& collector, const duc
         auto query_result = prepares_stmt->Execute(params);
         hydrateDescribeResult(collector, query_result, results);
 
-
         return no_error;
     }
     catch (const duckdb::ParameterNotResolvedException& ex) {
@@ -137,12 +136,12 @@ static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, Zmq
     else {
         collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
 
-        return {.type = ParameterCollector::StatementType::Invalid, .lookup{}};
+        return {.type = StatementType::Invalid, .lookup{}};
     }
 }
 
-static auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, ParameterCollector::StatementType type) -> duckdb::unique_ptr<duckdb::BoundTableRef> {
-    if (type != ParameterCollector::StatementType::Select) {
+auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, StatementType type) -> duckdb::unique_ptr<duckdb::BoundTableRef> {
+    if (type != StatementType::Select) {
         return nullptr;
     }
 
@@ -163,7 +162,7 @@ static auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_pt
     return std::move(binder->Bind(*node->Cast<duckdb::SelectNode>().from_table));
 }
 
-static auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement {
+auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement {
     duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
     duckdb::BoundParameterMap parameters(parameter_map);
     
@@ -195,7 +194,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             auto q = stmt->ToString();
             
             std::vector<ParamEntry> param_type_result;
-            // column_type_result;
+            std::vector<ColumnEntry> column_type_result;
             try {
                 this->conn.BeginTransaction();
 
@@ -203,10 +202,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 auto bound_table = bindTypeToTableRef(*this->conn.context, stmt->Copy(), param_result.type);
 
                 param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
-                
-                if (bound_table) {
-                    // TODO: column_type_result = resolveColumnType(bound_result.stmt.plan, bound_table, r.binder);
-                }
+                column_type_result = resolveColumnType(bound_stmt.plan, std::move(bound_table), param_result.type);
 
                 this->conn.Commit();
             }

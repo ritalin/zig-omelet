@@ -23,6 +23,16 @@ auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
     return (bool)view ? StatementParameterStyle::Positional : StatementParameterStyle::Named;
 }
 
+auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType {
+    switch (stmt->type) {
+    case duckdb::StatementType::SELECT_STATEMENT: return StatementType::Select;
+    case duckdb::StatementType::INSERT_STATEMENT: return StatementType::Invalid; // TODO: Need supports
+    case duckdb::StatementType::UPDATE_STATEMENT: return StatementType::Invalid; // TODO: Need supports
+    case duckdb::StatementType::DELETE_STATEMENT: return StatementType::Invalid; // TODO: Need supports
+    default: return StatementType::Invalid;
+    }
+}
+
 auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string> {
     auto swap_entries = map | std::views::transform([](auto pair) -> std::unordered_map<std::string, std::string>::value_type {  
         auto [key, value] = pair;

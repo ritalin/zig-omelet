@@ -357,6 +357,26 @@ TEST_CASE("Select list only with coalesce#3") {
     runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
 }
 
+TEST_CASE("Select list only with unary op") {
+    std::string sql("select -42 as a");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+}
+
+TEST_CASE("Select list only with unary op with null") {
+    std::string sql("select -(null)::int as a");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "a", .field_type = "INTEGER", .nullable = true},
+    };
+
+    auto [stmt_type, op, table_ref] = runBindStatement(sql, {});
+    runResolveColumnTypeForSelectStatement(op, std::move(table_ref), stmt_type, expected);
+}
+
 TEST_CASE("Select list only without alias") {
     std::string sql("select 123, select 'abc'");
 }

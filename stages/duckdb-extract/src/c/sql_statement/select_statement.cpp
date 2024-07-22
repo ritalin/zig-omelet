@@ -100,6 +100,11 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
         }
         break;
     case duckdb::ExpressionClass::CONSTANT:
+        // assign alias as value
+        {
+            auto& const_expr = expr->Cast<duckdb::ConstantExpression>();
+            expr->alias = const_expr.value.ToSQLString();
+        }
     case duckdb::ExpressionClass::COLUMN_REF:
         // no conversion
         break;

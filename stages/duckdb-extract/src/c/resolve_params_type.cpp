@@ -69,6 +69,7 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
 
     if (this->hasAnyType(expr.identifier, type_name)) {
         this->parameters.at(expr.identifier).type_name = std::nullopt;
+        this->param_types.insert(std::make_pair(expr.identifier, type_name));
     }
 
     return nullptr;
@@ -91,11 +92,11 @@ auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const Par
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
-#include <iostream>
+
 using namespace worker;
 using namespace Catch::Matchers;
 
-typedef std::unordered_map<NamedParam, std::string> ParamTypeLookup;
+using ParamTypeLookup = std::unordered_map<NamedParam, std::string>;
 
 TEST_CASE("Typename checking#1 (same type)") {
     std::unordered_multimap<std::string, std::string> m{{"1","INTEGER"},{"2","VARCHAR"}};
@@ -136,7 +137,7 @@ static auto runBindStatementType(const std::string& sql, const std::vector<std::
     catch (...) {
         conn.Rollback();
         throw;
-    }    
+    }
 
     return std::move(bind_result);
 }
@@ -273,7 +274,7 @@ TEST_CASE("Resolve duplicated named parameter on select list and where clause wi
 TEST_CASE("Resolve duplicated named parameter on select list and where clause with subquery#2 (NOT same type)") {
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
     std::string sql(R"#(
-        select x.*, null, '' as "''", 1+2, $1::int as n1
+        select x.*, null, '' as "''", 1+2, $1::int as n1, $2::int as k2
         from (
             select id, kind, 123::bigint, $2::text || '_abc' as c
             from Foo

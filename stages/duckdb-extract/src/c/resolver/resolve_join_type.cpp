@@ -26,6 +26,7 @@ private:
     auto VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void;
 private:
     std::stack<std::pair<duckdb::JoinType, ConditionRels>> stack;
+    std::stack<duckdb::LogicalOperatorType> op_type_stack;
     std::unordered_map<Rel, duckdb::JoinType>& join_type_lookup;
 };
 
@@ -33,6 +34,7 @@ static auto EvaluateNullability(JoinTypeVisitor::Rel rel, const JoinTypeVisitor:
     auto view = 
         conditions
         | std::views::filter([&](JoinTypeVisitor::Rel r) { return r != rel; })
+        | std::views::filter([&](JoinTypeVisitor::Rel r) { return lookup.contains(r); })
         | std::views::transform([&](JoinTypeVisitor::Rel r) { return lookup.at(r); } )
     ;
 
@@ -56,33 +58,39 @@ auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
 }
 
 auto JoinTypeVisitor::VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void {
-    this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_right), std::move(rels)));
-    this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_left), {}));
+    if ((this->op_type_stack.size() == 0) || this->op_type_stack.top() != duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
+        this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_right), std::move(rels)));
+        this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_left), {}));
+    }
 
-    // walk in left
-    this->VisitOperator(*op.children[0]);
-    // walk in right
-    this->VisitOperator(*op.children[1]);
-    // drop
-    this->stack.pop();
+    this->op_type_stack.push(op.type);
+    resolve_join_type: {
+        // walk in left
+        this->VisitOperator(*op.children[0]);
+        // walk in right
+        this->VisitOperator(*op.children[1]);
+        // drop
+        this->stack.pop();
+    }
+    this->op_type_stack.pop();
 }
 
 namespace binding {
     class ConditionBindingVisitor: public duckdb::LogicalOperatorVisitor {
     public:
-        ConditionBindingVisitor(JoinTypeVisitor::ConditionRels& rels): condition_rels(rels) {}
+        ConditionBindingVisitor(std::unordered_set<JoinTypeVisitor::Rel>& rels): condition_rels(rels) {}
     protected:
         auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
-            this->condition_rels.push_back(expr.binding.table_index);
+            this->condition_rels.insert(expr.binding.table_index);
             return nullptr;
         }
     private:
-        JoinTypeVisitor::ConditionRels& condition_rels;
+        std::unordered_set<JoinTypeVisitor::Rel>& condition_rels;
     };
 }
 
 static auto VisitJoinCondition(duckdb::vector<duckdb::JoinCondition>& conditions) -> JoinTypeVisitor::ConditionRels {
-    JoinTypeVisitor::ConditionRels rels{};
+    std::unordered_set<JoinTypeVisitor::Rel> rels{};
     binding::ConditionBindingVisitor visitor(rels);
 
     for (auto& c: conditions) {
@@ -90,7 +98,22 @@ static auto VisitJoinCondition(duckdb::vector<duckdb::JoinCondition>& conditions
         visitor.VisitExpression(&c.right);
     }
 
-    return std::move(rels);
+    return std::move(JoinTypeVisitor::ConditionRels(rels.begin(), rels.end()));
+}
+
+static auto VisitDelimJoinCondition(duckdb::LogicalComparisonJoin& op) -> JoinTypeVisitor::ConditionRels {
+    std::unordered_set<JoinTypeVisitor::Rel> rels{};
+    binding::ConditionBindingVisitor visitor(rels);
+
+    for (auto& c: op.children) {
+        visitor.VisitOperator(*c);
+    }
+    for (auto& c: op.conditions) {
+        visitor.VisitExpression(&c.left);
+        visitor.VisitExpression(&c.right);
+    }
+
+    return std::move(JoinTypeVisitor::ConditionRels(rels.begin(), rels.end()));
 }
 
 static auto ToOuterAll(std::unordered_map<JoinTypeVisitor::Rel, duckdb::JoinType>& lookup) -> void {
@@ -104,7 +127,7 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::INNER, std::move(rels));
     }
     else if (op.join_type == duckdb::JoinType::LEFT) {
-        this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::OUTER, {});
+        this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::OUTER, std::move(rels));
     }
     else if (op.join_type == duckdb::JoinType::RIGHT) {
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::OUTER, duckdb::JoinType::INNER, std::move(rels));
@@ -127,15 +150,24 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
             this->VisitOperatorJoin(join_op, VisitJoinCondition(join_op.conditions));
         }
         return;
+    case duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN:
+        {
+            // // push dummy to stack (beause has replaced to cross product)
+            this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(duckdb::JoinType::INNER, {}));
+
+            auto& join_op = op.Cast<duckdb::LogicalComparisonJoin>();
+            this->VisitOperatorJoin(join_op, VisitDelimJoinCondition(join_op));
+        }
+        return;
     case duckdb::LogicalOperatorType::LOGICAL_ANY_JOIN:
         {
             auto& join_op = op.Cast<duckdb::LogicalAnyJoin>();
 
-            JoinTypeVisitor::ConditionRels rels{};
+            std::unordered_set<JoinTypeVisitor::Rel> rels{};
             binding::ConditionBindingVisitor visitor(rels);
             visitor.VisitExpression(&join_op.condition);
 
-            this->VisitOperatorJoin(join_op, std::move(rels));
+            this->VisitOperatorJoin(join_op, std::move(JoinTypeVisitor::ConditionRels(rels.begin(), rels.end())));
         }
         return;
     case duckdb::LogicalOperatorType::LOGICAL_POSITIONAL_JOIN:
@@ -497,6 +529,46 @@ TEST_CASE("Positional join") {
 
     std::vector<JoinTypePair> expects{
         {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Inner join lateral") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select *
+        from Foo 
+        join lateral (
+          select * from Bar
+          where Bar.value = Foo.id
+        ) on true
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
+        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Outer join lateral") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select *
+        from Foo 
+        left outer join lateral (
+          select * from Bar
+          where Bar.value = Foo.id
+        ) on true
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
         {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
     };
 

@@ -472,9 +472,21 @@ TEST_CASE("Select list only with parameter without alias") {
 }
 
 TEST_CASE("Select case expr#1") {
+    std::string sql(R"#(
+        select $1::int as "CAST($seq AS INTEGER)"
+    )#");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "CAST($seq AS INTEGER)", .field_type = "INTEGER", .nullable = false},
+    };
+
+    runBindStatement(sql, {}, expected);
 }
 
 TEST_CASE("Select case expr#2") {
+}
+
+TEST_CASE("Select case expr#3 (without else)") {
 }
 
 TEST_CASE("Select from table#1 (with star expr)") {

@@ -39,6 +39,7 @@ protected:
 	auto VisitReplace(duckdb::BoundOperatorExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundFunctionExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 	auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+	auto VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 
 private:
     auto VisitNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool;
@@ -62,6 +63,12 @@ auto SelectListVisitor::VisitExpressionChildren(duckdb::Expression& expr) -> voi
 
 auto SelectListVisitor::VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     this->nullable_result.push(expr.value.IsNull());
+
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
+}
+
+auto SelectListVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    this->nullable_result.push(true);
 
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
@@ -217,11 +224,29 @@ auto SelectListVisitor::VisitNullability(duckdb::unique_ptr<duckdb::Expression>&
     return this->VisitNullabilityInternal(expr);
 }
 
-struct ColumnBindingHasher {
-    size_t operator()(duckdb::ColumnBinding binding) const {
-        return std::hash<std::string>{}(binding.ToString());
-    }
-};
+namespace column_name {
+    class ColumnNameVisitor: public duckdb::LogicalOperatorVisitor {
+    public:
+        ColumnNameVisitor(std::string& name): column_name(name) {}
+    public:
+        static auto Visit(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string {
+            if (expr->alias != "") return expr->alias;
+
+            std::string result;
+            ColumnNameVisitor visitor(result);
+            visitor.VisitExpression(&expr);
+
+            return result;
+        }
+    protected:
+        auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+            this->column_name = expr.value.ToSQLString();
+            return nullptr;
+        }
+    private:
+        std::string& column_name;
+    };
+}
 
 auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> std::vector<ColumnEntry> {
     std::vector<ColumnEntry> result;
@@ -230,11 +255,13 @@ auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -
     std::unordered_multiset<std::string> name_dupe{};
 
     for (size_t i = 0; auto& expr: op->expressions) {
-        auto dupe_count = name_dupe.count(expr->alias);
-        name_dupe.insert(expr->alias);
+        auto field_name = column_name::ColumnNameVisitor::Visit(expr);
+
+        auto dupe_count = name_dupe.count(field_name);
+        name_dupe.insert(field_name);
 
         auto entry = ColumnEntry{
-            .field_name = dupe_count == 0 ? expr->alias : std::format("{}_{}", expr->alias, dupe_count),
+            .field_name = dupe_count == 0 ? field_name : std::format("{}_{}", field_name, dupe_count),
             .field_type = expr->return_type.ToString(),
             .nullable = this->VisitNullability(expr),
         };
@@ -278,7 +305,6 @@ using LogicalOperatorRef = duckdb::unique_ptr<duckdb::LogicalOperator>;
 using BoundTableRef = duckdb::unique_ptr<duckdb::BoundTableRef>;
 
 static auto runBindStatement(const std::string sql, const std::vector<std::string>& schemas, const std::vector<ColumnEntry>& expected) -> void {
-// static auto runBindStatement(const std::string sql, const std::vector<std::string>& schemas) -> std::tuple<StatementType, LogicalOperatorRef, BoundTableRef> {
     auto db = duckdb::DuckDB(nullptr);
     auto conn = duckdb::Connection(db);
 
@@ -311,7 +337,7 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
     }
     SECTION("Result entries") {
         for (int i = 0; auto& entry: column_result) {
-            SECTION(std::format("entry#{} (`{}`)", i+1, entry.field_name)) {
+            SECTION(std::format("entry#{} (`{}`)", i+1, expected[i].field_name)) {
                 SECTION("field name") {
                     CHECK_THAT(entry.field_name, Equals(expected[i].field_name));
                 }
@@ -356,12 +382,23 @@ TEST_CASE("Delete Statement") {
     runBindStatement(sql, {schema}, {});
 }
 
-TEST_CASE("Select list only") {
+TEST_CASE("Select list only#1") {
     std::string sql("select 123 as a, 98765432100 as b, 'abc' as c");
     std::vector<ColumnEntry> expected{
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
         {.field_name = "b", .field_type = "BIGINT", .nullable = false},
         {.field_name = "c", .field_type = "VARCHAR", .nullable = false},
+    };
+
+    runBindStatement(sql, {}, expected);
+}
+
+TEST_CASE("Select constant list only#2 (without alias)") {
+    std::string sql("select 123, 98765432100, 'abc'");
+    std::vector<ColumnEntry> expected{
+        {.field_name = "123", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "98765432100", .field_type = "BIGINT", .nullable = false},
+        {.field_name = "'abc'", .field_type = "VARCHAR", .nullable = false},
     };
 
     runBindStatement(sql, {}, expected);
@@ -454,13 +491,12 @@ TEST_CASE("Select list only with scalar function call") {
     runBindStatement(sql, {}, expected);
 }
 
-TEST_CASE("Select list only with parameter without alias") {
-    std::string sql(R"#(
-        select $1::int as "CAST($seq AS INTEGER)"
-    )#");
+TEST_CASE("Parameter select list#1") {
+    auto sql = std::string(R"#(SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS "CAST($v AS VARCHAR)")#");
 
     std::vector<ColumnEntry> expected{
-        {.field_name = "CAST($seq AS INTEGER)", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "a", .field_type = "INTEGER", .nullable = true},
+        {.field_name = "CAST($v AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},
     };
 
     runBindStatement(sql, {}, expected);
@@ -516,14 +552,6 @@ TEST_CASE("Select case expr#3 (without else)") {
     };
 
     runBindStatement(sql, {schema}, expected);
-}
-
-TEST_CASE("Parameter select list#1") {
-    SKIP("Not implemented");
-}
-
-TEST_CASE("Parameter select list#2 (with untyped)") {
-    SKIP("Not implemented");
 }
 
 TEST_CASE("Select from table#1 (with star expr)") {

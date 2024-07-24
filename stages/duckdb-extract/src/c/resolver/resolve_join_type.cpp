@@ -487,4 +487,20 @@ TEST_CASE("Full outer + inner join join#2") {
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
 }
 
+TEST_CASE("Positional join") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        positional join Bar
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
 #endif

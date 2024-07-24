@@ -192,6 +192,7 @@ fn createWorkerModule(
                 "resolve_params_type.cpp",
                 "resolve_select_list.cpp",
                 "resolve_column_binding.cpp",
+                "resolve_join_type.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

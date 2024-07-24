@@ -93,6 +93,12 @@ static auto VisitJoinCondition(duckdb::vector<duckdb::JoinCondition>& conditions
     return std::move(rels);
 }
 
+static auto ToOuterAll(std::unordered_map<JoinTypeVisitor::Rel, duckdb::JoinType>& lookup) -> void {
+    for (auto& k: lookup | std::views::keys) {
+        lookup[k] = duckdb::JoinType::OUTER;
+    }
+}
+
 auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&& rels) -> void {
     if (op.join_type == duckdb::JoinType::INNER) {
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::INNER, std::move(rels));
@@ -105,6 +111,7 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
     else if (op.join_type == duckdb::JoinType::OUTER) {
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::OUTER, duckdb::JoinType::OUTER, {});
+        ToOuterAll(this->join_type_lookup);
     }
 }
 
@@ -386,6 +393,94 @@ TEST_CASE("Cross join + outer join") {
     std::vector<JoinTypePair> expects{
         {.table_index = 0, .join_type = duckdb::JoinType::INNER},
         {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Full outer join") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        full outer join Bar on Foo.id = Bar.id
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Inner join + full outer join#1") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        join Bar b1 on Foo.id = b1.id
+        full outer join Bar b2 on Foo.id = b2.id
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Inner join + full outer join#2") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        join Bar b1 on Foo.id = b1.id
+        full outer join Bar b2 on b1.id = b2.id
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Full outer + inner join join#1") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        full outer join Bar b2 on Foo.id = b2.id
+        join Bar b1 on Foo.id = b1.id
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+    };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("Full outer + inner join join#2") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        full outer join Bar b2 on Foo.id = b2.id
+        join Bar b1 on b2.id = b1.id
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
+        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
         {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
     };
 

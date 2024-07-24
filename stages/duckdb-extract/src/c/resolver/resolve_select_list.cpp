@@ -113,9 +113,7 @@ auto SelectListVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr, duck
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
-static auto hasNotNullConstraintInternal(duckdb::idx_t column_index, const duckdb::TableCatalogEntry& catalog) -> bool {
-    std::cout << std::format("Table/constraint: {}", catalog.GetConstraints().size()) << std::endl;
-    
+static auto hasNotNullConstraintInternal(duckdb::idx_t column_index, const duckdb::TableCatalogEntry& catalog) -> bool {    
     auto null_constraints = 
         catalog.GetConstraints()
         | std::views::filter([](const duckdb::unique_ptr<duckdb::Constraint>& c) { return c->type == duckdb::ConstraintType::NOT_NULL; })
@@ -145,7 +143,7 @@ static auto resolveColumnBinding(const std::vector<JoinTypePair>& join_types, co
 }
 
 static auto hasNotNullConstraint(const duckdb::ColumnBinding& binding, const duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref) -> std::optional<bool> {
-    std::cout << std::format("Table/kind: {}", magic_enum::enum_name(table_ref->type)) << std::endl;
+    // std::cout << std::format("Table/kind: {}", magic_enum::enum_name(table_ref->type)) << std::endl;
     switch (table_ref->type) {
     case duckdb::TableReferenceType::BASE_TABLE:
         {
@@ -155,7 +153,7 @@ static auto hasNotNullConstraint(const duckdb::ColumnBinding& binding, const duc
             }
 
             auto& op_get = base_table_ref.get->Cast<duckdb::LogicalGet>();
-            std::cout << std::format("Table/index: {}", op_get.table_index) << std::endl;
+            // std::cout << std::format("Table/index: {}", op_get.table_index) << std::endl;
             if (op_get.table_index != binding.table_index) {
                 return std::nullopt;
             }
@@ -165,9 +163,6 @@ static auto hasNotNullConstraint(const duckdb::ColumnBinding& binding, const duc
     case duckdb::TableReferenceType::JOIN: 
         {
             auto& joined_table_ref = table_ref->Cast<duckdb::BoundJoinRef>();
-
-            std::cout << std::format("Join/join_type: {}", magic_enum::enum_name(joined_table_ref.type)) << std::endl;
-            // if (joined_table_ref)
 
             auto left_result = hasNotNullConstraint(binding, joined_table_ref.left);
             if (left_result) return left_result;
@@ -243,7 +238,7 @@ auto SelectListVisitor::Visit(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -
             .field_type = expr->return_type.ToString(),
             .nullable = this->VisitNullability(expr),
         };
-        std::cout << std::format("Entry/name: {}, type: {}, nullable: {}", entry.field_name, entry.field_type, entry.nullable) << std::endl << std::endl;
+        // std::cout << std::format("Entry/name: {}, type: {}, nullable: {}", entry.field_name, entry.field_type, entry.nullable) << std::endl << std::endl;
         result.emplace_back(std::move(entry));
     }
 
@@ -473,20 +468,62 @@ TEST_CASE("Select list only with parameter without alias") {
 
 TEST_CASE("Select case expr#1") {
     std::string sql(R"#(
-        select $1::int as "CAST($seq AS INTEGER)"
+        select (case when kind > 0 then kind else -kind end) as xyz from Foo
     )#");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
     std::vector<ColumnEntry> expected{
-        {.field_name = "CAST($seq AS INTEGER)", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
     };
 
-    runBindStatement(sql, {}, expected);
+    runBindStatement(sql, {schema}, expected);
 }
 
 TEST_CASE("Select case expr#2") {
+    std::string sql(R"#(
+        select (case kind when 0 then id + 10000 else id end) as xyz from Foo
+    )#");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
+    };
+
+    runBindStatement(sql, {schema}, expected);
+}
+
+TEST_CASE("Select case expr#3") {
+    std::string sql(R"#(
+        select (case when kind > 0 then xys else xys end) as xyz from Foo
+    )#");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
+    };
+
+    runBindStatement(sql, {schema}, expected);
 }
 
 TEST_CASE("Select case expr#3 (without else)") {
+    std::string sql(R"#(
+        select (case when kind > 0 then kind end) as xyz from Foo
+    )#");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+    std::vector<ColumnEntry> expected{
+        {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
+    };
+
+    runBindStatement(sql, {schema}, expected);
+}
+
+TEST_CASE("Parameter select list#1") {
+    SKIP("Not implemented");
+}
+
+TEST_CASE("Parameter select list#2 (with untyped)") {
+    SKIP("Not implemented");
 }
 
 TEST_CASE("Select from table#1 (with star expr)") {
@@ -695,16 +732,20 @@ TEST_CASE("Select from joined table#9 (with cross join)") {
     runBindStatement(sql, {schema_1, schema_2}, expected);
 }
 
-TEST_CASE("Select from derived table") {
-
+TEST_CASE("Select from scalar subquery") {
+    SKIP("Not implemented");
 }
 
-TEST_CASE("Select from scalar subquery") {
+TEST_CASE("Select from derived table") {
+    SKIP("Not implemented");
+}
 
+TEST_CASE("Select from derived table join") {
+    SKIP("Not implemented");
 }
 
 TEST_CASE("Select from table function") {
-
+    SKIP("Not implemented");
 }
 
 #endif

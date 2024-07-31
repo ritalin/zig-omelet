@@ -2,11 +2,14 @@
 
 #include <duckdb.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
+#include <duckdb/planner/operator/logical_projection.hpp>
 #include <duckdb/planner/operator/logical_comparison_join.hpp>
 #include <duckdb/planner/operator/logical_any_join.hpp>
 
 
 #include "duckdb_binder_support.hpp"
+
+#include <iostream>
 
 namespace worker {
 
@@ -15,8 +18,7 @@ public:
     using Rel = duckdb::idx_t;
     using ConditionRels = std::vector<duckdb::idx_t>;
 public:
-     JoinTypeVisitor(std::unordered_map<Rel, duckdb::JoinType>& lookup): join_type_lookup(lookup), stack() {
-        stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(duckdb::JoinType::INNER, {})); // dummy
+     JoinTypeVisitor(std::vector<JoinTypePair>& lookup): join_type_lookup(lookup) {
      }
 public:
     auto VisitOperator(duckdb::LogicalOperator &op) -> void;
@@ -24,55 +26,72 @@ private:
     auto VisitOperatorGet(const duckdb::LogicalGet& op) -> void;
     auto VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&& rels) -> void;
     auto VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void;
+    auto VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, const ConditionRels& rels) -> std::vector<JoinTypePair>;
 private:
-    std::stack<std::pair<duckdb::JoinType, ConditionRels>> stack;
-    std::stack<duckdb::LogicalOperatorType> op_type_stack;
-    std::unordered_map<Rel, duckdb::JoinType>& join_type_lookup;
+    std::vector<JoinTypePair>& join_type_lookup;
 };
 
-static auto EvaluateNullability(JoinTypeVisitor::Rel rel, const JoinTypeVisitor::ConditionRels& conditions, const std::unordered_map<JoinTypeVisitor::Rel, duckdb::JoinType>& lookup) -> duckdb::JoinType {
+static auto EvaluateNullability(duckdb::JoinType rel_join_type, JoinTypePair col_join_pair, const JoinTypeVisitor::ConditionRels& conditions, const std::vector<JoinTypePair>& join_types) -> duckdb::JoinType {
+    if (rel_join_type == duckdb::JoinType::OUTER) {
+        return rel_join_type;
+    }
+    if (col_join_pair.join_type == duckdb::JoinType::OUTER) {
+        return col_join_pair.join_type;
+    }
+
+    auto join_type_view = 
+        join_types
+        | std::views::filter([](const JoinTypePair& p) { return p.join_type == duckdb::JoinType::OUTER; })
+        | std::views::transform([](const JoinTypePair& p) { return p.binding.table_index; })
+    ;
+    std::unordered_multiset<JoinTypeVisitor::Rel> lookup(join_type_view.begin(), join_type_view.end());
+
     auto view = 
         conditions
-        | std::views::filter([&](JoinTypeVisitor::Rel r) { return r != rel; })
+        | std::views::filter([&](JoinTypeVisitor::Rel r) { return r != col_join_pair.binding.table_index; })
         | std::views::filter([&](JoinTypeVisitor::Rel r) { return lookup.contains(r); })
-        | std::views::transform([&](JoinTypeVisitor::Rel r) { return lookup.at(r); } )
     ;
 
-    if (std::ranges::any_of(view, [](duckdb::JoinType ty) { return ty == duckdb::JoinType::OUTER; })) {
-        return duckdb::JoinType::OUTER;
-    }
-    else {
-        return duckdb::JoinType::INNER;
-    }
+    return view.empty() ? duckdb::JoinType::INNER : duckdb::JoinType::OUTER;
 }
 
 auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
-    auto [ty, rels] = this->stack.top(); this->stack.pop();
-    
-    if (ty == duckdb::JoinType::OUTER) {
-        this->join_type_lookup[op.table_index] = ty;
-    }
-    else if (ty == duckdb::JoinType::INNER) {
-        this->join_type_lookup[op.table_index] = EvaluateNullability(op.table_index, rels, this->join_type_lookup);
+    this->join_type_lookup.reserve(this->join_type_lookup.size() + op.column_ids.size());
+
+    for (auto& col: op.column_ids) {
+        this->join_type_lookup.emplace_back(JoinTypePair {
+            .binding = duckdb::ColumnBinding(op.table_index, col),
+            .join_type = duckdb::JoinType::INNER,
+        });
     }
 }
 
-auto JoinTypeVisitor::VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void {
-    if ((this->op_type_stack.size() == 0) || this->op_type_stack.top() != duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
-        this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_right), std::move(rels)));
-        this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(std::move(ty_left), {}));
+auto JoinTypeVisitor::VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType join_type, const ConditionRels& rels) -> std::vector<JoinTypePair> {
+    std::vector<JoinTypePair> internal_join_types{};
+    JoinTypeVisitor visitor(internal_join_types);
+
+    visitor.VisitOperator(op);
+
+    this->join_type_lookup.reserve(this->join_type_lookup.size() + internal_join_types.size());
+
+    for (auto& p: internal_join_types) {
+        this->join_type_lookup.emplace_back(JoinTypePair {
+            .binding = std::move(p.binding),
+            .join_type = EvaluateNullability(join_type, p, rels, this->join_type_lookup),
+        });
     }
 
-    this->op_type_stack.push(op.type);
+    return std::move(internal_join_types);
+}
+
+
+auto JoinTypeVisitor::VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void {
     resolve_join_type: {
         // walk in left
-        this->VisitOperator(*op.children[0]);
+        auto left_cols = this->VisitOperatorCondition(*op.children[0], ty_left, {});
         // walk in right
-        this->VisitOperator(*op.children[1]);
-        // drop
-        this->stack.pop();
+        auto right_cols = this->VisitOperatorCondition(*op.children[1], ty_right, rels);
     }
-    this->op_type_stack.pop();
 }
 
 namespace binding {
@@ -116,9 +135,9 @@ static auto VisitDelimJoinCondition(duckdb::LogicalComparisonJoin& op) -> JoinTy
     return std::move(JoinTypeVisitor::ConditionRels(rels.begin(), rels.end()));
 }
 
-static auto ToOuterAll(std::unordered_map<JoinTypeVisitor::Rel, duckdb::JoinType>& lookup) -> void {
-    for (auto& k: lookup | std::views::keys) {
-        lookup[k] = duckdb::JoinType::OUTER;
+static auto ToOuterAll(std::vector<JoinTypePair>& lookup) -> void {
+    for (auto& p: lookup) {
+        p.join_type = duckdb::JoinType::OUTER;
     }
 }
 
@@ -138,27 +157,90 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
+static auto debugDumpJoinTypeBindings(const std::vector<JoinTypePair>& join_types) -> std::string {
+    std::vector<std::string> result;
+    result.reserve(join_types.size() * 2);
+
+    for (auto& p: join_types) {
+        result.emplace_back(std::format("({}, {})", p.binding.table_index, p.binding.column_index));
+        result.emplace_back(", ");
+    }
+
+    auto view = result | std::views::join;
+
+    return std::move(std::string(view.begin(), view.end()));
+}
+
+static auto fildJoinType(const std::vector<JoinTypePair>& join_types, duckdb::ColumnBinding binding) -> duckdb::JoinType {
+    auto iter = std::ranges::find_if(join_types, [&](const JoinTypePair& p) { 
+        return p.binding == binding; 
+    });
+
+    // if (iter == join_types.end()) {
+    //     std::cout << std::format("binding: ({},{})", binding.table_index, binding.column_index) << std::endl;
+    //     std::cout << std::format("join_types/size: {}", join_types.size()) << std::endl;
+    //     std::cout << std::format("join_types/bindings: {}", debugDumpJoinTypeBindings(join_types)) << std::endl;
+    // }
+
+    return iter->join_type;
+}
+
+static auto VisitOperatorProjection(duckdb::LogicalProjection& op) -> std::vector<JoinTypePair> {
+    std::vector<JoinTypePair> internal_join_types{};
+    JoinTypeVisitor visitor(internal_join_types);
+
+    for (auto& child: op.children) {
+        visitor.VisitOperator(*child);
+    }
+
+    std::vector<JoinTypePair> results;
+    results.reserve(op.expressions.size());
+
+    if (internal_join_types.empty()) {
+        return results;
+    }
+
+    for (duckdb::idx_t i = 0; auto& expr: op.expressions) {
+        duckdb::ColumnBinding binding(op.table_index, i);
+
+        if (expr->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+            auto& expr_column = expr->Cast<duckdb::BoundColumnRefExpression>();
+            results.emplace_back(JoinTypePair {.binding = binding, .join_type = fildJoinType(internal_join_types, expr_column.binding)});
+        }
+        else {
+            results.emplace_back(JoinTypePair {.binding = binding, .join_type = duckdb::JoinType::INNER});
+        }
+        ++i;
+    }
+
+    return std::move(results);
+}
+
 auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
+    case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
+        {
+            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>());
+            this->join_type_lookup.insert(this->join_type_lookup.end(), lookup.begin(), lookup.end());
+        }
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_GET:
         this->VisitOperatorGet(op.Cast<duckdb::LogicalGet>());
-        return;
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
     case duckdb::LogicalOperatorType::LOGICAL_DEPENDENT_JOIN:
         {
             auto& join_op = op.Cast<duckdb::LogicalComparisonJoin>();
             this->VisitOperatorJoin(join_op, VisitJoinCondition(join_op.conditions));
         }
-        return;
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN:
         {
             // // push dummy to stack (beause has replaced to cross product)
-            this->stack.push(std::make_pair<duckdb::JoinType, ConditionRels>(duckdb::JoinType::INNER, {}));
-
             auto& join_op = op.Cast<duckdb::LogicalComparisonJoin>();
             this->VisitOperatorJoin(join_op, VisitDelimJoinCondition(join_op));
         }
-        return;
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_ANY_JOIN:
         {
             auto& join_op = op.Cast<duckdb::LogicalAnyJoin>();
@@ -169,31 +251,27 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
 
             this->VisitOperatorJoin(join_op, std::move(JoinTypeVisitor::ConditionRels(rels.begin(), rels.end())));
         }
-        return;
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_POSITIONAL_JOIN:
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::OUTER, duckdb::JoinType::OUTER, {});
-        return;
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::INNER, {});
-        return;
+        break;
     default:
+        duckdb::LogicalOperatorVisitor::VisitOperatorChildren(op);
         break;
     }
-    
-    duckdb::LogicalOperatorVisitor::VisitOperatorChildren(op);
 }
 
 auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> std::vector<JoinTypePair> {
-    std::unordered_map<JoinTypeVisitor::Rel, duckdb::JoinType> lookup{};
+    std::vector<JoinTypePair> join_types;
 
-    JoinTypeVisitor visitor(lookup);
-    visitor.VisitOperator(*op);
+    if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
+        join_types = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>());
+    }
 
-    auto view = lookup | std::views::transform([](auto x) { 
-        return JoinTypePair{.table_index = x.first, .join_type = x.second}; 
-    });
-
-    return std::move(std::vector<JoinTypePair>(view.begin(), view.end()));
+    return std::move(join_types);
 }
 
 
@@ -207,11 +285,12 @@ auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> st
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace worker;
 using namespace Catch::Matchers;
 
-static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::string>&& schemas, std::vector<JoinTypePair>& expects) -> void {
+static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::string>&& schemas, const std::vector<JoinTypePair>& expects) -> void {
     duckdb::DuckDB db(nullptr);
     duckdb::Connection conn(db);
 
@@ -240,21 +319,21 @@ static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::str
         REQUIRE(join_type_result.size() == expects.size());
     }
     SECTION("Result item") {
-        auto view = expects | std::views::transform([](JoinTypePair x) { 
-            return std::make_pair<duckdb::idx_t, duckdb::JoinType>(std::move(x.table_index), std::move(x.join_type)); 
-        });
-        auto expected_map = std::unordered_map<duckdb::idx_t, duckdb::JoinType>(view.begin(), view.end());
-        
-        for (int i = 1; auto& v: join_type_result) {
-            SECTION(std::format("Result item#{}", i)) {
-                SECTION("table index") {
-                    CHECK(expected_map.contains(v.table_index));
+        for (int i = 0; i < expects.size(); ++i) {
+            SECTION(std::format("Result item#{}", i+1)) {
+                auto& v = join_type_result[i];
+                auto expect = expects[i];
+
+                SECTION("column binding/table_index") {
+                    CHECK(v.binding.table_index == expect.binding.table_index);
+                }
+                SECTION("column binding/column_index") {
+                    CHECK(v.binding.column_index == expect.binding.column_index);
                 }
                 SECTION("Join type") {
-                    CHECK(v.join_type == expected_map.at(v.table_index));
+                    CHECK_THAT(std::string(magic_enum::enum_name(v.join_type)), Equals(std::string(magic_enum::enum_name(expect.join_type))));
                 }
             }
-            ++i;
         }
     }
 }
@@ -268,8 +347,12 @@ TEST_CASE("Inner join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -285,9 +368,14 @@ TEST_CASE("Inner join twice") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 2, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -302,8 +390,12 @@ TEST_CASE("Left outer join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -318,8 +410,12 @@ TEST_CASE("Right outer join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -335,9 +431,14 @@ TEST_CASE("Left outer join twice") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -353,9 +454,14 @@ TEST_CASE("Inner join + outer join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -371,9 +477,14 @@ TEST_CASE("Outer join + inner join#1") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -389,9 +500,14 @@ TEST_CASE("Outer join + inner join#2") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -406,8 +522,12 @@ TEST_CASE("Cross join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -423,9 +543,14 @@ TEST_CASE("Cross join + outer join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -440,8 +565,12 @@ TEST_CASE("Full outer join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -457,9 +586,14 @@ TEST_CASE("Inner join + full outer join#1") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -475,9 +609,14 @@ TEST_CASE("Inner join + full outer join#2") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -493,9 +632,14 @@ TEST_CASE("Full outer + inner join join#1") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -511,9 +655,14 @@ TEST_CASE("Full outer + inner join join#2") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 2, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(3, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 5), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -528,8 +677,12 @@ TEST_CASE("Positional join") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::OUTER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(2, 0), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 1), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 2), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 3), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(2, 5), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -548,8 +701,12 @@ TEST_CASE("Inner join lateral") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::INNER},
+        { .binding = duckdb::ColumnBinding(8, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 4), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 5), .join_type = duckdb::JoinType::INNER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
@@ -568,8 +725,12 @@ TEST_CASE("Outer join lateral") {
     )#");
 
     std::vector<JoinTypePair> expects{
-        {.table_index = 0, .join_type = duckdb::JoinType::INNER},
-        {.table_index = 1, .join_type = duckdb::JoinType::OUTER},
+        { .binding = duckdb::ColumnBinding(8, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 1), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 2), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 3), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(8, 4), .join_type = duckdb::JoinType::OUTER },
+        { .binding = duckdb::ColumnBinding(8, 5), .join_type = duckdb::JoinType::OUTER },
     };
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);

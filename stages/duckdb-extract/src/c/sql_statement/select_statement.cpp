@@ -150,7 +150,10 @@ static auto walkTableRef(ParameterCollector& collector, duckdb::unique_ptr<duckd
             auto& join_ref = table_ref->Cast<duckdb::JoinRef>();
             walkTableRef(collector, join_ref.left, depth+1);
             walkTableRef(collector, join_ref.right, depth+1);
-            walkExpressionInternal(collector, join_ref.condition, depth+1);
+
+            if (join_ref.condition) { // positional join has NULL pointer
+                walkExpressionInternal(collector, join_ref.condition, depth+1);
+            }
         }
         break;
     case duckdb::TableReferenceType::SUBQUERY:

@@ -338,6 +338,30 @@ static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::str
     }
 }
 
+TEST_CASE("fromless query") {
+    std::string sql(R"#(
+        select 123, 'abc'
+    )#");
+
+    std::vector<JoinTypePair> expects{};
+
+    runCreateJoinTypeLookup(sql, {}, expects);
+}
+
+TEST_CASE("joinless query") {
+    std::string schema("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Bar
+    )#");
+
+    std::vector<JoinTypePair> expects{
+        { .binding = duckdb::ColumnBinding(1, 0), .join_type = duckdb::JoinType::INNER },
+        { .binding = duckdb::ColumnBinding(1, 1), .join_type = duckdb::JoinType::INNER },
+    };
+
+    runCreateJoinTypeLookup(sql, {schema}, expects);
+}
+
 TEST_CASE("Inner join") {
     std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
     std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
@@ -509,6 +533,24 @@ TEST_CASE("Outer join + inner join#2") {
         { .binding = duckdb::ColumnBinding(3, 6), .join_type = duckdb::JoinType::OUTER },
         { .binding = duckdb::ColumnBinding(3, 7), .join_type = duckdb::JoinType::OUTER },
     };
+
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("scalar subquery (single left outer join)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select 
+            Foo.id,
+            (
+                select Bar.value from Bar
+                where bar.id = Foo.id
+            ) as v
+        from Foo 
+    )#");
+
+    std::vector<JoinTypePair> expects{};
 
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
 }

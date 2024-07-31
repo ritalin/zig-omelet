@@ -610,8 +610,6 @@ TEST_CASE("Select from joined table#10 (with positional join)") {
     runBindStatement(sql, {schema_1, schema_2}, expects);
 }
 
-#ifdef ENABLE_TEST
-
 TEST_CASE("Select from scalar subquery") {
     std::string sql(R"#(
         select 
@@ -632,6 +630,8 @@ TEST_CASE("Select from scalar subquery") {
 
     runBindStatement(sql, {schema_1, schema_2}, expects);
 }
+
+#ifdef ENABLE_TEST
 
 TEST_CASE("Select from derived table#1") {
     std::string sql(R"#(

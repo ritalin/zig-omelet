@@ -2,6 +2,7 @@
 
 #include <duckdb.hpp>
 #include "zmq_worker_support.hpp"
+#include "duckdb_nullable_lookup.hpp"
 
 namespace worker {
 
@@ -26,15 +27,15 @@ struct ColumnEntry {
 };
 
 struct ColumnBindingPair {
-    duckdb::ColumnBinding binding = {};
-    bool nullable = {};
+    duckdb::ColumnBinding binding;
+    bool nullable;
 
-    duckdb::ColumnBinding from = {};
-    duckdb::ColumnBinding to = {};
+    // duckdb::ColumnBinding from = {};
+    // duckdb::ColumnBinding to = {};
 };
 struct JoinTypePair {
     duckdb::ColumnBinding binding;
-    duckdb::JoinType join_type;
+    bool nullable;
 };
 
 class DummyExpression: public duckdb::Expression {
@@ -55,6 +56,6 @@ auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const Par
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry>;
 
 auto createColumnBindingLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref) -> std::vector<ColumnBindingPair>;
-auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> std::vector<JoinTypePair>;
+auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup;
 
 }

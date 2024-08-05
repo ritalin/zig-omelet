@@ -25,7 +25,7 @@ namespace column_name {
             duckdb::unique_ptr<duckdb::Expression>& expr, 
             const duckdb::ColumnBinding& binding, 
             const std::vector<ColumnBindingPair>& binding_lookup, 
-            const std::unordered_map<duckdb::idx_t, duckdb::JoinType>& join_lookup) -> std::pair<std::string, bool>;
+            const NullableLookup& join_lookup) -> std::pair<std::string, bool>;
     protected:
         auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
             this->column_name = expr.value.ToSQLString();
@@ -35,10 +35,8 @@ namespace column_name {
         std::string& column_name;
     };
 
-    static auto isOuterJoinType(const std::unordered_map<duckdb::idx_t, duckdb::JoinType>& join_types, const duckdb::ColumnBinding& binding) -> bool {
-        if (! join_types.contains(binding.column_index)) return false;
-
-        return join_types.at(binding.column_index) == duckdb::JoinType::OUTER;
+    static auto isOuterJoinType(const std::unordered_set<duckdb::idx_t>& join_lookup, const duckdb::ColumnBinding& binding) -> bool {
+        return join_lookup.contains(binding.column_index);
     }
 
     static auto isColumnNullable(const std::vector<ColumnBindingPair>& lookup, const duckdb::ColumnBinding& binding) -> bool {
@@ -51,7 +49,7 @@ namespace column_name {
         duckdb::unique_ptr<duckdb::Expression>& expr, 
         const duckdb::ColumnBinding& binding, 
         const std::vector<ColumnBindingPair>& binding_lookup, 
-        const std::unordered_map<duckdb::idx_t, duckdb::JoinType>& join_lookup) -> std::pair<std::string, bool>
+        const NullableLookup& join_lookup) -> std::pair<std::string, bool>
     {
         std::string column_name = expr->alias;
         ColumnVisitor visitor(column_name);
@@ -63,26 +61,19 @@ namespace column_name {
             column_name = expr->alias;
         }
         
-
-        auto nullable = isOuterJoinType(join_lookup, binding) || isColumnNullable(binding_lookup, binding);
+        auto nullable = join_lookup[binding] || isColumnNullable(binding_lookup, binding);
 
         return std::make_pair<std::string, bool>(std::move(column_name), std::move(nullable));
     }
 }
 
-auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const std::vector<ColumnBindingPair>& bindings, const std::vector<JoinTypePair>& join_types) -> std::vector<ColumnEntry> {
+auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const std::vector<ColumnBindingPair>& bindings, const NullableLookup& join_lookup) -> std::vector<ColumnEntry> {
     std::vector<ColumnEntry> result;
     result.reserve(op->expressions.size());
 
     if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
         auto& op_projection = op->Cast<duckdb::LogicalProjection>();
         std::unordered_multiset<std::string> name_dupe{};
-
-        auto join_type_view = 
-            join_types
-            | std::views::transform([](auto p) { return std::make_pair<duckdb::idx_t, duckdb::JoinType>(std::move(p.binding.column_index), std::move(p.join_type)); })
-        ;
-        std::unordered_map<duckdb::idx_t, duckdb::JoinType> join_lookup(join_type_view.begin(), join_type_view.end());
 
         for (size_t i = 0; auto& expr: op->expressions) {
             duckdb::ColumnBinding binding(op_projection.table_index, i);
@@ -160,21 +151,24 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         throw;
     }
 
-    SECTION("Result size") {
+    result_size: {
+        UNSCOPED_INFO("Result size");
         REQUIRE(column_result.size() == expects.size());
     }
-    SECTION("Result entries") {
+    result_entries: {
         for (int i = 0; auto& entry: column_result) {
-            SECTION(std::format("entry#{} (`{}`)", i+1, expects[i].field_name)) {
-                SECTION("field name") {
-                    CHECK_THAT(entry.field_name, Equals(expects[i].field_name));
-                }
-                SECTION("field type") {
-                    CHECK_THAT(entry.field_type, Equals(expects[i].field_type));
-                }
-                SECTION("nullable") {
-                    CHECK(entry.nullable == expects[i].nullable);
-                }
+            INFO(std::format("entry#{} (`{}`)", i+1, expects[i].field_name));
+            field_name: {
+                UNSCOPED_INFO("field name");
+                CHECK_THAT(entry.field_name, Equals(expects[i].field_name));
+            }
+            field_type: {
+                UNSCOPED_INFO("field type");
+                CHECK_THAT(entry.field_type, Equals(expects[i].field_type));
+            }
+            nullable: {
+                UNSCOPED_INFO("nullable");
+                CHECK(entry.nullable == expects[i].nullable);
             }
             ++i;
         }

@@ -348,7 +348,7 @@ auto convertToColumnBindingPair(std::vector<NodeRef>& nodes) -> std::vector<Colu
             result.emplace_back(ColumnBindingPair{
                 .binding = duckdb::ColumnBinding(node->table_index, node->column_index),
                 .nullable = bottom->nullable,
-                .from = duckdb::ColumnBinding(bottom->table_index, bottom->column_index),
+                // .from = duckdb::ColumnBinding(bottom->table_index, bottom->column_index),
             });
         }
     }
@@ -758,5 +758,24 @@ TEST_CASE("ColumnBinding of joined table") {
 
     runCreateColumnBindingLookup(sql, {schema_1, schema_2}, expects);
 }
+
+// TEST_CASE("ColumnBinding of derived table#1") {
+//     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+//     std::string sql(R"#(
+//         select 
+//             v.*
+//         from (
+//             select id, xys, CAST($1 AS VARCHAR) From Foo
+//         ) v
+//     )#");
+
+//     std::vector<ColumnBindingPair> expects{
+//         {.binding = duckdb::ColumnBinding(3, 0), .nullable = false},
+//         {.binding = duckdb::ColumnBinding(3, 1), .nullable = true},
+//         {.binding = duckdb::ColumnBinding(3, 2), .nullable = true},
+//     };
+
+//     runCreateColumnBindingLookup(sql, {schema}, expects);
+// }
 
 #endif

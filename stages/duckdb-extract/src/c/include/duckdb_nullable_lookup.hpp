@@ -2,6 +2,8 @@
 
 #include <duckdb.hpp>
 
+namespace worker {
+    
 class NullableLookup {
 public:
     struct Column {
@@ -11,37 +13,53 @@ public:
         auto operator<(const Column& other) const -> bool {
             return std::tie(this->table_index, this->column_index) < std::tie(other.table_index, other.column_index);
         }
+        auto operator==(const Column& other) const -> bool {
+            return std::tie(this->table_index, this->column_index) == std::tie(other.table_index, other.column_index);
+        }
+    public:
+        static auto from(const duckdb::ColumnBinding binding) -> Column {
+            return {
+                .table_index = binding.table_index,
+                .column_index = binding.column_index,
+            };
+        }
+    };
+    struct Nullability {
+        bool from_field;
+        bool from_join;
+    public:
+        auto shouldNulls() -> bool { return this->from_join || this->from_field; }
     };
 public:
     NullableLookup() {}
 
     template<std::input_iterator InputIterator>
-    requires std::same_as<std::iter_value_t<InputIterator>, std::pair<Column, bool>>
+    requires std::same_as<std::iter_value_t<InputIterator>, std::pair<Column, Nullability>>
     NullableLookup(InputIterator begin, InputIterator end): entries(begin, end) {}
 public:
-    auto operator[] (const duckdb::ColumnBinding& binding) -> bool& {
+    auto operator[] (const duckdb::ColumnBinding& binding) -> Nullability& {
         return (*this)[Column{.table_index = binding.table_index, .column_index = binding.column_index}];
     }
-    auto operator[] (const Column& binding) -> bool& {
+    auto operator[] (const Column& binding) -> Nullability& {
         return this->entries[binding];
     }
-    auto operator[] (const duckdb::ColumnBinding& binding) const -> bool {
+    auto operator[] (const duckdb::ColumnBinding& binding) const -> Nullability {
         auto key = Column{.table_index = binding.table_index, .column_index = binding.column_index};
         return (*this)[key];
     }
-    auto operator[] (const Column& binding) const -> bool {
+    auto operator[] (const Column& binding) const -> Nullability {
         auto it = this->entries.find(binding);
 
         if (it != this->entries.end()) {
             return it->second;
         } 
         else {
-            return false;
+            return {};
         }
     }
 public:
     template<std::input_iterator InputIterator>
-    requires std::same_as<std::iter_value_t<InputIterator>, std::pair<const Column, bool>>
+    requires std::same_as<std::iter_value_t<InputIterator>, std::pair<const Column, Nullability>>
     auto insert(InputIterator begin, InputIterator end) -> void {
         for (auto it = begin; it != end; ++it) {
             this->entries.insert(*it);
@@ -59,5 +77,7 @@ public:
     auto begin() const { return this->entries.begin(); }
     auto end() const { return this->entries.end(); }
 private:
-    std::map<Column, bool> entries;
+    std::map<Column, Nullability> entries;
 };
+
+}

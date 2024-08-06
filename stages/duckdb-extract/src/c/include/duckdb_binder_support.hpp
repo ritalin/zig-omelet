@@ -9,6 +9,7 @@ namespace worker {
 using PositionalParam = std::string;
 using NamedParam = std::string;
 using ParamNameLookup = std::unordered_map<PositionalParam, NamedParam>;
+using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
@@ -29,13 +30,6 @@ struct ColumnEntry {
 struct ColumnBindingPair {
     duckdb::ColumnBinding binding;
     bool nullable;
-
-    // duckdb::ColumnBinding from = {};
-    // duckdb::ColumnBinding to = {};
-};
-struct JoinTypePair {
-    duckdb::ColumnBinding binding;
-    bool nullable;
 };
 
 class DummyExpression: public duckdb::Expression {
@@ -53,9 +47,9 @@ auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckd
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry>;
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry>;
 
-auto createColumnBindingLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref) -> std::vector<ColumnBindingPair>;
-auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup;
+auto createColumnBindingLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref, const CatalogLookup& catalogs) -> std::vector<ColumnBindingPair>;
+auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs) -> NullableLookup;
 
 }

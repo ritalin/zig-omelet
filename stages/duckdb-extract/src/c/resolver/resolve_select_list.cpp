@@ -9,7 +9,7 @@
 #include <duckdb/planner/operator/logical_get.hpp>
 #include <duckdb/planner/operator/logical_projection.hpp>
 
-#include "duckdb_binder_support.hpp"
+#include "duckdb_logical_visitors.hpp"
 
 #include <iostream>
 #include <magic_enum/magic_enum.hpp>
@@ -61,7 +61,7 @@ namespace column_name {
             column_name = expr->alias;
         }
         
-        auto nullable = join_lookup[binding] || isColumnNullable(binding_lookup, binding);
+        auto nullable = join_lookup[binding].shouldNulls() || isColumnNullable(binding_lookup, binding);
 
         return std::make_pair<std::string, bool>(std::move(column_name), std::move(nullable));
     }
@@ -96,11 +96,12 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     return std::move(result);
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>&& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry> {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref, StatementType stmt_type) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
-    auto lookup = createColumnBindingLookup(op, std::move(table_ref));
-    auto join_types = createJoinTypeLookup(op);
+    auto catalogs = TableCatalogResolveVisitor::Resolve(table_ref);
+    auto lookup = createColumnBindingLookup(op, table_ref, catalogs);
+    auto join_types = createJoinTypeLookup(op, catalogs);
 
     return resolveColumnTypeInternal(op, lookup, join_types);
 }
@@ -143,7 +144,7 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
         auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        column_result = resolveColumnType(bound_statement.plan, std::forward<BoundTableRef>(bound_table_ref), stmt_type);
+        column_result = resolveColumnType(bound_statement.plan, bound_table_ref, stmt_type);
         conn.Commit();
     }
     catch (...) {
@@ -176,7 +177,7 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
 }
 
 static auto runResolveColumnTypeForOtherStatement(LogicalOperatorRef& op, BoundTableRef&& table_ref, StatementType stmt_type) -> void {
-    auto column_result = resolveColumnType(op, std::move(table_ref), stmt_type);
+    auto column_result = resolveColumnType(op, table_ref, stmt_type);
 
     SECTION("Resolve result (NOT generate select list)") {
         REQUIRE(column_result.size() == 0);

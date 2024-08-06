@@ -145,24 +145,28 @@ static auto runBindStatementType(const std::string& sql, const std::vector<std::
 static auto runrResolveParamType(duckdb::BoundStatement& stmt, const ParamNameLookup& lookup, const ParamTypeLookup& param_types) -> void {
     auto resolve_result = resolveParamType(stmt.plan, lookup);
 
-    SECTION("Parameter count") {
+    parameter_size: {
+        UNSCOPED_INFO("Parameter size");
         REQUIRE(resolve_result.size() == lookup.size());
     }
-    SECTION("Parameter entries") {
+    parameter_entries: {
         for (int i = 0; auto& entry: resolve_result) {
-            SECTION(std::format("valid nameed parameter#{}", i)) {
+            has_param: {
+                UNSCOPED_INFO(std::format("valid named parameter#{}", i));
                 REQUIRE(lookup.contains(entry.position));
                 REQUIRE_THAT(entry.name, Equals(lookup.at(entry.position)));
             }
 
             if (param_types.contains(entry.position)) {
-                SECTION(std::format("valid parameter type#{} (has type)", i)) {
+                with_type_param: {
+                    UNSCOPED_INFO(std::format("valid parameter type#{} (has type)", i));
                     REQUIRE(param_types.contains(entry.position));
                     REQUIRE_THAT(entry.type_name.value(), Equals(param_types.at(entry.position)));
                 }
             }
             else {
-                SECTION(std::format("valid parameter type#{} (has ANY type)", i)) {
+                without_type_param: {
+                    UNSCOPED_INFO(std::format("valid parameter type#{} (has ANY type)", i));
                     REQUIRE_FALSE((bool)entry.type_name);
                 }
             }

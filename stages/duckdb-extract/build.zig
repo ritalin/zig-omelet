@@ -191,6 +191,7 @@ fn createWorkerModule(
                 "sql_statement/select_statement.cpp",
                 "resolver/resolve_params_type.cpp",
                 "resolver/resolve_select_list.cpp",
+                "resolver/resolve_table_catalog.cpp",
                 "resolver/resolve_column_binding.cpp",
                 "resolver/resolve_join_type.cpp",
             },
@@ -218,7 +219,22 @@ fn createWorkerModule(
     duckdb_native_config: {
         mod.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "include" }) });
         mod.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "lib"}) });
-        mod.linkSystemLibrary("duckdb", .{});
+        mod.linkSystemLibrary("duckdb_static", .{});
+        mod.linkSystemLibrary("duckdb_fastpforlib", .{});
+        mod.linkSystemLibrary("duckdb_re2", .{});
+        mod.linkSystemLibrary("duckdb_utf8proc", .{});
+        mod.linkSystemLibrary("autocomplete_extension", .{});
+        mod.linkSystemLibrary("duckdb_pg_query", .{});
+        mod.linkSystemLibrary("duckdb_miniz", .{});
+        mod.linkSystemLibrary("duckdb_fsst", .{});
+        mod.linkSystemLibrary("icu_extension", .{});
+        mod.linkSystemLibrary("duckdb_hyperloglog", .{});
+        mod.linkSystemLibrary("duckdb_yyjson", .{});
+        mod.linkSystemLibrary("parquet_extension", .{});
+        mod.linkSystemLibrary("duckdb_mbedtls", .{});
+        mod.linkSystemLibrary("json_extension", .{});
+        mod.linkSystemLibrary("duckdb_fmt", .{});
+        mod.linkSystemLibrary("duckdb_skiplistlib", .{});
 
         mod.addIncludePath(b.path("../../vendor/duckdb/third_party/yyjson/include"));
         mod.addIncludePath(b.path("../../vendor/duckdb/third_party/fmt/include"));

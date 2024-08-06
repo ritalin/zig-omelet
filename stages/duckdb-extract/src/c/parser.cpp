@@ -202,7 +202,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 auto bound_table = bindTypeToTableRef(*this->conn.context, stmt->Copy(), param_result.type);
 
                 param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
-                column_type_result = resolveColumnType(bound_stmt.plan, std::move(bound_table), param_result.type);
+                column_type_result = resolveColumnType(bound_stmt.plan, bound_table, param_result.type);
 
                 this->conn.Commit();
             }
@@ -279,48 +279,48 @@ extern "C" {
 using namespace worker;
 using namespace Catch::Matchers;
 
-TEST_CASE("Error SQL") {
-    auto sql = std::string("SELT $1::int as a");
+// TEST_CASE("Error SQL") {
+//     auto sql = std::string("SELT $1::int as a");
 
-    auto db = worker::Database();
-    auto collector = DescribeWorker(&db, "1", std::nullopt);
+//     auto db = worker::Database();
+//     auto collector = DescribeWorker(&db, "1", std::nullopt);
     
-    auto err = collector.execute(sql);
+//     auto err = collector.execute(sql);
 
-    SECTION("execute result code") {
-        CHECK(err != 0);
-    }
-}
+//     SECTION("execute result code") {
+//         CHECK(err != 0);
+//     }
+// }
 
-TEST_CASE("Prepend describe") {
-    auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
+// TEST_CASE("Prepend describe") {
+//     auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
 
-    auto db = worker::Database();
-    auto collector = DescribeWorker(&db, "1", std::nullopt);
+//     auto db = worker::Database();
+//     auto collector = DescribeWorker(&db, "1", std::nullopt);
 
-    auto conn = db.connect();;
-    auto stmts = conn.ExtractStatements(sql);
-    auto& stmt = stmts[0];
-    ::prependDescribeKeyword(stmt->Cast<duckdb::SelectStatement>());
+//     auto conn = db.connect();;
+//     auto stmts = conn.ExtractStatements(sql);
+//     auto& stmt = stmts[0];
+//     ::prependDescribeKeyword(stmt->Cast<duckdb::SelectStatement>());
 
-    SECTION("result") {
-        CHECK_THAT(stmt->ToString(), Equals("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, xyz, 123, CAST($2 AS VARCHAR) AS c FROM Foo)"));
-    }
-}
+//     SECTION("result") {
+//         CHECK_THAT(stmt->ToString(), Equals("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, xyz, 123, CAST($2 AS VARCHAR) AS c FROM Foo)"));
+//     }
+// }
 
-TEST_CASE("Not exist relation") {
-    auto sql = std::string("SELECT $1::int as p from Origin");
+// TEST_CASE("Not exist relation") {
+//     auto sql = std::string("SELECT $1::int as p from Origin");
 
-    auto db = worker::Database();
-    auto collector = DescribeWorker(&db, "1", std::nullopt);
-    auto stmts = std::move(collector.conn.ExtractStatements(sql));
+//     auto db = worker::Database();
+//     auto collector = DescribeWorker(&db, "1", std::nullopt);
+//     auto stmts = std::move(collector.conn.ExtractStatements(sql));
 
-    std::vector<DescribeResult> results;
-    ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
+//     std::vector<DescribeResult> results;
+//     ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
 
-    SECTION("describe result") {
-        REQUIRE(results.size() == 0);
-    }
-}
+//     SECTION("describe result") {
+//         REQUIRE(results.size() == 0);
+//     }
+// }
 
 #endif

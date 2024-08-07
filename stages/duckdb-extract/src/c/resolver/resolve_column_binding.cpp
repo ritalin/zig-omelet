@@ -10,33 +10,15 @@
 #include <duckdb/planner/bound_tableref.hpp>
 
 #include "duckdb_logical_visitors.hpp"
+#include "duckdb_nullable_lookup.hpp"
 
 #include <iostream>
 
 namespace worker {
 
-// auto DumpNodes(std::vector<NodeRef>& nodes) -> void {
-//     for (size_t i = 0; auto& node: nodes) {
-//         auto n = node;
-//         std::cout << std::format("[{}] ", i);
-//         while (n) {
-//             std::cout << std::format("({}, {}) -> ", n->table_index, n->column_index);
-//             n = n->next;
-//         } 
-//         std::cout << "(null)" << std::endl << std::endl;;
-//         ++i;
-//     }
-// }
-
-// auto ColumnExpressionVisitor::RegisterBindingLink(const std::optional<duckdb::ColumnBinding>& current_binding, bool nullable) -> void {
-//     this->nullable_stack.push(nullable);
-// }
-
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     auto nullable = expr.value.IsNull();
-    // std::cout << std::format("[IN VisitReplace/BoundConstantExpression] (current: {}, {})", current.value().table_index, current.value().column_index) << std::endl;
     
-    // this->RegisterBindingLink(this->current_binding, nullable);
     this->nullable_stack.push(nullable);
 
     return nullptr;
@@ -48,7 +30,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr
         nullable = this->EvalNullability(expr.children, true);
     }
 
-    // this->RegisterBindingLink(this->current_binding, nullable);
     this->nullable_stack.push(nullable);
 
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
@@ -71,7 +52,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundOperatorExpression &expr
         break;
     }
     
-    // this->RegisterBindingLink(this->current_binding, nullable);
     this->nullable_stack.push(nullable);
 
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
@@ -81,7 +61,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundComparisonExpression &ex
     switch (expr.type) {
     case duckdb::ExpressionType::COMPARE_DISTINCT_FROM: 
         // is [not] false/true
-        // this->RegisterBindingLink(this->current_binding, false);
         this->nullable_stack.push(false);
         break;
     default: 
@@ -91,7 +70,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundComparisonExpression &ex
             children.push_back(expr.right->Copy());
         }
         auto nullable = this->EvalNullability(children, true);
-        // this->RegisterBindingLink(this->current_binding, nullable);
         this->nullable_stack.push(nullable);
 
         break;
@@ -101,7 +79,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundComparisonExpression &ex
 }
 
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
-    // this->RegisterBindingLink(this->current_binding, true);
     this->nullable_stack.push(true);
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
@@ -115,7 +92,6 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundCaseExpression &expr, du
         nullable = this->EvalNullability(children, true);
     }
 
-    // this->RegisterBindingLink(this->current_binding, nullable);
     this->nullable_stack.push(nullable);
 
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
@@ -127,47 +103,12 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundSubqueryExpression &expr
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
-// auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
-//     auto current = this->current_binding;
-    
-//     auto table_index = expr.binding.table_index;
-//     auto column_index = expr.binding.column_index;
+auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    auto binding = NullableLookup::Column::from(expr.binding);
+    this->nullable_stack.push(this->nullabilities[binding].from_field);
 
-//     duckdb::idx_t index = 0;
-//     auto view = this->nodes 
-//         | std::views::filter([&](const NodeRef& node) { return node->table_index == table_index; })
-//         | std::views::filter([&](const NodeRef& node) { return index++ == column_index; })
-//     ;
-//     std::optional<NodeRef> next_node = view.begin() != view.end() ? std::optional{view.front()} : std::nullopt;
-
-//     if (current) {
-//         // std::cout 
-//         // << std::format("[IN VisitReplace/BoundColumnRefExpression] current: ({}, {}) expr: ({}, {}) nodes: {}, nex: {}", 
-//         //     current.value().table_index, current.value().column_index, table_index, column_index, this->nodes.size(), (bool)(view.begin() != view.end())) 
-//         // << std::endl;
-
-//         auto node = std::make_shared<ColumnBindingNode>(
-//             nullptr,
-//             NodeKind::Consume,
-//             current.value().table_index,
-//             current.value().column_index,
-//             true
-//         );
-
-//         if (next_node) {
-//             node->next = next_node.value();
-//         }
-        
-//         this->nodes.push_back(node);
-
-//         // DumpNodes(this->nodes);
-//     }
-//     else {
-//         this->nullable_stack.push(next_node ? next_node.value()->nullable : true);
-//     }
-
-//     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
-// }
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
+}
 
 auto ColumnExpressionVisitor::EvalNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool {
     size_t depth = this->nullable_stack.size();
@@ -188,98 +129,17 @@ auto ColumnExpressionVisitor::EvalNullabilityInternal(duckdb::unique_ptr<duckdb:
 }
 
 auto ColumnExpressionVisitor::EvalNullability(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& expressions, bool terminate_value) -> bool {
-    // std::optional<duckdb::ColumnBinding> sv_binding = this->current_binding;
-    // this->current_binding.reset();
-
     for (auto& expr: expressions) {
         if (this->EvalNullabilityInternal(expr) == terminate_value) {
-            // this->current_binding = sv_binding;
             return terminate_value;
         }
     }
 
-    // this->current_binding = sv_binding;
     return (! terminate_value);
 }
 
-// auto ColumnExpressionVisitor::VisitColumnBinding(duckdb::unique_ptr<duckdb::Expression>&& expr, duckdb::ColumnBinding&& binding) -> void {
-//     this->current_binding = std::move(binding);
-    
-//     this->VisitExpression(&expr);
-//     this->current_binding.reset();
-// }
-
-// static auto VisitOperatorGet(CatalogLookup catalogs, std::vector<NodeRef>& nodes, const duckdb::LogicalGet& op) -> void {
-//     std::unordered_set<duckdb::idx_t> nn_columns{};
-
-//     if (catalogs.contains(op.table_index)) {
-//         auto& constraints = catalogs.at(op.table_index)->GetConstraints();
-//         auto nn_view = constraints
-//             | std::views::filter([](const duckdb::unique_ptr<duckdb::Constraint>& c) { return c->type == duckdb::ConstraintType::NOT_NULL; })
-//             | std::views::transform([](const duckdb::unique_ptr<duckdb::Constraint>& c) { return c->Cast<duckdb::NotNullConstraint>().index.index; })
-//         ;
-//         nn_columns = std::move(std::unordered_set<duckdb::idx_t>(nn_view.begin(), nn_view.end()));
-//     }
-
-//     for (auto id: op.column_ids) {
-//         nodes.push_back(std::make_shared<ColumnBindingNode>(
-//             nullptr,
-//             NodeKind::FromTable,
-//             op.table_index,
-//             id,
-//             (! nn_columns.contains(id))
-//         ));
-//     }
-// }
-
-// auto ColumnExpressionVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
-//     if (op.type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
-//         auto& op_projection = op.Cast<duckdb::LogicalProjection>();
-
-//         this->VisitOperatorChildren(op);
-
-//         for (duckdb::idx_t column_index = 0; auto& expr: op.expressions) {
-//             this->VisitColumnBinding(expr->Copy(), duckdb::ColumnBinding(op_projection.table_index, column_index));
-//             ++column_index;
-//         }
-//     }
-//     else if (op.type == duckdb::LogicalOperatorType::LOGICAL_GET) {
-//         VisitOperatorGet(this->catalogs, this->nodes, op.Cast<duckdb::LogicalGet>());
-//     }
-//     else {
-//         duckdb::LogicalOperatorVisitor::VisitOperatorChildren(op);
-//     }
-// }
-
-// --------
-
-// auto convertToColumnBindingPairInternal(const NodeRef& parent_node, const NodeRef& node) -> NodeRef {
-//     if (! node) {
-//         return parent_node;
-//     }
-
-//     return convertToColumnBindingPairInternal(node, node->next);
-// }
-
-// auto convertToColumnBindingPair(std::vector<NodeRef>& nodes) -> std::vector<ColumnBindingPair> {
-//     std::vector<ColumnBindingPair> result;
-//     result.reserve(nodes.size());
-
-//     for (auto& node: nodes) {
-//         if (node->kind != NodeKind::FromTable) {
-//             auto bottom = convertToColumnBindingPairInternal(node, node->next);
-//             result.emplace_back(ColumnBindingPair{
-//                 .binding = duckdb::ColumnBinding(node->table_index, node->column_index),
-//                 .nullable = bottom->nullable,
-//             });
-//         }
-//     }
-
-//     return result;
-// }
-
-auto ColumnExpressionVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression> &expr) -> NullableLookup::Nullability {
-    ColumnExpressionVisitor visitor;
+auto ColumnExpressionVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression> &expr, NullableLookup& nullabilities) -> NullableLookup::Nullability {
+    ColumnExpressionVisitor visitor(nullabilities);
 
     duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> exprs;
     {
@@ -287,10 +147,16 @@ auto ColumnExpressionVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression> &ex
         exprs.push_back(expr->Copy());
     }
 
-    return std::move(NullableLookup::Nullability{
-        .from_field = visitor.EvalNullability(exprs, true), 
-        .from_join = false
-    });
+    NullableLookup::Nullability result{};
+    if (expr->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+        auto& column_expr = expr->Cast<duckdb::BoundColumnRefExpression>();
+        auto binding = NullableLookup::Column::from(column_expr.binding);
+        result = nullabilities[binding];
+    }
+
+    result.from_field = visitor.EvalNullability(exprs, true);
+
+    return result;
 }
 
 }
@@ -339,9 +205,11 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         // auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
         // auto catalogs = TableCatalogResolveVisitor::Resolve(bound_table_ref);
 
+        NullableLookup field_lookup;
+
         for (duckdb::idx_t i = 0; auto& expr: bound_statement.plan->expressions) {
             NullableLookup::Column binding{ .table_index = 1, .column_index = i++ };
-            results[binding] = ColumnExpressionVisitor::Resolve(expr);
+            results[binding] = ColumnExpressionVisitor::Resolve(expr, field_lookup);
         }
         conn.Commit();
     }

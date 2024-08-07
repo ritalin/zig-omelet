@@ -1,9 +1,11 @@
 
 
 #include <duckdb.hpp>
+#include <duckdb/parser/expression/list.hpp>
 #include <duckdb/planner/tableref/list.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
 #include <duckdb/planner/query_node/bound_select_node.hpp>
+#include <duckdb/planner/bound_parameter_map.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 
 #include "duckdb_logical_visitors.hpp"
@@ -13,6 +15,55 @@
 #include <magic_enum/magic_enum.hpp>
 
 namespace worker {
+
+auto bindTypeToTableRefInternal(duckdb::shared_ptr<duckdb::Binder>& binder, duckdb::SelectNode& node) -> std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>;
+
+auto walkScalarSubquery(duckdb::shared_ptr<duckdb::Binder>& binder, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>& results) -> void {
+    if (expr->expression_class != duckdb::ExpressionClass::SUBQUERY) return;
+
+    auto& sq = expr->Cast<duckdb::SubqueryExpression>();
+
+    if (sq.subquery->node->type == duckdb::QueryNodeType::SELECT_NODE) {
+        auto internal_results = bindTypeToTableRefInternal(binder, sq.subquery->node->Cast<duckdb::SelectNode>());
+        results.insert(results.cend(), std::make_move_iterator(internal_results.begin()), std::make_move_iterator(internal_results.end()));
+    }
+}
+
+auto bindTypeToTableRefInternal(duckdb::shared_ptr<duckdb::Binder>& binder, duckdb::SelectNode& node) -> std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>> {
+    std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>> results{};
+    
+    results.push_back(binder->Bind(*node.from_table));
+
+    for (auto& expr: node.select_list) {
+        walkScalarSubquery(binder, expr, results);
+    }
+
+    return std::move(results);
+}
+
+auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, StatementType type) -> std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>> {
+    if (type != StatementType::Select) {
+        return {};
+    }
+
+    auto& select_stmt = stmt->Cast<duckdb::SelectStatement>();
+
+    if (select_stmt.node->type != duckdb::QueryNodeType::SELECT_NODE) {
+        return {};
+    }
+
+    duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
+    duckdb::BoundParameterMap parameters(parameter_map);
+    
+    auto binder = duckdb::Binder::CreateBinder(context);
+
+    binder->SetCanContainNulls(true);
+    binder->parameters = &parameters;
+
+    return bindTypeToTableRefInternal(binder, select_stmt.node->Cast<duckdb::SelectNode>());
+
+    // return std::move(binder->Bind(*node->Cast<duckdb::SelectNode>().from_table));
+}
 
 auto TableCatalogResolveVisitor::VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void {
     switch (node->type) {

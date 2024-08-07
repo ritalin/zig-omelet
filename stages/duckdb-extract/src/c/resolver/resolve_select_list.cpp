@@ -73,10 +73,10 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     return std::move(result);
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs, StatementType stmt_type) -> std::vector<ColumnEntry> {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
-    auto join_types = createJoinTypeLookup(op, catalogs);
+    auto join_types = createJoinTypeLookup(op);
 
     return resolveColumnTypeInternal(op, join_types);
 }
@@ -117,10 +117,9 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         auto stmt_type = evalStatementType(stmts[0]);
 
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-        auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
+        // auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        auto catalogs = resolveTableCatalog(bound_tables);
-        column_result = resolveColumnType(bound_statement.plan, catalogs, stmt_type);
+        column_result = resolveColumnType(bound_statement.plan, stmt_type);
         conn.Commit();
     }
     catch (...) {
@@ -165,8 +164,6 @@ TEST_CASE("Update Statement") {
 
     runBindStatement(sql, {schema}, {});
 }
-
-#ifdef ENABLE_TEST
 
 TEST_CASE("Delete Statement") {
     std::string sql("delete from Foo where id = 42");
@@ -614,6 +611,8 @@ TEST_CASE("Select from derived table#1") {
 
     // runBindStatement(sql, {schema_1}, expects);
 }
+
+#ifdef ENABLE_TEST
 
 TEST_CASE("Select from derived table join") {
     SKIP("Not implemented");

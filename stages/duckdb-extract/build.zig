@@ -191,7 +191,6 @@ fn createWorkerModule(
                 "sql_statement/select_statement.cpp",
                 "resolver/resolve_params_type.cpp",
                 "resolver/resolve_select_list.cpp",
-                "resolver/resolve_table_catalog.cpp",
                 "resolver/resolve_column_binding.cpp",
                 "resolver/resolve_join_type.cpp",
             },

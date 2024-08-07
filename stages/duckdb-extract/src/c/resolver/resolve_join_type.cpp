@@ -73,7 +73,7 @@ auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
 
 auto JoinTypeVisitor::VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType join_type, const ConditionRels& rels) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, this->catalogs);
+    JoinTypeVisitor visitor(internal_join_types);
 
     visitor.VisitOperator(op);
 
@@ -214,9 +214,9 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
-static auto VisitOperatorProjection(duckdb::LogicalProjection& op, const CatalogLookup& catalogs) -> NullableLookup {
+static auto VisitOperatorProjection(duckdb::LogicalProjection& op) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, catalogs);
+    JoinTypeVisitor visitor(internal_join_types);
 
     for (auto& child: op.children) {
         visitor.VisitOperator(*child);
@@ -225,20 +225,8 @@ static auto VisitOperatorProjection(duckdb::LogicalProjection& op, const Catalog
     NullableLookup results;
 
     for (duckdb::idx_t i = 0; auto& expr: op.expressions) {
-        duckdb::ColumnBinding binding(op.table_index, i);
-
-        if (expr->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF) {
-            auto& expr_column = expr->Cast<duckdb::BoundColumnRefExpression>();
-
-            results[binding] = internal_join_types[expr_column.binding];
-        }
-        else {
-            results[binding] = {
-                .from_field = false /* column_visitor.VisitColumnNullability(expr) */,
-                .from_join = false,
-            };
-        }
-        ++i;
+        duckdb::ColumnBinding binding(op.table_index, i++);
+        results[binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
     }
 
     return std::move(results);
@@ -248,7 +236,7 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->catalogs);
+            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>());
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -300,11 +288,11 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     }
 }
 
-auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs) -> NullableLookup {
+auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup {
     NullableLookup lookup;
 
     if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
-        lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), catalogs);
+        lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>());
     }
 
     return std::move(lookup);
@@ -349,16 +337,8 @@ static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::str
 
             auto stmts = conn.ExtractStatements(sql);
             auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-            
-            auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), StatementType::Select);
-            auto catalogs = resolveTableCatalog(bound_tables);
 
-            catalog_size: {
-                UNSCOPED_INFO("Catalog size");
-                REQUIRE(catalogs.size() >= schemas.size());
-            }
-
-            join_type_result = createJoinTypeLookup(bound_statement.plan, catalogs);
+            join_type_result = createJoinTypeLookup(bound_statement.plan);
 
             conn.Commit();
         }
@@ -434,16 +414,16 @@ TEST_CASE("joinless query#2 (unordered select list)") {
     runCreateJoinTypeLookup(sql, {schema}, expects);
 }
 
-// TEST_CASE("joinless query#3 (with unary op of nallble)") {
-//     std::string sql("select -xys from Foo");
-//     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+TEST_CASE("joinless query#3 (with unary op of nallble)") {
+    std::string sql("select -xys from Foo");
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-//     std::vector<ColumnBindingPair> expects{
-//         {.binding = duckdb::ColumnBinding(1, 0), .nullable = true},
-//     };
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+    };
 
-//     runCreateColumnBindingLookup(sql, {schema}, expects);
-// }
+    runCreateJoinTypeLookup(sql, {schema}, expects);
+}
 
 TEST_CASE("Inner join#1") {
     std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");

@@ -23,16 +23,16 @@ static auto EvaluateNullability(duckdb::JoinType rel_join_type, const JoinTypeVi
     return std::ranges::any_of(rel_map | std::views::values, [&](const auto& to) { return lookup[to].shouldNulls(); });
 }
 
-static auto tryGetColumnRefNullabilities(const duckdb::LogicalGet& op) -> ColumnRefNullabilityMap {
+static auto tryGetColumnRefNullabilities(const duckdb::LogicalGet& op, ZmqChannel& channel) -> ColumnRefNullabilityMap {
     if (!op.function.get_bind_info) {
-        std::cout << std::format("[TODO] cannot find table catalog: (index: {})", op.table_index) << std::endl;
+        channel.warn(std::format("[TODO] cannot find table catalog: (index: {})", op.table_index));
         return {};
     }
 
     auto bind_info = op.function.get_bind_info(op.bind_data);
     
     if (! bind_info.table) {
-        std::cout << std::format("[TODO] cannot find table catalog: (index: {})", op.table_index) << std::endl;
+        channel.warn(std::format("[TODO] cannot find table catalog: (index: {})", op.table_index));
         return {};
     }
 
@@ -54,7 +54,7 @@ static auto tryGetColumnRefNullabilities(const duckdb::LogicalGet& op) -> Column
 }
 
 auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
-    auto constraints = tryGetColumnRefNullabilities(op);
+    auto constraints = tryGetColumnRefNullabilities(op, this->channel);
 
     auto sz = constraints.size();
 
@@ -73,7 +73,7 @@ auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
 
 auto JoinTypeVisitor::VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType join_type, const ConditionRels& rels) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types);
+    JoinTypeVisitor visitor(internal_join_types, this->channel);
 
     visitor.VisitOperator(op);
 
@@ -214,9 +214,9 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
-static auto VisitOperatorProjection(duckdb::LogicalProjection& op) -> NullableLookup {
+static auto VisitOperatorProjection(duckdb::LogicalProjection& op, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types);
+    JoinTypeVisitor visitor(internal_join_types, channel);
 
     for (auto& child: op.children) {
         visitor.VisitOperator(*child);
@@ -236,7 +236,7 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>());
+            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -288,11 +288,11 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     }
 }
 
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup {
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel channel) -> NullableLookup {
     NullableLookup lookup;
 
     if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
-        lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>());
+        lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), channel);
     }
 
     return std::move(lookup);
@@ -338,7 +338,7 @@ static auto runResolveSelectListNullability(const std::string& sql, std::vector<
             auto stmts = conn.ExtractStatements(sql);
             auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
 
-            join_type_result = resolveSelectListNullability(bound_statement.plan);
+            join_type_result = resolveSelectListNullability(bound_statement.plan, ZmqChannel::unitTestChannel());
 
             conn.Commit();
         }

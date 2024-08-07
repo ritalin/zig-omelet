@@ -41,8 +41,8 @@ auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unor
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type) -> std::vector<ColumnEntry>;
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel&& channel) -> std::vector<ColumnEntry>;
 
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup;
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel channel) -> NullableLookup;
 
 }

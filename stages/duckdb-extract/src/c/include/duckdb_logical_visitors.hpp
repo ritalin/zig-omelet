@@ -3,6 +3,7 @@
 #include <duckdb.hpp>
 
 #include "duckdb_binder_support.hpp"
+#include "zmq_worker_support.hpp"
 
 namespace worker {
 
@@ -11,8 +12,7 @@ public:
     using Rel = duckdb::idx_t;
     using ConditionRels = std::map<NullableLookup::Column, NullableLookup::Column>;
 public:
-     JoinTypeVisitor(NullableLookup& lookup): join_type_lookup(lookup) {
-     }
+     JoinTypeVisitor(NullableLookup& lookup, ZmqChannel& channel): channel(channel), join_type_lookup(lookup) {}
 public:
     auto VisitOperator(duckdb::LogicalOperator &op) -> void;
 private:
@@ -21,19 +21,8 @@ private:
     auto VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void;
     auto VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, const ConditionRels& rels) -> NullableLookup;
 private:
+    ZmqChannel& channel;
     NullableLookup& join_type_lookup;
-};
-
-// ================================================================================
-
-class TableCatalogResolveVisitor {
-public:
-    TableCatalogResolveVisitor(CatalogLookup& lookup_ref): lookup(lookup_ref) {}
-public:
-    auto VisitTableRef(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> void;
-    auto VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void;
-private:
-    CatalogLookup& lookup;
 };
 
 // ================================================================================

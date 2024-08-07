@@ -16,6 +16,17 @@
 
 namespace worker {
 
+class TableCatalogResolveVisitor {
+public:
+    TableCatalogResolveVisitor(CatalogLookup& lookup_ref, ZmqChannel& channel): channel(channel), lookup(lookup_ref) {}
+public:
+    auto VisitTableRef(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> void;
+    auto VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void;
+private:
+    ZmqChannel& channel;
+    CatalogLookup& lookup;
+};
+
 auto bindTypeToTableRefInternal(duckdb::shared_ptr<duckdb::Binder>& binder, duckdb::SelectNode& node) -> std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>;
 
 auto walkScalarSubquery(duckdb::shared_ptr<duckdb::Binder>& binder, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>& results) -> void {
@@ -75,7 +86,7 @@ auto TableCatalogResolveVisitor::VisitSelectNode(duckdb::unique_ptr<duckdb::Boun
         break;
     default:
         // TODO: warning
-        std::cout << std::format("[TODO] Unimplemented bound query node: {}", magic_enum::enum_name(node->type)) << std::endl;
+        this->channel("[TODO] Unimplemented bound query node: {}", magic_enum::enum_name(node->type));
         break;
     }
 }

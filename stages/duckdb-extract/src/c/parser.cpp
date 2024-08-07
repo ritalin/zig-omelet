@@ -127,7 +127,7 @@ static auto encodeDescribeResult(const std::vector<DescribeResult>& describes) -
     return std::move(encoder.rawBuffer());
 }
 
-static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel& channel) -> ParameterCollector::Result {
+static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParameterCollector::Result {
     ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
     if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
@@ -160,7 +160,6 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
     std::string message;
     try {
         auto stmts = this->conn.ExtractStatements(query);
-        auto zmq_channel = this->messageChannel("worker.parse");
 
         // for (auto& stmt: stmts) {
         if (stmts.size() > 0) {
@@ -168,7 +167,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             const int32_t stmt_offset = 1;
             const int32_t stmt_size = 1;
             
-            auto param_result = walkSQLStatement(stmt, zmq_channel);
+            auto param_result = walkSQLStatement(stmt, this->messageChannel("worker.parse"));
             auto q = stmt->ToString();
             
             std::vector<ParamEntry> param_type_result;
@@ -179,7 +178,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 auto bound_stmt = bindTypeToStatement(*this->conn.context, stmt->Copy());
 
                 param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
-                column_type_result = resolveColumnType(bound_stmt.plan, param_result.type);
+                column_type_result = resolveColumnType(bound_stmt.plan, param_result.type, this->messageChannel("worker.parse"));
 
                 this->conn.Commit();
             }
@@ -188,6 +187,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 throw;
             }
 
+            auto zmq_channel = this->messageChannel("worker.extract");
             send_query: {
                 zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_query, std::vector<char>(q.cbegin(), q.cend()));
             }

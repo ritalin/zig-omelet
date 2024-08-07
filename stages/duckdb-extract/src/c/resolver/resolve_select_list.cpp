@@ -64,7 +64,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                 .field_type = expr->return_type.ToString(),
                 .nullable = join_lookup[binding].shouldNulls(),
             };
-            // std::cout << std::format("Entry/name: {}, type: {}, nullable: {}", entry.field_name, entry.field_type, entry.nullable) << std::endl << std::endl;
+
             result.emplace_back(std::move(entry));
             ++i;
         }
@@ -73,10 +73,10 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     return std::move(result);
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type) -> std::vector<ColumnEntry> {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel&& channel) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
-    auto join_types = resolveSelectListNullability(op);
+    auto join_types = resolveSelectListNullability(op, channel);
 
     return resolveColumnTypeInternal(op, join_types);
 }
@@ -119,7 +119,7 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
         // auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        column_result = resolveColumnType(bound_statement.plan, stmt_type);
+        column_result = resolveColumnType(bound_statement.plan, stmt_type, ZmqChannel::unitTestChannel());
         conn.Commit();
     }
     catch (...) {

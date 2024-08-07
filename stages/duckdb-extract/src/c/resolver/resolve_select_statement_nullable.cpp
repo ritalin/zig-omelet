@@ -288,7 +288,7 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     }
 }
 
-auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup {
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> NullableLookup {
     NullableLookup lookup;
 
     if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
@@ -321,7 +321,7 @@ struct ColumnBindingPair {
     NullableLookup::Nullability nullable;
 };
 
-static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::string>&& schemas, const std::vector<ColumnBindingPair>& expects) -> void {
+static auto runResolveSelectListNullability(const std::string& sql, std::vector<std::string>&& schemas, const std::vector<ColumnBindingPair>& expects) -> void {
         duckdb::DuckDB db(nullptr);
         duckdb::Connection conn(db);
 
@@ -338,7 +338,7 @@ static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::str
             auto stmts = conn.ExtractStatements(sql);
             auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
 
-            join_type_result = createJoinTypeLookup(bound_statement.plan);
+            join_type_result = resolveSelectListNullability(bound_statement.plan);
 
             conn.Commit();
         }
@@ -382,7 +382,7 @@ TEST_CASE("fromless query") {
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {}, expects);
+    runResolveSelectListNullability(sql, {}, expects);
 }
 
 TEST_CASE("joinless query#1") {
@@ -396,7 +396,7 @@ TEST_CASE("joinless query#1") {
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema}, expects);
+    runResolveSelectListNullability(sql, {schema}, expects);
 }
 
 TEST_CASE("joinless query#2 (unordered select list)") {
@@ -411,7 +411,7 @@ TEST_CASE("joinless query#2 (unordered select list)") {
         { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema}, expects);
+    runResolveSelectListNullability(sql, {schema}, expects);
 }
 
 TEST_CASE("joinless query#3 (with unary op of nallble)") {
@@ -422,7 +422,7 @@ TEST_CASE("joinless query#3 (with unary op of nallble)") {
         {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
     };
 
-    runCreateJoinTypeLookup(sql, {schema}, expects);
+    runResolveSelectListNullability(sql, {schema}, expects);
 }
 
 TEST_CASE("Inner join#1") {
@@ -442,7 +442,7 @@ TEST_CASE("Inner join#1") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join#2 (nullable key)") {
@@ -462,7 +462,7 @@ TEST_CASE("Inner join#2 (nullable key)") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join#3 (join twice)") {
@@ -485,7 +485,7 @@ TEST_CASE("Inner join#3 (join twice)") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Left outer join") {
@@ -505,7 +505,7 @@ TEST_CASE("Left outer join") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Right outer join") {
@@ -525,7 +525,7 @@ TEST_CASE("Right outer join") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Left outer join twice") {
@@ -548,7 +548,7 @@ TEST_CASE("Left outer join twice") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join + outer join") {
@@ -571,7 +571,7 @@ TEST_CASE("Inner join + outer join") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Outer join + inner join#1") {
@@ -594,7 +594,7 @@ TEST_CASE("Outer join + inner join#1") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Outer join + inner join#2") {
@@ -617,7 +617,7 @@ TEST_CASE("Outer join + inner join#2") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("scalar subquery (single left outer join)") {
@@ -638,7 +638,7 @@ TEST_CASE("scalar subquery (single left outer join)") {
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Cross join") {
@@ -658,7 +658,7 @@ TEST_CASE("Cross join") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Cross join + outer join") {
@@ -681,7 +681,7 @@ TEST_CASE("Cross join + outer join") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Full outer join") {
@@ -701,7 +701,7 @@ TEST_CASE("Full outer join") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join + full outer join#1") {
@@ -724,7 +724,7 @@ TEST_CASE("Inner join + full outer join#1") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join + full outer join#2") {
@@ -747,7 +747,7 @@ TEST_CASE("Inner join + full outer join#2") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Full outer + inner join join#1") {
@@ -770,7 +770,7 @@ TEST_CASE("Full outer + inner join join#1") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Full outer + inner join join#2") {
@@ -793,7 +793,7 @@ TEST_CASE("Full outer + inner join join#2") {
         { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Positional join") {
@@ -813,7 +813,7 @@ TEST_CASE("Positional join") {
         { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join lateral#1") {
@@ -837,7 +837,7 @@ TEST_CASE("Inner join lateral#1") {
         { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join lateral#2 (unordered select list)") {
@@ -862,7 +862,7 @@ TEST_CASE("Inner join lateral#2 (unordered select list)") {
         { .binding = duckdb::ColumnBinding(8, 6), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join lateral#3 (nullable key)") {
@@ -886,7 +886,7 @@ TEST_CASE("Inner join lateral#3 (nullable key)") {
         { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Outer join lateral") {
@@ -910,7 +910,7 @@ TEST_CASE("Outer join lateral") {
         { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join with subquery#1") {
@@ -933,7 +933,7 @@ TEST_CASE("Inner join with subquery#1") {
         { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 TEST_CASE("Inner join with subquery#2") {
@@ -960,7 +960,7 @@ TEST_CASE("Inner join with subquery#2") {
         { .binding = duckdb::ColumnBinding(9, 7), .nullable = {.from_field = false, .from_join = false} },
     };
 
-    runCreateJoinTypeLookup(sql, {schema_1, schema_2, schema_3}, expects);
+    runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
 }
 
 #endif

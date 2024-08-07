@@ -76,7 +76,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
-    auto join_types = createJoinTypeLookup(op);
+    auto join_types = resolveSelectListNullability(op);
 
     return resolveColumnTypeInternal(op, join_types);
 }

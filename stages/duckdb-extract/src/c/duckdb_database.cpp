@@ -112,18 +112,33 @@ TEST_CASE("Schema not found...") {
 TEST_CASE("Load schemas") {
     worker::Database db;
     auto err = db.loadSchemaAll(std::string("./_schema-examples"));
-    SECTION("load result code") {
+
+    load_result_code: {
+        UNSCOPED_INFO("load result code");
         CHECK(err == 0);
     }
-    SECTION("created schema information") {
+    created_schema_information: {
+        INFO("created schema information");
         auto conn = db.connect();
 
-        SECTION("relation#1") {
+        rel_1: {
+            UNSCOPED_INFO("relation#1");
             auto info = conn.TableInfo("Foo");
             REQUIRE((bool)info == true);
-            REQUIRE(info->columns.size() == 2);
+            REQUIRE(info->columns.size() == 4);
 
-            SECTION("find column#1") {
+            rel_1_col_1: {
+                UNSCOPED_INFO("column#1");
+                auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
+                    return c.GetName() == "id";
+                });
+                CHECK(result != info->columns.end());
+
+                CHECK_THAT(result->GetName(), Equals("id"));
+                CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
+            }
+            rel_1_col_2: {
+                UNSCOPED_INFO("column#2");
                 auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
                     return c.GetName() == "kind";
                 });
@@ -132,22 +147,35 @@ TEST_CASE("Load schemas") {
                 CHECK_THAT(result->GetName(), Equals("kind"));
                 CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
             }
-            SECTION("find column#2") {
+            rel_1_col_3: {
+                UNSCOPED_INFO("column#3");
                 auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
                     return c.GetName() == "xyz";
                 });
                 CHECK(result != info->columns.end());
 
                 CHECK_THAT(result->GetName(), Equals("xyz"));
+                CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
+            }
+            col_4: {
+                UNSCOPED_INFO("column#4");
+                auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
+                    return c.GetName() == "remarks";
+                });
+                CHECK(result != info->columns.end());
+
+                CHECK_THAT(result->GetName(), Equals("remarks"));
                 CHECK_THAT(result->GetType().ToString(), Equals("VARCHAR"));
             }
         }
-        SECTION("relation#2") {
+        rel_2: {
+            UNSCOPED_INFO("relation#2");
             auto info = conn.TableInfo("Point");
             REQUIRE(info);
             REQUIRE(info->columns.size() == 3);
 
-            SECTION("find column#1") {
+            rel_2_col_1: {
+                UNSCOPED_INFO("find column#1");
                 auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
                     return c.GetName() == "x";
                 });
@@ -156,7 +184,8 @@ TEST_CASE("Load schemas") {
                 CHECK_THAT(result->GetName(), Equals("x"));
                 CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
             }
-            SECTION("find column#2") {
+            rel_2_col_2: {
+                UNSCOPED_INFO("find column#2");
                 auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
                     return c.GetName() == "y";
                 });
@@ -165,7 +194,8 @@ TEST_CASE("Load schemas") {
                 CHECK_THAT(result->GetName(), Equals("y"));
                 CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
             }
-            SECTION("find column#3") {
+            rel_2_col_3: {
+                UNSCOPED_INFO("find column#3");
                 auto result = std::find_if(info->columns.begin(), info->columns.end(), [](duckdb::ColumnDefinition& c) {
                     return c.GetName() == "z";
                 });

@@ -2,7 +2,6 @@
 
 #include <duckdb.hpp>
 
-#include "duckdb_nullable_lookup.hpp"
 #include "duckdb_binder_support.hpp"
 
 namespace worker {
@@ -33,8 +32,6 @@ class TableCatalogResolveVisitor {
 public:
     TableCatalogResolveVisitor(CatalogLookup& lookup_ref): lookup(lookup_ref) {}
 public:
-    static auto Resolve(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> CatalogLookup;
-private:
     auto VisitTableRef(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> void;
     auto VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void;
 private:
@@ -43,42 +40,40 @@ private:
 
 // ================================================================================
 
-struct ColumnBindingNode;
-using NodeRef = std::shared_ptr<ColumnBindingNode>;
+// struct ColumnBindingNode;
+// using NodeRef = std::shared_ptr<ColumnBindingNode>;
 
-enum class NodeKind { FromTable, Consume };
-struct ColumnBindingNode{
-    NodeRef next;
-    NodeKind kind;
-    duckdb::idx_t table_index;
-    duckdb::idx_t column_index;
-    bool nullable;
-};
+// enum class NodeKind { FromTable, Consume };
+// struct ColumnBindingNode{
+//     NodeRef next;
+//     NodeKind kind;
+//     duckdb::idx_t table_index;
+//     duckdb::idx_t column_index;
+//     bool nullable;
+// };
 
 class ColumnExpressionVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-     ColumnExpressionVisitor(const CatalogLookup& catalogs_ref, std::vector<NodeRef>& nodes_ref)
-        : catalogs(catalogs_ref), nodes(nodes_ref)
-    {
-    }
+    static auto Resolve(duckdb::unique_ptr<duckdb::Expression> &expr) -> NullableLookup::Nullability;
 public:
-    auto VisitOperator(duckdb::LogicalOperator &op) -> void;
+    // auto VisitOperator(duckdb::LogicalOperator &op) -> void;
 protected:
-    auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+    // auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundFunctionExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundOperatorExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundComparisonExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 	auto VisitReplace(duckdb::BoundCaseExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+    auto VisitReplace(duckdb::BoundSubqueryExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 private:
-    auto VisitColumnBinding(duckdb::unique_ptr<duckdb::Expression>&& expr, duckdb::ColumnBinding&& binding) -> void;
+    // auto VisitColumnBinding(duckdb::unique_ptr<duckdb::Expression>&& expr, duckdb::ColumnBinding&& binding) -> void;
     auto EvalNullability(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& expressions, bool terminate_value) -> bool;
     auto EvalNullabilityInternal(duckdb::unique_ptr<duckdb::Expression>& expr) -> bool;
-    auto RegisterBindingLink(const std::optional<duckdb::ColumnBinding>& current_binding, bool nullable) -> void;
+    // auto RegisterBindingLink(const std::optional<duckdb::ColumnBinding>& current_binding, bool nullable) -> void;
 private:
     CatalogLookup catalogs;
-    std::vector<NodeRef>& nodes;
+    // NullableLookup::Nullability& nullable;
     std::optional<duckdb::ColumnBinding> current_binding;
     std::stack<bool> nullable_stack;
 };

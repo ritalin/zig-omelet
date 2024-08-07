@@ -23,16 +23,21 @@ static auto EvaluateNullability(duckdb::JoinType rel_join_type, const JoinTypeVi
     return std::ranges::any_of(rel_map | std::views::values, [&](const auto& to) { return lookup[to].shouldNulls(); });
 }
 
-static auto tryGetColumnRefNullabilities(const CatalogLookup& catalogs, duckdb::idx_t table_index) -> ColumnRefNullabilityMap {
-    if (! catalogs.contains(table_index)) {
-        // TODO
-        std::cout << std::format("[TODO] cannot find table catalog: (index: {})", table_index) << std::endl;
+static auto tryGetColumnRefNullabilities(const duckdb::LogicalGet& op) -> ColumnRefNullabilityMap {
+    if (!op.function.get_bind_info) {
+        std::cout << std::format("[TODO] cannot find table catalog: (index: {})", op.table_index) << std::endl;
+        return {};
+    }
 
+    auto bind_info = op.function.get_bind_info(op.bind_data);
+    
+    if (! bind_info.table) {
+        std::cout << std::format("[TODO] cannot find table catalog: (index: {})", op.table_index) << std::endl;
         return {};
     }
 
     auto constraints = 
-        catalogs.at(table_index)->GetConstraints()
+        bind_info.table->GetConstraints()
         | std::views::filter([](const duckdb::unique_ptr<duckdb::Constraint>& c) {
             return c->type == duckdb::ConstraintType::NOT_NULL;
         })
@@ -49,7 +54,7 @@ static auto tryGetColumnRefNullabilities(const CatalogLookup& catalogs, duckdb::
 }
 
 auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
-    auto constraints = tryGetColumnRefNullabilities(this->catalogs, op.table_index);
+    auto constraints = tryGetColumnRefNullabilities(op);
 
     auto sz = constraints.size();
 
@@ -203,6 +208,10 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::OUTER, duckdb::JoinType::OUTER, {});
         ToOuterAll(this->join_type_lookup);
     }
+    else if (op.join_type == duckdb::JoinType::SINGLE) {
+        // scalar subquery
+        this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::OUTER, std::move(rels));
+    }
 }
 
 static auto VisitOperatorProjection(duckdb::LogicalProjection& op, const CatalogLookup& catalogs) -> NullableLookup {
@@ -319,12 +328,12 @@ auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const
 using namespace worker;
 using namespace Catch::Matchers;
 
-struct JoinTypePair {
+struct ColumnBindingPair {
     duckdb::ColumnBinding binding;
     NullableLookup::Nullability nullable;
 };
 
-static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::string>&& schemas, const std::vector<JoinTypePair>& expects) -> void {
+static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::string>&& schemas, const std::vector<ColumnBindingPair>& expects) -> void {
         duckdb::DuckDB db(nullptr);
         duckdb::Connection conn(db);
 
@@ -340,9 +349,9 @@ static auto runCreateJoinTypeLookup(const std::string& sql, std::vector<std::str
 
             auto stmts = conn.ExtractStatements(sql);
             auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-            auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), StatementType::Select);
-
-            auto catalogs = TableCatalogResolveVisitor::Resolve(bound_table_ref);
+            
+            auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), StatementType::Select);
+            auto catalogs = resolveTableCatalog(bound_tables);
 
             catalog_size: {
                 UNSCOPED_INFO("Catalog size");
@@ -388,7 +397,7 @@ TEST_CASE("fromless query") {
         select 123, 'abc'
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
     };
@@ -402,7 +411,7 @@ TEST_CASE("joinless query#1") {
         select * from Bar
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
     };
@@ -416,7 +425,7 @@ TEST_CASE("joinless query#2 (unordered select list)") {
         select value, remarks, id from Bar
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
         { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = false, .from_join = false} },
@@ -424,6 +433,17 @@ TEST_CASE("joinless query#2 (unordered select list)") {
 
     runCreateJoinTypeLookup(sql, {schema}, expects);
 }
+
+// TEST_CASE("joinless query#3 (with unary op of nallble)") {
+//     std::string sql("select -xys from Foo");
+//     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+//     std::vector<ColumnBindingPair> expects{
+//         {.binding = duckdb::ColumnBinding(1, 0), .nullable = true},
+//     };
+
+//     runCreateColumnBindingLookup(sql, {schema}, expects);
+// }
 
 TEST_CASE("Inner join#1") {
     std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
@@ -433,7 +453,7 @@ TEST_CASE("Inner join#1") {
         join Bar on Foo.id = Bar.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -453,7 +473,7 @@ TEST_CASE("Inner join#2 (nullable key)") {
         join Bar on Foo.id = Bar.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -474,7 +494,7 @@ TEST_CASE("Inner join#3 (join twice)") {
         join Bar b2 on Foo.id = b2.id    
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -496,7 +516,7 @@ TEST_CASE("Left outer join") {
         left outer join Bar on Foo.id = Bar.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -516,7 +536,7 @@ TEST_CASE("Right outer join") {
         right outer join Bar on Foo.id = Bar.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -537,7 +557,7 @@ TEST_CASE("Left outer join twice") {
         left outer join Bar b2 on Foo.id = b2.id    
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -560,7 +580,7 @@ TEST_CASE("Inner join + outer join") {
         left outer join Bar b2 on Foo.id = b2.id    
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -583,7 +603,7 @@ TEST_CASE("Outer join + inner join#1") {
         join Bar b2 on Foo.id = b2.id    
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -606,7 +626,7 @@ TEST_CASE("Outer join + inner join#2") {
         join Bar b2 on b1.id = b2.id    
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -620,25 +640,26 @@ TEST_CASE("Outer join + inner join#2") {
     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
 }
 
-// TEST_CASE("scalar subquery (single left outer join)") {
-//     std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-//     std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-//     std::string sql(R"#(
-//         select 
-//             Foo.id,
-//             (
-//                 select Bar.value from Bar
-//                 where bar.id = Foo.id
-//             ) as v
-//         from Foo 
-//     )#");
+TEST_CASE("scalar subquery (single left outer join)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select 
+            Foo.id,
+            (
+                select Bar.value from Bar
+                where bar.id = Foo.id
+            ) as v
+        from Foo 
+    )#");
 
-//     std::vector<JoinTypePair> expects{
-//         { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false} },
-//     };
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = true} },
+    };
 
-//     runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
-// }
+    runCreateJoinTypeLookup(sql, {schema_1, schema_2}, expects);
+}
 
 TEST_CASE("Cross join") {
     std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
@@ -648,7 +669,7 @@ TEST_CASE("Cross join") {
         cross join Bar
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -669,7 +690,7 @@ TEST_CASE("Cross join + outer join") {
         left outer join Bar b2 on Foo.id = b2.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -691,7 +712,7 @@ TEST_CASE("Full outer join") {
         full outer join Bar on Foo.id = Bar.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -712,7 +733,7 @@ TEST_CASE("Inner join + full outer join#1") {
         full outer join Bar b2 on Foo.id = b2.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -735,7 +756,7 @@ TEST_CASE("Inner join + full outer join#2") {
         full outer join Bar b2 on b1.id = b2.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -758,7 +779,7 @@ TEST_CASE("Full outer + inner join join#1") {
         join Bar b1 on Foo.id = b1.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -781,7 +802,7 @@ TEST_CASE("Full outer + inner join join#2") {
         join Bar b1 on b2.id = b1.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -803,7 +824,7 @@ TEST_CASE("Positional join") {
         positional join Bar
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
         { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
@@ -827,7 +848,7 @@ TEST_CASE("Inner join lateral#1") {
         ) on true
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -851,7 +872,7 @@ TEST_CASE("Inner join lateral#2 (unordered select list)") {
         ) v on true
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = false, .from_join = false} },
@@ -876,7 +897,7 @@ TEST_CASE("Inner join lateral#3 (nullable key)") {
         ) on true
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -900,7 +921,7 @@ TEST_CASE("Outer join lateral") {
         ) on true
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -923,7 +944,7 @@ TEST_CASE("Inner join with subquery#1") {
         ) b1 on b1.value = Foo.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
@@ -948,7 +969,7 @@ TEST_CASE("Inner join with subquery#2") {
         ) b1 on b1.value = Foo.id
     )#");
 
-    std::vector<JoinTypePair> expects{
+    std::vector<ColumnBindingPair> expects{
         { .binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(9, 2), .nullable = {.from_field = true, .from_join = false} },

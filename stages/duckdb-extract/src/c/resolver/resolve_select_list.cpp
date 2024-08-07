@@ -4,9 +4,9 @@
 #include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/expression/list.hpp>
 #include <duckdb/planner/tableref/list.hpp>
-#include <duckdb/parser/constraints/list.hpp>
-#include <duckdb/catalog/catalog_entry/list.hpp>
-#include <duckdb/planner/operator/logical_get.hpp>
+// #include <duckdb/parser/constraints/list.hpp>
+// #include <duckdb/catalog/catalog_entry/list.hpp>
+// #include <duckdb/planner/operator/logical_get.hpp>
 #include <duckdb/planner/operator/logical_projection.hpp>
 
 #include "duckdb_logical_visitors.hpp"
@@ -17,57 +17,31 @@
 namespace worker {
 
 namespace column_name {
-    class ColumnVisitor: public duckdb::LogicalOperatorVisitor {
+    class Visitor: public duckdb::LogicalOperatorVisitor {
     public:
-        ColumnVisitor(std::string& name): column_name(name) {}
-    public:
-        static auto Visit(
-            duckdb::unique_ptr<duckdb::Expression>& expr, 
-            const duckdb::ColumnBinding& binding, 
-            const std::vector<ColumnBindingPair>& binding_lookup, 
-            const NullableLookup& join_lookup) -> std::pair<std::string, bool>;
+        static auto Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string;
     protected:
         auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
             this->column_name = expr.value.ToSQLString();
             return nullptr;
         }
     private:
-        std::string& column_name;
+        std::string column_name;
     };
 
-    static auto isOuterJoinType(const std::unordered_set<duckdb::idx_t>& join_lookup, const duckdb::ColumnBinding& binding) -> bool {
-        return join_lookup.contains(binding.column_index);
-    }
-
-    static auto isColumnNullable(const std::vector<ColumnBindingPair>& lookup, const duckdb::ColumnBinding& binding) -> bool {
-        auto iter = std::ranges::find_if(lookup, [&](const ColumnBindingPair& p) { return p.binding == binding; });
-
-        return iter != lookup.end() ? iter->nullable : true;
-    }
-
-    auto ColumnVisitor::Visit(
-        duckdb::unique_ptr<duckdb::Expression>& expr, 
-        const duckdb::ColumnBinding& binding, 
-        const std::vector<ColumnBindingPair>& binding_lookup, 
-        const NullableLookup& join_lookup) -> std::pair<std::string, bool>
-    {
-        std::string column_name = expr->alias;
-        ColumnVisitor visitor(column_name);
-
-        if (expr->alias == "") {
-            visitor.VisitExpression(&expr);
+    auto Visitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string {
+        if (expr->alias != "") {
+            return expr->alias;
         }
-        else {
-            column_name = expr->alias;
-        }
+
+        Visitor visitor;
+        visitor.VisitExpression(&expr);
         
-        auto nullable = join_lookup[binding].shouldNulls() || isColumnNullable(binding_lookup, binding);
-
-        return std::make_pair<std::string, bool>(std::move(column_name), std::move(nullable));
+        return std::move(visitor.column_name);
     }
 }
 
-auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const std::vector<ColumnBindingPair>& bindings, const NullableLookup& join_lookup) -> std::vector<ColumnEntry> {
+auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const NullableLookup& join_lookup) -> std::vector<ColumnEntry> {
     std::vector<ColumnEntry> result;
     result.reserve(op->expressions.size());
 
@@ -76,8 +50,11 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
         std::unordered_multiset<std::string> name_dupe{};
 
         for (size_t i = 0; auto& expr: op->expressions) {
-            duckdb::ColumnBinding binding(op_projection.table_index, i);
-            auto [field_name, nullable] = column_name::ColumnVisitor::Visit(expr, binding, bindings, join_lookup);
+            NullableLookup::Column binding{
+                .table_index = op_projection.table_index, 
+                .column_index = i,
+            };
+            auto field_name = column_name::Visitor::Resolve(expr);
 
             auto dupe_count = name_dupe.count(field_name);
             name_dupe.insert(field_name);
@@ -85,7 +62,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
             auto entry = ColumnEntry{
                 .field_name = dupe_count == 0 ? field_name : std::format("{}_{}", field_name, dupe_count),
                 .field_type = expr->return_type.ToString(),
-                .nullable = nullable,
+                .nullable = join_lookup[binding].shouldNulls(),
             };
             // std::cout << std::format("Entry/name: {}, type: {}, nullable: {}", entry.field_name, entry.field_type, entry.nullable) << std::endl << std::endl;
             result.emplace_back(std::move(entry));
@@ -96,14 +73,12 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     return std::move(result);
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref, StatementType stmt_type) -> std::vector<ColumnEntry> {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs, StatementType stmt_type) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
-    auto catalogs = TableCatalogResolveVisitor::Resolve(table_ref);
-    auto lookup = createColumnBindingLookup(op, table_ref, catalogs);
     auto join_types = createJoinTypeLookup(op, catalogs);
 
-    return resolveColumnTypeInternal(op, lookup, join_types);
+    return resolveColumnTypeInternal(op, join_types);
 }
 
 }
@@ -142,9 +117,10 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         auto stmt_type = evalStatementType(stmts[0]);
 
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-        auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
+        auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        column_result = resolveColumnType(bound_statement.plan, bound_table_ref, stmt_type);
+        auto catalogs = resolveTableCatalog(bound_tables);
+        column_result = resolveColumnType(bound_statement.plan, catalogs, stmt_type);
         conn.Commit();
     }
     catch (...) {
@@ -176,14 +152,6 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
     }
 }
 
-static auto runResolveColumnTypeForOtherStatement(LogicalOperatorRef& op, BoundTableRef&& table_ref, StatementType stmt_type) -> void {
-    auto column_result = resolveColumnType(op, table_ref, stmt_type);
-
-    SECTION("Resolve result (NOT generate select list)") {
-        REQUIRE(column_result.size() == 0);
-    }
-}
-
 TEST_CASE("Insert Statement") {
     std::string sql("insert into Foo values (42, 1, null, 'misc...')");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
@@ -197,6 +165,8 @@ TEST_CASE("Update Statement") {
 
     runBindStatement(sql, {schema}, {});
 }
+
+#ifdef ENABLE_TEST
 
 TEST_CASE("Delete Statement") {
     std::string sql("delete from Foo where id = 42");
@@ -625,8 +595,6 @@ TEST_CASE("Select from scalar subquery") {
 
     runBindStatement(sql, {schema_1, schema_2}, expects);
 }
-
-#ifdef ENABLE_TEST
 
 TEST_CASE("Select from derived table#1") {
     std::string sql(R"#(

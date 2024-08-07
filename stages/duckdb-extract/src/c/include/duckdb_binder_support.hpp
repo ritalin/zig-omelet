@@ -27,10 +27,10 @@ struct ColumnEntry {
     bool nullable;
 };
 
-struct ColumnBindingPair {
-    duckdb::ColumnBinding binding;
-    bool nullable;
-};
+// struct ColumnBindingPair {
+//     duckdb::ColumnBinding binding;
+//     bool nullable;
+// };
 
 class DummyExpression: public duckdb::Expression {
 public:
@@ -43,13 +43,14 @@ auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
 auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string>;
 
-auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, StatementType type) -> duckdb::unique_ptr<duckdb::BoundTableRef>;
+auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, StatementType type) -> std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>;
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref, StatementType stmt_type) -> std::vector<ColumnEntry>;
+auto resolveTableCatalog(std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>& table_references) -> CatalogLookup;
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs, StatementType stmt_type) -> std::vector<ColumnEntry>;
 
-auto createColumnBindingLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref, const CatalogLookup& catalogs) -> std::vector<ColumnBindingPair>;
+// auto createColumnBindingLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::unique_ptr<duckdb::BoundTableRef>& table_ref, const CatalogLookup& catalogs) -> std::vector<ColumnBindingPair>;
 auto createJoinTypeLookup(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const CatalogLookup& catalogs) -> NullableLookup;
 
 }

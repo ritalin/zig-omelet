@@ -65,11 +65,13 @@ auto TableCatalogResolveVisitor::VisitTableRef(duckdb::unique_ptr<duckdb::BoundT
     }
 }
 
-auto TableCatalogResolveVisitor::Resolve(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> CatalogLookup {
+auto resolveTableCatalog(std::vector<duckdb::unique_ptr<duckdb::BoundTableRef>>& table_references) -> CatalogLookup {
     CatalogLookup catalogs{};
 
-    TableCatalogResolveVisitor visitor(catalogs);
-    visitor.VisitTableRef(table_ref);
+    for (auto& table_ref: table_references) {
+        TableCatalogResolveVisitor visitor(catalogs);
+        visitor.VisitTableRef(table_ref);
+    }
 
     return catalogs;
 }
@@ -112,9 +114,9 @@ auto runPickCatalog(const std::string sql, const std::vector<std::string>& schem
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
 
-        auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
+        auto bound_table_refs = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        results = TableCatalogResolveVisitor::Resolve(bound_table_ref);
+        results = resolveTableCatalog(bound_table_refs);
         conn.Commit();
     }
     catch (...) {
@@ -183,6 +185,22 @@ TEST_CASE("Catalog#2 (derived table)") {
     };
 
     runPickCatalog(sql, {schema}, expects);
+}
+
+TEST_CASE("Catalog#3 (with scalar subquery)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select (select value from Bar where bar.id = Foo.id) as x
+        from Foo
+    )#");
+
+    std::vector<CayalogExpect> expects{
+        {.table_index = 0, .name = "Foo"},
+        {.table_index = 1, .name = "Bar"},
+    };
+
+    runPickCatalog(sql, {schema_1, schema_2}, expects);
 }
 
 #endif

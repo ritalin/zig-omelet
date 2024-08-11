@@ -181,8 +181,21 @@ pub const Parser = struct {
     }
 
     fn parsePlaceholder(allocator: std.mem.Allocator, content: Symbol) ![]const FieldTypePair {
-        const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, content, .{});
-        return result.value;
+        // const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, content, .{});
+        // return result.value;
+        var reader = core.CborStream.Reader.init(content);
+
+        const values = try reader.readSlice(allocator, core.StructView(FieldTypePair)); 
+        var result = try allocator.alloc(FieldTypePair, values.len);
+
+        for (values, 0..) |v, i| {
+            result[i] = .{
+                .field_name = v[0],
+                .field_type = v[1],
+            };
+        }
+
+        return result;
     }
 
     fn parseResultSet(allocator: std.mem.Allocator, content: Symbol) ![]const ResultSetColumn {
@@ -360,29 +373,40 @@ const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
     .{"ANY", "any"},
 });
 
+fn placeholderToCbor(allocator: std.mem.Allocator, items: []const FieldTypePair) !core.Symbol {
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeSliceHeader(items.len);
+
+    for (items) |c| {
+        _ = try writer.writeTuple(core.StructView(FieldTypePair), .{c.field_name, c.field_type});
+    }
+
+    return writer.buffer.toOwnedSlice();
+}
+
 test "parse parameter" {
     const allocator = std.testing.allocator;
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
-    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
-        .topic = "placeholder",
-        .content = "[{\"field_name\":\"id\", \"field_type\":\"bigint\"}, {\"field_name\":\"name\", \"field_type\":\"varchar\"}]"
-    }};
-
+    const expect: []const FieldTypePair = &.{
+        .{.field_name = "id", .field_type = "bigint"},
+        .{.field_name = "name", .field_type = "varchar"},
+    };
+    const source_bodies = try placeholderToCbor(arena.allocator(), expect);
+    
     var iter: Parser.ResultWalker = .{
         .arena = arena,
-        .source_bodies = source_bodies,
+        .source_bodies = &.{
+            .{ .topic = "placeholder", .content = source_bodies }
+        },
         .index = 0,
     };
     defer iter.deinit();
 
     assert: {
-        const expect: []const FieldTypePair = &.{
-            .{.field_name = "id", .field_type = "bigint"},
-            .{.field_name = "name", .field_type = "varchar"},
-        };
-
         const walk_result = try iter.walk();
         try std.testing.expect(walk_result != null);
 
@@ -403,24 +427,22 @@ test "parse parameter with any type" {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
-    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
-        .topic = "placeholder",
-        .content = "[{\"field_name\":\"id\", \"field_type\":\"bigint\"}, {\"field_name\":\"name\"}]"
-    }};
+    const expect: []const FieldTypePair = &.{
+        .{.field_name = "id", .field_type = "bigint"},
+        .{.field_name = "name", .field_type = null},
+    };
+    const source_bodies = try placeholderToCbor(arena.allocator(), expect);
 
     var iter: Parser.ResultWalker = .{
         .arena = arena,
-        .source_bodies = source_bodies,
+        .source_bodies = &.{
+            .{ .topic = "placeholder", .content = source_bodies }
+        },
         .index = 0,
     };
     defer iter.deinit();
 
     assert: {
-        const expect: []const FieldTypePair = &.{
-            .{.field_name = "id", .field_type = "bigint"},
-            .{.field_name = "name", .field_type = null},
-        };
-
         const walk_result = try iter.walk();
         try std.testing.expect(walk_result != null);
 

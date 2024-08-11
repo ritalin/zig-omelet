@@ -67,7 +67,6 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         defer writer.deinit();
         
         if (builder.build()) {
-            // TODO send success message
             _ = try writer.writeString(self.source.header.path);
             _ = try writer.writeString(self.output_path);
             _ = try writer.writeString("Successful");
@@ -75,14 +74,12 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         }
         else  |err| switch (err) {
             error.QueryFileGenerationFailed => {
-                // TODO send error message
                 _ = try writer.writeString(self.source.header.path);
                 _ = try writer.writeString(self.output_path);
                 _ = try writer.writeString("Failed SQL file");
                 _ = try writer.writeEnum(ResultStatus, .generate_failed);
             },
             error.TypeFileGenerationFailed => {
-                // TODO send error message
                 _ = try writer.writeString(self.source.header.path);
                 _ = try writer.writeString(self.output_path);
                 _ = try writer.writeString("Failed Typescript file");

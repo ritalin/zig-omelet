@@ -609,6 +609,95 @@ test "ReadMemberType mattcher (optional)" {
     try std.testing.expectEqualDeep(CborMember{ .type = .Tuple, .option = .{.nullable = true} }, CborMember.matchType(?(struct {i32, u8, []const u8})));
 }
 
+pub const Lexer = struct {
+    pub const Token = union(enum) {
+        Header: HeaderTag,
+        Short: usize,
+        Extend: usize,
+        Value: []const u8,
+        Invalid: c.cbor_error_t,
+    };
+
+    pub fn tokenize(allocator: std.mem.Allocator, source: []const u8) ![]const Token {
+        var result = std.ArrayList(Token).init(allocator);
+
+        var reader: c.cbor_reader_t = undefined;
+        var item: c.cbor_item_t = undefined;
+        c.cbor_reader_init(&reader, &item, 1);
+
+        var offset: usize = 0;
+
+        while (offset < source.len) {
+            const err = c.cbor_parse(&reader, source[offset..].ptr, source.len - offset, null);
+            defer offset += reader.msgidx;
+
+            if ((err != c.CBOR_SUCCESS) and (err != c.CBOR_OVERRUN)) {
+                try result.append(.{.Invalid = err});
+            }
+            else {
+                try result.append(.{.Header = headerTag(item.type)});
+                try result.append(.{.Short = item.size});
+
+	            const additional_info: u8 = @intCast(c.get_cbor_additional_info(source[offset]));
+                const following_bytes = c.cbor_get_following_bytes(additional_info);
+
+                switch (item.type) {
+                    c.CBOR_ITEM_INTEGER, c.CBOR_ITEM_SIMPLE_VALUE => {
+
+                        if (following_bytes > 0) {
+                            var ext_size: usize = undefined;
+                            _ = c.cbor_decode(&reader, &item, &ext_size, @sizeOf(usize));
+                            try result.append(.{.Extend = ext_size});
+                        }
+                    },
+                    c.CBOR_ITEM_STRING => {
+                        if (following_bytes == 0) {
+                            try result.append(.{.Value = source[offset..][item.offset..][0..item.size]});
+                        }
+                        else {
+                            var ext_size: usize = undefined;
+                            _ = c.cbor_decode(&reader, &item, &ext_size, @sizeOf(usize));
+                            try result.append(.{.Extend = ext_size});
+                            try result.append(.{.Value = source[offset..][item.offset..][0..ext_size]});
+                        }
+                    },
+                    c.CBOR_ITEM_ARRAY => {
+                        if (following_bytes > 0) {
+                            var ext_size: usize = undefined;
+                            _ = c.cbor_decode(&reader, &item, &ext_size, @sizeOf(usize));
+                            try result.append(.{.Extend = ext_size});
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+        return result.toOwnedSlice();
+    }
+
+    pub const HeaderTag = enum(u8) {
+        CBOR_ITEM_UNKNOWN = c.CBOR_ITEM_UNKNOWN,
+        CBOR_ITEM_INTEGER = c.CBOR_ITEM_INTEGER,
+        CBOR_ITEM_STRING = c.CBOR_ITEM_STRING,
+        CBOR_ITEM_ARRAY = c.CBOR_ITEM_ARRAY,
+        CBOR_ITEM_MAP = c.CBOR_ITEM_MAP,
+        CBOR_ITEM_FLOAT = c.CBOR_ITEM_FLOAT,
+        CBOR_ITEM_SIMPLE_VALUE = c.CBOR_ITEM_SIMPLE_VALUE,        
+    };
+
+    fn headerTag(header: c.cbor_item_data_t) HeaderTag {
+        return switch (header) {
+            c.CBOR_ITEM_INTEGER => .CBOR_ITEM_INTEGER,
+            c.CBOR_ITEM_STRING => .CBOR_ITEM_STRING,
+            c.CBOR_ITEM_ARRAY => .CBOR_ITEM_ARRAY,
+            c.CBOR_ITEM_MAP => .CBOR_ITEM_MAP,
+            c.CBOR_ITEM_FLOAT => .CBOR_ITEM_FLOAT,
+            c.CBOR_ITEM_SIMPLE_VALUE => .CBOR_ITEM_SIMPLE_VALUE,
+            else => .CBOR_ITEM_UNKNOWN,
+        };
+    }
+};
+
 test "Read/Write unsigned int as cbor - Tyny" {
     const allocator = std.testing.allocator;
     

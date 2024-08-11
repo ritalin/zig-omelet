@@ -10,6 +10,7 @@ public:
     auto addUInt(uint64_t value) -> void;
     auto addString(std::string value) -> void;
     auto addBool(bool value) -> void;
+    auto addNull() -> void;
     auto addArrayHeader(size_t len) -> void;
     auto addStringPair(const std::string& key, const std::string& value) -> void;
     auto addBinaryPair(const std::string& key, const std::vector<char>& value) -> void;
@@ -19,6 +20,7 @@ public:
 public:
     auto static encodeUInt(uint64_t value) -> std::vector<char>;
     auto static encodeBool(bool value) -> std::vector<char>;
+    auto static encodeNull() -> std::vector<char>;
 public:
     auto rawBuffer() const -> std::vector<char>;
     auto build() const -> std::vector<char>;

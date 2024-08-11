@@ -72,6 +72,15 @@ pub const Writer = struct {
         return self.flushInternal(self.raw_writer.buf[0..write_len]);
     }
 
+    pub fn writeNull(self: *Self) !usize {
+        self.raw_writer.bufidx = 0;
+        try handleErrUnion(c.cbor_encode_null(&self.raw_writer));
+            
+        const write_len = self.raw_writer.bufidx;
+        
+        return self.flushInternal(self.raw_writer.buf[0..write_len]);
+    }
+
     pub fn writeEnum(self: *Self, comptime T: type, value: T) !usize {
         comptime std.debug.assert(@typeInfo(T) == .Enum);
 
@@ -178,6 +187,14 @@ pub const Writer = struct {
                     unreachable;
                 }
             },
+            .Optional => |payload| {
+                if (value) |v| {
+                    return try self.writeContainerField(payload.child, v);
+                }
+                else {
+                    return try self.writeNull();
+                }
+            },
             else => unreachable,
         }
     }
@@ -268,13 +285,23 @@ pub const Reader = struct {
     }
 
     fn readIntInternal(self: *Self, comptime T: type, result: c.cbor_item_t) !T {     
-
         var value: T = undefined;
         try handleErrUnion(c.cbor_decode(&self.raw_reader, &result, &value, @sizeOf(T)));
 
         self.offset += self.raw_reader.msgidx;
         
         return value;
+    }
+
+    fn isNullResult(self: *Self, item: c.cbor_item_t) !bool {
+        if ((item.type == c.CBOR_ITEM_SIMPLE_VALUE) and (item.size == 0)) {
+            var v: u8 = undefined;
+            try handleErrUnion(c.cbor_decode(&self.raw_reader, &item, &v, @sizeOf(u8)));
+            
+            if (v == 0) return true;
+        }
+
+        return false;
     }
 
     pub fn readBytes(self: *Self) ![]const u8 {
@@ -327,17 +354,43 @@ pub const Reader = struct {
 
         const child_info = @typeInfo(T);
         
+        const cbor_member = comptime CborMember.matchType(T);
+
         for (values) |*v| {
             const child_item = try parseOne(&self.raw_reader, self.data[self.offset..]);
 
-            const member_type = comptime ReadMemberType.matchType(T);
-
-            switch (member_type) {
-                .Int, .Bool, .Enum, .String, .CString, .Tuple => {
-                    v.* = try self.readContainerField(T, member_type, child_item, member_allocator);
+            if (cbor_member.option.nullable) {
+                if (try self.isNullResult(child_item)) {
+                    v.* = null;
+                    self.offset += self.raw_reader.msgidx;
+                    continue;
+                }
+            }
+            
+            switch (cbor_member.type) {
+                inline .Int, .Bool, .Enum, .String, .CString, .Tuple => {
+                    const item_ty = type_item: {
+                        if (cbor_member.option.nullable) {
+                            break:type_item @typeInfo(T).Optional.child;
+                        }
+                        else {
+                            break:type_item T;
+                        }   
+                    };
+                    
+                    v.* = try self.readContainerField(item_ty, cbor_member.type, child_item, member_allocator);
                 },
-                .Slice => {
-                    v.* = try self.readSliceRecursive(allocator, child_info.Pointer.child, child_item, member_allocator);
+                inline .Slice => {
+                    const item_ty = type_item: {
+                        if (cbor_member.option.nullable) {
+                            break:type_item @typeInfo(child_info.Pointer.child).Optional.child;
+                        }
+                        else {
+                            break:type_item child_info.Pointer.child;
+                        }   
+                    };
+                    
+                    v.* = try self.readSliceRecursive(allocator, item_ty, child_item, member_allocator);
                 },
             }
         }
@@ -371,19 +424,33 @@ pub const Reader = struct {
 
         inline for (fields) |field| {
             const child_item = try parseOne(&self.raw_reader, self.data[self.offset..]);
-            const member_type = comptime ReadMemberType.matchType(field.type);
-        
-            switch(member_type) {
-                inline .Int, .Bool, .Enum, .String, .CString, .Tuple => {
-                    @field(value, field.name) = try self.readContainerField(field.type, member_type, child_item, member_allocator);
-                },
-                inline .Slice => {
-                    if (member_allocator) |a| {
-                        const slice_member_type = @typeInfo(field.type).Pointer;
-                        @field(value, field.name) = try self.readSliceRecursive(a, slice_member_type.child, child_item, member_allocator);
-                    }
-                    else {
-                        @panic("A tupe containing the slice needs `member_allocator`\n");
+            const cbor_member = comptime CborMember.matchType(field.type);
+
+            if (cbor_member.option.nullable and try self.isNullResult(child_item)) {
+                @field(value, field.name) = null;
+                self.offset += self.raw_reader.msgidx;
+            }
+            else {
+                switch(cbor_member.type) {
+                    inline .Int, .Bool, .Enum, .String, .CString, .Tuple => {
+                        @field(value, field.name) = try self.readContainerField(field.type, cbor_member.type, child_item, member_allocator);
+                    },
+                    inline .Slice => {
+                        if (member_allocator) |a| {
+                            const slice_member_type = tuple_member: {
+                                if (cbor_member.option.nullable) {
+                                    const type_opt = @typeInfo(field.type).Optional;
+                                    break:tuple_member @typeInfo(type_opt.child).Pointer;
+                                }
+                                else {
+                                    break:tuple_member @typeInfo(field.type).Pointer;
+                                }
+                            };
+                            @field(value, field.name) = try self.readSliceRecursive(a, slice_member_type.child, child_item, member_allocator);
+                        }
+                        else {
+                            @panic("A tupe containing the slice needs `member_allocator`\n");
+                        }
                     }
                 }
             }
@@ -392,7 +459,45 @@ pub const Reader = struct {
         return value;
     }
 
-    fn readContainerField(self: *Self, comptime T: type, comptime member_type: ReadMemberType, item: c.cbor_item_t, member_allocator: ?std.mem.Allocator) anyerror!T {
+    pub fn readOptional(self: *Self, comptime T: type) !?T {
+        return self.readOptionalInternal(T, null);
+    }
+
+    pub fn readOptionalWithAllocator(self: *Self, allocator: std.mem.Allocator, comptime T: type) !?T {
+        return self.readOptionalInternal(T, allocator);
+    }
+
+    pub fn readOptionalInternal(self: *Self, comptime T: type, allocator: ?std.mem.Allocator, ) !?T {
+        const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+
+        if ((result.type == c.CBOR_ITEM_SIMPLE_VALUE) and (result.size == 0)) {
+            var v: u8 = undefined;
+            try handleErrUnion(c.cbor_decode(&self.raw_reader, &result, &v, @sizeOf(u8)));
+            if (v == 0) {
+                self.offset += self.raw_reader.msgidx;
+                return null;
+            }
+        }
+
+        const cbor_member = comptime CborMember.matchType(T);
+
+        switch (cbor_member.type) {
+            .Slice => { 
+                if (allocator) |a| {
+                    return try self.readSliceWithAllocator(a, @typeInfo(T).Pointer.child);
+                }
+                @panic("Optional slice needs `member_allocator`. Call `readOptionalWithAllocator`\n");  
+            },          
+            .Tuple => {
+                return try self.readTupleInternal(T, allocator);
+            },
+            else => {
+                return try self.readContainerField(T, cbor_member.type, result, allocator);
+            }
+        }
+    }
+
+    fn readContainerField(self: *Self, comptime T: type, comptime member_type: CborMember.Type, item: c.cbor_item_t, member_allocator: ?std.mem.Allocator) anyerror!T {
         switch (member_type) {
             .Int => {
                 return try self.readIntInternal(T, item);
@@ -432,40 +537,49 @@ fn handleErrUnion(err: c.cbor_error_t) !void {
     }
 }
 
-pub const ReadMemberType = enum {
-    Int,
-    Bool,
-    Enum,
-    String,
-    CString,
-    Slice,
-    Tuple,
+pub const CborMember = struct {
+    pub const Type = enum {
+        Int,
+        Bool,
+        Enum,
+        String,
+        CString,
+        Slice,
+        Tuple,
+    };
 
-    pub fn matchType(comptime T: type) ReadMemberType {
+    type: Type,
+    option: struct { nullable: bool = false, },
+
+    pub fn matchType(comptime T: type) CborMember {
         switch (@typeInfo(T)) {
-            .Int => return .Int,
-            .Bool => return .Bool,
-            .Enum => return .Enum,
+            .Int => return .{.type = .Int, .option = .{}},
+            .Bool => return .{.type = .Bool, .option = .{}},
+            .Enum => return .{.type = .Enum, .option = .{}},
             .Pointer => |t| {
                 if (t.size == .Slice) {
                     if (t.child == u8) {
                         if (t.sentinel) |_| {
-                            return .CString;
+                            return .{.type = .CString, .option = .{}};
                         }
                         else {
-                            return .String;
+                            return .{.type = .String, .option = .{}};
                         }
                     }
                     else {
-                        return .Slice;
+                        return .{.type = .Slice, .option = .{}};
                     }
                 }
                 @compileError(std.fmt.comptimePrint("Unexpected pointer type: {s}\n", .{@typeName(T)}));
             },
             .Struct => |t| {
                 if (t.is_tuple) {
-                    return .Tuple;
+                    return .{.type = .Tuple, .option = .{}};
                 }
+            },
+            .Optional => |payload| {
+                const child = matchType(payload.child);
+                return .{.type = child.type, .option = .{.nullable = true}};
             },
             else => {}
         }
@@ -474,14 +588,25 @@ pub const ReadMemberType = enum {
 };
 
 test "ReadMemberType mattcher" {
-    try std.testing.expectEqual(.Int, ReadMemberType.matchType(i8));
-    try std.testing.expectEqual(.Int, ReadMemberType.matchType(u16));
-    try std.testing.expectEqual(.Enum, ReadMemberType.matchType(ReadMemberType));
-    try std.testing.expectEqual(.String, ReadMemberType.matchType([]const u8));
-    try std.testing.expectEqual(.String, ReadMemberType.matchType([]u8));
-    try std.testing.expectEqual(.Slice, ReadMemberType.matchType([]const i32));
-    try std.testing.expectEqual(.Slice, ReadMemberType.matchType([]i32));
-    try std.testing.expectEqual(.Tuple, ReadMemberType.matchType(std.meta.Tuple(&.{i32, u8, []const u8})));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Int, .option = .{.nullable = false} }, CborMember.matchType(i8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Int, .option = .{.nullable = false} }, CborMember.matchType(u16));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Enum, .option = .{.nullable = false} }, CborMember.matchType(CborMember.Type));
+    try std.testing.expectEqualDeep(CborMember{ .type = .String, .option = .{.nullable = false} }, CborMember.matchType([]const u8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .String, .option = .{.nullable = false} }, CborMember.matchType([]u8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Slice, .option = .{.nullable = false} }, CborMember.matchType([]const i32));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Slice, .option = .{.nullable = false} }, CborMember.matchType([]i32));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Tuple, .option = .{.nullable = false} }, CborMember.matchType(struct {i32, u8, []const u8}));
+}
+
+test "ReadMemberType mattcher (optional)" {
+    try std.testing.expectEqualDeep(CborMember{ .type = .Int, .option = .{.nullable = true} }, CborMember.matchType(?i8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Int, .option = .{.nullable = true} }, CborMember.matchType(?u16));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Enum, .option = .{.nullable = true} }, CborMember.matchType(?CborMember.Type));
+    try std.testing.expectEqualDeep(CborMember{ .type = .String, .option = .{.nullable = true} }, CborMember.matchType(?[]const u8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .String, .option = .{.nullable = true} }, CborMember.matchType(?[]u8));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Slice, .option = .{.nullable = true} }, CborMember.matchType(?[]const i32));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Slice, .option = .{.nullable = true} }, CborMember.matchType(?[]i32));
+    try std.testing.expectEqualDeep(CborMember{ .type = .Tuple, .option = .{.nullable = true} }, CborMember.matchType(?(struct {i32, u8, []const u8})));
 }
 
 test "Read/Write unsigned int as cbor - Tyny" {
@@ -500,6 +625,38 @@ test "Read/Write unsigned int as cbor - Tyny" {
     try std.testing.expectEqual(expected, v);
 }
 
+test "Read/Write unsigned int as cbor (nullable#1) - Tyny" {
+    const allocator = std.testing.allocator;
+    
+    const expected: ?u8 = 15;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeUInt(u8, expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional(u8);
+
+    try std.testing.expectEqual(expected, v);
+}
+
+test "Read/Write unsigned int as cbor (nullable#2) - Tyny" {
+    const allocator = std.testing.allocator;
+    
+    const expected: ?u8 = null;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeNull();
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional(u8);
+
+    try std.testing.expectEqual(expected, v);
+}
+
 test "Read/Write int as cbor - Tyny" {
     const allocator = std.testing.allocator;
     
@@ -512,6 +669,22 @@ test "Read/Write int as cbor - Tyny" {
     var reader = Reader.init(writer.buffer.items);
 
     const v = try reader.readInt(i8);
+
+    try std.testing.expectEqual(expected, v);
+}
+
+test "Read/Write int as cbor (nullable#1) - Tyny" {
+    const allocator = std.testing.allocator;
+    
+    const expected: ?i8 = 15;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeUInt(u8, expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional(i8);
 
     try std.testing.expectEqual(expected, v);
 }
@@ -580,6 +753,22 @@ test "Read/Write boolean: false as cbor - Tyny" {
     try std.testing.expectEqual(expected, v);
 }
 
+test "Read/Write boolean: true as cbor (nullable#1) - Tyny" {
+    const allocator = std.testing.allocator;
+
+    const expected: ?bool = true;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeBool(expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional(bool);
+
+    try std.testing.expectEqual(expected, v);
+}
+
 test "Read/Write enum as cbor - Tyny" {
     const E = enum (u8) { e1 = 1, e2, e3, };
 
@@ -629,6 +818,24 @@ test "Read/Write negative enum as cbor - Tyny" {
     var reader = Reader.init(writer.buffer.items);
 
     const v = try reader.readEnum(E);
+
+    try std.testing.expectEqual(expected, v);
+}
+
+test "Read/Write tagless enum as cbor (nullable#1) - Tyny" {
+    const E = enum { e1, e2, e3, };
+
+    const allocator = std.testing.allocator;
+
+    const expected: ?E = .e3;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeEnum(E, expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional(E);
 
     try std.testing.expectEqual(expected, v);
 }
@@ -712,6 +919,38 @@ test "Read/Write string as cbor - Long" {
     const v = try reader.readString();
 
     try std.testing.expectEqualStrings(expected, v);
+}
+
+test "Read/Write string as cbor (nullable#1) - Long" {
+    const allocator = std.testing.allocator;
+    
+    const expected: ?[]const u8 = "19" ** 128;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeString(expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional([]const u8);
+
+    try std.testing.expectEqualDeep(expected, v);
+}
+
+test "Read/Write string as cbor (nullable#2) - Long" {
+    const allocator = std.testing.allocator;
+    
+    const expected: ?[]const u8 = null;
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeNull();
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const v = try reader.readOptional([]const u8);
+
+    try std.testing.expectEqualDeep(expected, v);
 }
 
 test "Read/Write c-style string as cbor - Short" {
@@ -810,6 +1049,39 @@ test "Read/Write integer slice as cbor - Tiny" {
     try sliceReadWriteTest(i16, expected);
 }
 
+test "Read/Write integer slice as cbor (nullable#1) - Tiny" {
+    const allocator = std.testing.allocator;
+
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    const expected: ?[]i16 = @constCast(&[_]i16{ 1, 3, 5, 7, 11, 13, 17 });
+    _ = try writer.writeSlice(i16, expected.?);
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const values = try reader.readOptionalWithAllocator(allocator, []const i16);
+    defer allocator.free(values.?);
+
+    try std.testing.expectEqualDeep(expected, values);    
+}
+
+test "Read/Write integer slice as cbor (nullable#2) - Tiny" {
+    const allocator = std.testing.allocator;
+
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    const expected: ?[]i16 = null;
+    _ = try writer.writeNull();
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const values = try reader.readOptionalWithAllocator(allocator, []const i16);
+
+    try std.testing.expectEqualDeep(expected, values);    
+}
+
 test "Read/Write integer slice as cbor - Short" {
     const expected: []const i16 = &.{ 1, 3, 555, 7, 1111, 13, 17 };
     try sliceReadWriteTest(i16, expected);
@@ -881,32 +1153,32 @@ fn tupleReadWriteTest(comptime T: type, expected: T) !void {
 }
 
 test "Read/Write int tuple - Short" {
-    const TestTuple = std.meta.Tuple(&.{u16, i16, i32});
+    const TestTuple = struct {u16, i16, i32};
     const expected: TestTuple = .{ 42, -108, 1024 };
     try tupleReadWriteTest(TestTuple, expected);
 }
 
 test "Read/Write string tuple - Short" {
-    const TestTuple = std.meta.Tuple(&.{[]const u8, []const u8, []const u8});
+    const TestTuple = struct {[]const u8, []const u8, []const u8};
     const expected: TestTuple = .{ "item_1", "item_2", "item_3" };
     try tupleReadWriteTest(TestTuple, expected);
 }
 
 test "Read/Write string and int tuple - Short" {
-    const TestTuple = std.meta.Tuple(&.{[]const u8, u16});
+    const TestTuple = struct {[]const u8, u16};
     const expected: TestTuple = .{ "item_1", 888 };
     try tupleReadWriteTest(TestTuple, expected);
 }
 
 test "Read/Write bool and string tuple - Short" {
-    const TestTuple = std.meta.Tuple(&.{[]const u8, bool});
+    const TestTuple = struct {[]const u8, bool};
     const expected: TestTuple = .{ "item_1", false };
     try tupleReadWriteTest(TestTuple, expected);    
 }
 
 test "Read/Write nested int tuple - Short" {
-    const TestTupleItem = std.meta.Tuple(&.{ReadMemberType, []const u8});
-    const TestTuple = std.meta.Tuple(&.{u32, TestTupleItem});
+    const TestTupleItem = struct {CborMember.Type, []const u8};
+    const TestTuple = struct {u32, TestTupleItem};
     const expected: TestTuple = .{ 655535, .{ .String, "item_1" } };
     try tupleReadWriteTest(TestTuple, expected);
 }
@@ -916,7 +1188,7 @@ test "Read/Write tuple containing slice - Short" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     
-    const TestTuple = std.meta.Tuple(&.{[]const u32, []const []const u8});
+    const TestTuple = struct {[]const u32, []const []const u8};
     const expected: TestTuple = .{ &.{42, 101}, &.{ "item_1", "qwerty" } };
 
     var writer = try Writer.init(allocator);
@@ -932,7 +1204,97 @@ test "Read/Write tuple containing slice - Short" {
 }
 
 test "Read/Write tuple slice slice - Short" {
-    const TestTuple = std.meta.Tuple(&.{u32, []const u8});
+    const TestTuple = struct {u32, []const u8};
     const expected: [] const TestTuple = &.{ .{42, "item_1"}, .{101 , "qwerty" } };
     try allocSliceReadWriteTest(TestTuple, expected);
+}
+
+fn optionalTupleReadWriteTest(comptime T: type, expected: ?T) !void {
+    const allocator = std.testing.allocator;
+    
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    if (expected) |v| {
+        _ = try writer.writeTuple(T, v);
+    }
+    else {
+        _ = try writer.writeNull();
+    }
+
+    var reader = Reader.init(writer.buffer.items);
+
+    const values = try reader.readOptional(T);
+
+    try std.testing.expectEqualDeep(expected, values);
+}
+
+test "Read/Write tuple (nullable#1) - Short" {
+    try optionalTupleReadWriteTest(struct {u8, i8}, .{42, -42});
+}
+
+test "Read/Write tuple (nullable#2) - Short" {
+    try optionalTupleReadWriteTest(struct {u8, i8}, null);
+}
+
+test "Read/Write tuple (nullable member#1) - Short" {
+    try optionalTupleReadWriteTest(struct {u8, ?i8}, .{42, null});
+}
+
+test "Read/Write tuple (nullable member#2) - Short" {
+    try optionalTupleReadWriteTest(struct {u8, ?i8}, .{42, -42});
+}
+
+test "Read/Write tuple (nullable member#3) - Short" {
+    try optionalTupleReadWriteTest(struct {u8, ?[]const u8}, .{42, "qwerty"});
+}
+
+test "Read/Write tuple (nullable member#4) - Short" {
+    const T = struct {u8, ?[]const i32};
+    const expected: ?T = .{42, &.{1, -2, 4, -8, 16}};
+    const allocator = std.testing.allocator;
+    
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    if (expected) |v| {
+        _ = try writer.writeTuple(T, v);
+    }
+    else {
+        _ = try writer.writeNull();
+    }
+
+    var reader = Reader.init(writer.buffer.items);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const values = try reader.readOptionalWithAllocator(arena.allocator(), T);
+
+    try std.testing.expectEqualDeep(expected, values);
+}
+
+test "Read/Write tuple (nullable member#5) - Short" {
+    const T = struct {u8, ?[]const ?i32};
+    const expected: ?T = .{42, &.{null, -2, 4, -8, 16}};
+    const allocator = std.testing.allocator;
+    
+    var writer = try Writer.init(allocator);
+    defer writer.deinit();
+
+    if (expected) |v| {
+        _ = try writer.writeTuple(T, v);
+    }
+    else {
+        _ = try writer.writeNull();
+    }
+
+    var reader = Reader.init(writer.buffer.items);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const values = try reader.readOptionalWithAllocator(arena.allocator(), T);
+
+    try std.testing.expectEqualDeep(expected, values);
 }

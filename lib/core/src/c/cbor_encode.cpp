@@ -46,6 +46,17 @@ auto CborEncoder::encodeBool(bool value) -> std::vector<char> {
     return std::vector<char>(b, b + writer.bufidx);
 }
 
+auto CborEncoder::encodeNull() -> std::vector<char> {
+    cbor_writer_t writer;
+    char buf[] = {0}; 
+    cbor_writer_init(&writer, buf, 1);
+
+    cbor_encode_null(&writer);
+
+    auto b = reinterpret_cast<char*>(writer.buf);
+    return std::vector<char>(b, b + writer.bufidx);
+}
+
 auto CborEncoder::addUInt(uint64_t value) -> void {
     auto data = std::move(CborEncoder::encodeUInt(value));
     std::move(data.begin(), data.end(), std::back_inserter(this->buf));
@@ -64,6 +75,11 @@ auto CborEncoder::addString(std::string value) -> void {
 
 auto CborEncoder::addBool(bool value) -> void {
     auto data = std::move(CborEncoder::encodeBool(value));
+    std::move(data.begin(), data.end(), std::back_inserter(this->buf));
+}
+
+auto CborEncoder::addNull() -> void {
+    auto data = std::move(CborEncoder::encodeNull());
     std::move(data.begin(), data.end(), std::back_inserter(this->buf));
 }
 

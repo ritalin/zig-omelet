@@ -46,12 +46,7 @@ pub fn main() !void {
         },
         .stage_extract = &.{
             .{
-                .path = exe_prefix ++ "-" ++ "duckdb-extract-ph",
-                .extra_args = &.{},
-                .managed = true,
-            },
-            .{
-                .path = exe_prefix ++ "-" ++ "duckdb-extract-sl",
+                .path = exe_prefix ++ "-" ++ "duckdb-extract",
                 .extra_args = &.{@tagName(.schema_dir_path)},
                 .managed = true,
             },

@@ -31,8 +31,8 @@ pub fn build(b: *std.Build) !void {
         b.installArtifact(exe_stage);
         break :stage_watch_files;
     }
-    stage_duck_db_extract_ph: {
-        const dep = b.dependency("stage_duckdb_extract_ph", .{
+    stage_duck_db_extract: {
+        const dep = b.dependency("stage_duckdb_extract", .{
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
@@ -40,22 +40,9 @@ pub fn build(b: *std.Build) !void {
             .duckdb_prefix = duckdb_prefix,
             .catch2_prefix = catch2_prefix,
         });
-        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-ph"}));
+        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract"}));
         b.installArtifact(exe_stage);
-        break :stage_duck_db_extract_ph;
-    }
-    stage_duck_db_extract_sl: {
-        const dep = b.dependency("stage_duckdb_extract_sl", .{
-            .target = target,
-            .optimize = optimize,
-            .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
-            .duckdb_prefix = duckdb_prefix,
-            .catch2_prefix = catch2_prefix,
-        });
-        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract-sl"}));
-        b.installArtifact(exe_stage);
-        break :stage_duck_db_extract_sl;
+        break :stage_duck_db_extract;
     }
     stage: {
         const dep = b.dependency("stage_ts_generate", .{

@@ -1,1 +1,1 @@
-select $2 as name, xyz, 123 from Foo where kind = $1
+select $1::text as name, xyz, 123 from Foo where kind = $1::int

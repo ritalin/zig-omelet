@@ -201,9 +201,15 @@ fn processParseResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.
 
     defer entry.item_count = item_count;
 
-    const result = try reader.readTuple(core.StructView(core.Event.Payload.TopicBody.Item));
+    const payload_count = try reader.readUInt(usize);
+    const items = try allocator.alloc(core.StructView(core.Event.Payload.TopicBody.Item), payload_count);
+    defer allocator.free(items);
 
-    var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), &.{result});
+    for (0..payload_count) |i| {
+        items[i] = try reader.readTuple(core.StructView(core.Event.Payload.TopicBody.Item));
+    }
+
+    var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), items);
     return .{
         .topic_body = topic_body.withNewIndex(item_index, item_count),
     };

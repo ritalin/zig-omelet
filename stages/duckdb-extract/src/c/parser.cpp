@@ -39,94 +39,6 @@ private:
     std::optional<void *> socket;
 };
 
-struct DescribeResult {
-    std::string field_name;
-    std::string field_type;
-    bool nullable;
-};
-
-static auto prependDescribeKeyword(duckdb::SelectStatement& stmt) -> void {
-    auto& original_node = stmt.node;
-
-    auto describe = new duckdb::ShowRef();
-    describe->show_type = duckdb::ShowType::DESCRIBE;
-    describe->query = std::move(original_node);
-
-    auto describe_node = new duckdb::SelectNode();
-    describe_node->from_table.reset(describe);
-    describe_node->select_list.push_back(duckdb::StarExpression().Copy());
-
-    stmt.node.reset(describe_node);
-
-    stmt.named_param_map = {{"1", 0}};
-    stmt.n_param = 1;
-}
-
-static auto hydrateDescribeResult(const DescribeWorker& collector, const duckdb::unique_ptr<duckdb::QueryResult>& query_result, std::vector<DescribeResult>& results) -> void {
-    for (auto& row: *query_result) {
-        // TODO: dealing with untype
-
-        results.push_back({
-            row.GetValue<std::string>(0),
-            row.GetValue<std::string>(1),
-            row.GetValue<std::string>(2) == "YES",
-        });
-    }
-}
-
-static auto describeSelectStatementInternal(DescribeWorker& collector, const duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
-    auto& conn = collector.conn;
-
-    std::string err_message;
-    WorkerResultCode err;
-
-    try {
-        // std::cout << std::format("Q: {}", stmt.ToString()) << std::endl;
-        // auto prepares_stmt = std::move(conn.Prepare(stmt.Copy()));
-        auto prepares_stmt = std::move(conn.Prepare(stmt.ToString()));
-        // passes null value to all parameter(s)
-        auto param_count = prepares_stmt->GetStatementProperties().parameter_count;
-        auto params = duckdb::vector<duckdb::Value>(param_count);
-        
-        auto query_result = prepares_stmt->Execute(params);
-        hydrateDescribeResult(collector, query_result, results);
-
-        return no_error;
-    }
-    catch (const duckdb::ParameterNotResolvedException& ex) {
-        err_message = "Cannot infer type for untyped placeholder";
-        err = describe_filed;
-    }
-    catch (const duckdb::Exception& ex) {
-        err_message = ex.what();
-        err = invalid_sql;
-    }
-
-    collector.messageChannel("worker.describe").err(err_message);
-
-    return err;
-}
-
-static auto describeSelectStatement(DescribeWorker& collector, duckdb::SelectStatement& stmt, std::vector<DescribeResult>& results) -> WorkerResultCode {
-    prependDescribeKeyword(stmt);
-    return describeSelectStatementInternal(collector, stmt, results);
-}
-
-static auto encodeDescribeResult(const std::vector<DescribeResult>& describes) -> std::vector<char> {
-    CborEncoder encoder;
-
-    encoder.addArrayHeader(describes.size());
-
-    for (auto& desc: describes) {
-        encoder.addArrayHeader(3);
-        encoder.addString(desc.field_name);
-        encoder.addString(desc.field_type);
-        encoder.addBool(desc.nullable);
-    }
-
-    return std::move(encoder.rawBuffer());
-}
-
 static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParameterCollector::Result {
     ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
@@ -150,6 +62,43 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
     binder->parameters = &parameters;
 
     return std::move(binder->Bind(*stmt));
+}
+
+static auto encodePlaceholder(std::vector<ParamEntry>&& entries) -> std::vector<char> {
+    std::ranges::sort(entries, {}, &ParamEntry::sort_order);
+
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(entries.size());
+
+    for (auto& entry: entries) {
+        encoder.addArrayHeader(3);
+        encoder.addString(entry.name);
+
+        if (entry.type_name) {
+            encoder.addString(entry.type_name.value());
+        }
+        else {
+            encoder.addNull();
+        }
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
+static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(entries.size());
+
+    for (auto& entry: entries) {
+        encoder.addArrayHeader(3);
+        encoder.addString(entry.field_name);
+        encoder.addString(entry.field_type);
+        encoder.addBool(entry.nullable);
+    }
+
+    return std::move(encoder.rawBuffer());
 }
 
 auto DescribeWorker::messageChannel(const std::string& from) -> ZmqChannel {
@@ -188,25 +137,13 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             }
 
             auto zmq_channel = this->messageChannel("worker.extract");
-            send_query: {
-                zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_query, std::vector<char>(q.cbegin(), q.cend()));
-            }
-            placeholder: {
-                // TODO: zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_placeholder, encodePlaceholder(param_type_result));
-            }
-            select_list: {
-                // TODO: zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_select_list, encodeSelectList(column_type_result));
-            }
 
-            auto stmt_copy = stmt->Copy();
-            std::vector<DescribeResult> describes;
-
-            if (stmt_copy->type == duckdb::StatementType::SELECT_STATEMENT) {
-                describeSelectStatement(*this, stmt_copy->Cast<duckdb::SelectStatement>(), describes);
-            }
-
-            // send as worker result
-            this->messageChannel("worker.bind").sendWorkerResult(stmt_offset, stmts.size(), topic_select_list, std::move(encodeDescribeResult(describes)));
+            std::unordered_map<std::string, std::vector<char>> topic_bodies({
+                {topic_query, std::vector<char>(q.cbegin(), q.cend())},
+                {topic_placeholder, encodePlaceholder(std::move(param_type_result))},
+                {topic_select_list, encodeSelectList(std::move(column_type_result))},
+            });
+            zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
         }
 
         return no_error;

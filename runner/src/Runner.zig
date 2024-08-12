@@ -144,7 +144,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         },
                     }
                 },
-                .invalid_topic_body => |payload| {
+                .skip_topic_body => |payload| {
                     log(payload.log.level, item.from, payload.log.content);
 
                     try source_cache.dismiss(payload.header);

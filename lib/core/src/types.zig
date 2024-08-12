@@ -78,7 +78,7 @@ pub const EventType = enum (u8) {
     // Topic body event
     ready_topic_body,
     topic_body,
-    invalid_topic_body,
+    skip_topic_body,
     pending_finish_topic_body,
     finish_topic_body,
     // Generate event
@@ -223,7 +223,7 @@ const EventPayload = struct {
         };
     };
 
-    pub const InvalidTopicBody = struct {
+    pub const SkipTopicBody = struct {
         header: SourcePath, 
         log: Log,
 
@@ -350,7 +350,7 @@ pub const Event = union(EventType) {
     // Topic body events
     ready_topic_body: void,
     topic_body: Payload.TopicBody,
-    invalid_topic_body: Payload.InvalidTopicBody,
+    skip_topic_body: Payload.SkipTopicBody,
     pending_finish_topic_body: void,
     finish_topic_body: void,
     // Generate events
@@ -388,7 +388,7 @@ fn deinitEvent(event: Event) void {
         // Topic body events
         .ready_topic_body => {},
         .topic_body => |data| data.deinit(),
-        .invalid_topic_body => |data| data.deinit(),
+        .skip_topic_body => |data| data.deinit(),
         .pending_finish_topic_body => {},
         .finish_topic_body => {},
         // Generate events
@@ -423,7 +423,7 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
         // Topic body events
         .ready_topic_body => .ready_topic_body,
         .topic_body => |payload| .{.topic_body = try payload.clone(allocator)},
-        .invalid_topic_body => |payload| .{.invalid_topic_body = try payload.clone(allocator)},
+        .skip_topic_body => |payload| .{.skip_topic_body = try payload.clone(allocator)},
         .pending_finish_topic_body => .pending_finish_topic_body,
         .finish_topic_body => .finish_topic_body,
         // Generate events
@@ -472,16 +472,16 @@ test "Clone events" {
         try std.testing.expectEqualDeep(expect_event.topic_body.values(), event.topic_body.values());
         break:topic_body;
     }
-    invalid_topic_body: {
-        const expect_event: Event = .{ .invalid_topic_body = try Event.Payload.InvalidTopicBody.init(allocator, 
+    skip_topic_body: {
+        const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, 
             .{"header/name_i", "header/path_i", "header/hash_i", 3},
             .{.err, "error message"}
         ) };
         defer expect_event.deinit();
         const event = try expect_event.clone(std.heap.page_allocator);
         defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.invalid_topic_body.values(), event.invalid_topic_body.values());
-        break:invalid_topic_body;
+        try std.testing.expectEqualDeep(expect_event.skip_topic_body.values(), event.skip_topic_body.values());
+        break:skip_topic_body;
     }
     worker_result: {
         const expect_event: Event = .{ .worker_result = try Event.Payload.WorkerResult.init(allocator, .{"some-result-text"}) };

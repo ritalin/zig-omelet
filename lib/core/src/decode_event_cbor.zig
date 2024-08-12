@@ -52,7 +52,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
                 _ = try writer.writeTuple(StructView(Event.Payload.TopicBody.Item), item.values());
             }
         },
-        .invalid_topic_body => |payload| {
+        .skip_topic_body => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.header.values());
             _ = try writer.writeTuple(StructView(Event.Payload.Log), payload.log.values());
         },
@@ -125,12 +125,12 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
                 .topic_body = payload.withNewIndex(item_index, payload.header.item_count),
             };
         },
-        .invalid_topic_body => {
+        .skip_topic_body => {
             const header = try reader.readTuple(StructView(Event.Payload.SourcePath));
             const log = try reader.readTuple(StructView(Event.Payload.Log));
 
             return .{
-                .invalid_topic_body = try Event.Payload.InvalidTopicBody.init(allocator, header, log),
+                .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, header, log),
             };
         },
         .pending_finish_topic_body => return .pending_finish_topic_body,
@@ -183,11 +183,11 @@ test "Encode/Decode event" {
         }
     );
     defer topic_body.deinit();
-    const invalid_topic_body = try Event.Payload.InvalidTopicBody.init(allocator,
+    const skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator,
         .{ source_path.name, source_path.path, source_path.hash, 3 }, 
         .{.err, "SQL syntax error"}
     );
-    defer invalid_topic_body.deinit();
+    defer skip_topic_body.deinit();
     const worker_result = try Event.Payload.WorkerResult.init(allocator, .{"some-result-text"});
     defer worker_result.deinit();
     const log = try Event.Payload.Log.init(allocator, .{.debug, "Test message😃"});
@@ -207,7 +207,7 @@ test "Encode/Decode event" {
     try encodeEventInternal(allocator, &writer, .finish_source_path);
     try encodeEventInternal(allocator, &writer, .ready_topic_body);
     try encodeEventInternal(allocator, &writer, .{.topic_body = topic_body});
-    try encodeEventInternal(allocator, &writer, .{.invalid_topic_body = invalid_topic_body});
+    try encodeEventInternal(allocator, &writer, .{.skip_topic_body = skip_topic_body});
     try encodeEventInternal(allocator, &writer, .finish_topic_body);
     try encodeEventInternal(allocator, &writer, .pending_finish_topic_body);
     try encodeEventInternal(allocator, &writer, .ready_generate);
@@ -307,11 +307,11 @@ test "Encode/Decode event" {
         try std.testing.expectEqualDeep(topic_body.values(), event.topic_body.values());
         break:topic_body;
     }
-    invalid_topic_body: {
-        const event = try decodeEventInternal(allocator, .invalid_topic_body, &reader);
+    skip_topic_body: {
+        const event = try decodeEventInternal(allocator, .skip_topic_body, &reader);
         defer event.deinit();
-        try std.testing.expectEqualDeep(invalid_topic_body.values(), event.invalid_topic_body.values());
-        break:invalid_topic_body;
+        try std.testing.expectEqualDeep(skip_topic_body.values(), event.skip_topic_body.values());
+        break:skip_topic_body;
     }
     finish_topic_body: {
         const event = try decodeEventInternal(allocator, .finish_topic_body, &reader);

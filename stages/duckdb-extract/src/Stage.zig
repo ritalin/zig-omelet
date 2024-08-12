@@ -223,7 +223,7 @@ fn processLogResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.Cb
     defer allocator.free(full_from);
 
     return .{
-        .invalid_topic_body = try core.Event.Payload.InvalidTopicBody.init(allocator, 
+        .skip_topic_body = try core.Event.Payload.SkipTopicBody.init(allocator, 
             entry.path.values(),
             .{core.Logger.stringToLogLevel(log_level), content}
         ),

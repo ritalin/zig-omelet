@@ -15,6 +15,9 @@ enum WorkerResultCode {
 #define topic_placeholder "placeholder"
 #define topic_select_list "select-list"
 
+#define topic_schema_header "chema_header"
+#define topic_schema_body "schema_body"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

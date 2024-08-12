@@ -93,13 +93,13 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .topic => |payload| {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
-                    for (payload.names) |name| {
-                        try source_cache.topics.insert(name);
-                    }
+                    try source_cache.topics_map.addTopics(payload.category, payload.names);
 
-                    left_topic_stage -= 1;
+                    if (!payload.has_more) {
+                        left_topic_stage -= 1;
+                    }
                     systemLog.debug("Receive 'topic' ({})", .{left_topic_stage});
-                    try dumpTopics(self.allocator, source_cache.topics);
+                    try source_cache.topics_map.dumpTopics(self.allocator);
 
                     if (left_topic_stage <= 0) {
                         try self.connection.dispatcher.post(.ready_watch_path);
@@ -228,30 +228,10 @@ fn onAfterLaunch(self: Self) !void {
     }
 }
 
-fn dumpTopics(allocator: std.mem.Allocator, topics: std.BufSet) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const managed_allocator = arena.allocator();
-
-    var buf = std.ArrayList(u8).init(managed_allocator);
-    var writer = buf.writer();
-
-    try writer.writeAll(try std.fmt.allocPrint(managed_allocator, "[{s}] Received topics ({}): ", .{app_context, topics.count()}));
-
-    var it = topics.iterator();
-
-    while (it.next()) |topic| {
-        try writer.writeAll(topic.*);
-        try writer.writeAll(", ");
-    }
-
-    traceLog.debug("{s}", .{buf.items});
-}
-
 const PayloadCacheManager = struct {
     arena: *std.heap.ArenaAllocator,
     cache: std.StringHashMap(*Entry),
-    topics: std.BufSet,
+    topics_map: TopicsMap,
     ready_queue: core.Queue(core.Event.Payload.TopicBody),
 
     pub const CacheStatus = enum {
@@ -265,7 +245,7 @@ const PayloadCacheManager = struct {
         const managed_allocator = arena.allocator();
         return .{
             .arena = arena,
-            .topics = std.BufSet.init(managed_allocator),
+            .topics_map = TopicsMap.init(managed_allocator),
             .cache = std.StringHashMap(*Entry).init(managed_allocator),
             .ready_queue = core.Queue(core.Event.Payload.TopicBody).init(managed_allocator),
         };
@@ -275,7 +255,7 @@ const PayloadCacheManager = struct {
         const child = self.arena.child_allocator;
 
         self.ready_queue.deinit();
-        self.topics.deinit();
+        self.topics_map.deinit();
         self.cache.deinit();
         self.arena.deinit();
         
@@ -294,7 +274,7 @@ const PayloadCacheManager = struct {
             entry.value_ptr.*.deinit();
         }
         
-        entry.value_ptr.* = try Entry.init(allocator, source, self.topics);
+        entry.value_ptr.* = try Entry.init(allocator, source, self.topics_map.get(source.category));
         entry.key_ptr.* = entry.value_ptr.*.source.path;
 
         return true;
@@ -349,13 +329,70 @@ const PayloadCacheManager = struct {
         return (self.cache.count() == 0) and (self.ready_queue.count() == 0);
     }
 
+    const TopicsMap = struct {
+        entries: std.enums.EnumArray(core.TopicCategory, std.BufSet),
+
+        pub fn init(allocator: std.mem.Allocator) TopicsMap {
+            var self = .{
+                .entries = std.enums.EnumArray(core.TopicCategory, std.BufSet).initUndefined(),
+            };
+
+            inline for (std.meta.tags(core.TopicCategory)) |cat| {
+                self.entries.set(cat, std.BufSet.init(allocator));
+            }
+
+            return self;
+        }
+
+        pub fn deinit(self: *TopicsMap) void {
+            _ = self;
+        }
+
+        pub fn addTopics(self: *TopicsMap, category: core.TopicCategory, topics: []const Symbol) !void {
+            var entry = self.entries.getPtr(category);
+
+            for (topics) |topic| {
+                try entry.insert(topic);
+            }
+        }
+
+        pub fn get(self: *TopicsMap, category: core.TopicCategory) *std.BufSet {
+            return self.entries.getPtr(category);
+        }
+
+        pub fn dumpTopics(self: *TopicsMap, allocator: std.mem.Allocator) !void {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const managed_allocator = arena.allocator();
+
+            var iter = self.entries.iterator();
+
+            while(iter.next()) |entry| {
+                var buf = std.ArrayList(u8).init(managed_allocator);
+                var writer = buf.writer();
+                const topics = entry.value;
+
+                try writer.writeAll(try std.fmt.allocPrint(managed_allocator, "[{s}] Received topics ({}): ", .{app_context, topics.count()}));
+
+                var item_iter = topics.iterator();
+
+                while (item_iter.next()) |topic| {
+                    try writer.writeAll(topic.*);
+                    try writer.writeAll(", ");
+                }
+
+                traceLog.debug("{s}", .{buf.items});
+            }
+        }
+    };
+
     const Entry = struct {
         allocator: std.mem.Allocator, 
         source: core.Event.Payload.SourcePath,
         left_topics: std.BufSet,
         contents: std.BufMap,
 
-        pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.SourcePath, topics: std.BufSet) !*Entry {
+        pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.SourcePath, topics: *std.BufSet) !*Entry {
             const self = try allocator.create(Entry);
             self.* =  .{
                 .allocator = allocator,

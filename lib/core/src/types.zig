@@ -126,9 +126,9 @@ const EventPayload = struct {
         arena: *std.heap.ArenaAllocator,
         category: TopicCategory,
         names: []const Symbol,
-        has_next: bool,
+        has_more: bool,
 
-        pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_next: bool) !@This() {
+        pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_more: bool) !@This() {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             const a = arena.allocator();
@@ -142,7 +142,7 @@ const EventPayload = struct {
                 .arena = arena,
                 .category = category,
                 .names = new_names,
-                .has_next = has_next,
+                .has_more = has_more,
             };
         }
         pub fn deinit(self: @This()) void {
@@ -150,7 +150,7 @@ const EventPayload = struct {
             self.arena.child_allocator.destroy(self.arena);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.category, self.values(), self.has_next);
+            return init(allocator, self.category, self.values(), self.has_more);
         }
         pub fn values(self: @This()) []const Symbol {
             return self.names;
@@ -257,6 +257,7 @@ const EventPayload = struct {
 
     pub const SourcePath = struct {
         allocator: std.mem.Allocator,
+        category: TopicCategory,
         name: Symbol, 
         path: FilePath, 
         hash: Symbol,
@@ -265,10 +266,11 @@ const EventPayload = struct {
         pub fn init(allocator: std.mem.Allocator, view: StructView(SourcePath)) !@This() {
             return .{
                 .allocator = allocator,
-                .name = try allocator.dupe(u8, view[0]),
-                .path = try allocator.dupe(u8, view[1]),
-                .hash = try allocator.dupe(u8, view[2]),
-                .item_count = view[3],
+                .category = view[0],
+                .name = try allocator.dupe(u8, view[1]),
+                .path = try allocator.dupe(u8, view[2]),
+                .hash = try allocator.dupe(u8, view[3]),
+                .item_count = view[4],
             };
         }
         pub fn deinit(self: @This()) void {
@@ -280,7 +282,7 @@ const EventPayload = struct {
             return init(allocator, self.values());
         }
         pub fn values(self: @This()) StructView(@This()) {
-            return .{ self.name, self.path, self.hash, self.item_count };
+            return .{ self.category, self.name, self.path, self.hash, self.item_count };
         }
     };
 
@@ -463,7 +465,7 @@ test "Clone events" {
         break:topic;
     }
     source_path: {
-        const expect_event: Event = .{ .source_path = try Event.Payload.SourcePath.init(allocator, .{"name", "/path/to", "hash", 1}) };
+        const expect_event: Event = .{ .source_path = try Event.Payload.SourcePath.init(allocator, .{.schema, "name", "/path/to", "hash", 1}) };
         defer expect_event.deinit();
         const event = try expect_event.clone(std.heap.page_allocator);
         defer event.deinit();
@@ -472,7 +474,7 @@ test "Clone events" {
     }
     topic_body: {
         const expect_event: Event = .{ .topic_body = try Event.Payload.TopicBody.init(allocator, 
-            .{"header/name", "header/path", "header/hash", 2}, 
+            .{.schema, "header/name", "header/path", "header/hash", 2}, 
             &.{ .{"topic_1", "value_1"}, .{"topic_2", "value_3"}, .{"topic_99", "value_99"},  }
         ) };
         defer expect_event.deinit();
@@ -483,7 +485,7 @@ test "Clone events" {
     }
     skip_topic_body: {
         const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, 
-            .{"header/name_i", "header/path_i", "header/hash_i", 3},
+            .{.schema, "header/name_i", "header/path_i", "header/hash_i", 3},
             .{.err, "error message"}
         ) };
         defer expect_event.deinit();

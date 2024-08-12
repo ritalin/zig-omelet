@@ -79,7 +79,7 @@ pub fn run(self: *Self, setting: Setting) !void {
             
             switch (item.event) {
                 .ready_watch_path => {
-                    try self.sendAllFiles(setting.sources);
+                    try self.sendAllFiles(.source, setting.sources);
                     try self.connection.dispatcher.post(.finish_watch_path);
                 },
                 .quit => {
@@ -97,19 +97,19 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 }
 
-fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir) !void {
+fn sendAllFiles(self: *Self, category: core.TopicCategory, sources: []const Setting.SourceDir) !void {
     for (sources) |src| {
         const file_stat = try std.fs.cwd().statFile(src.dir_path);
         if (file_stat.kind == .file) {
-            try self.sendFile(std.fs.cwd(), src.dir_path, src.prefix);
+            try self.sendFile(category, std.fs.cwd(), src.dir_path, src.prefix);
         }
         else if (file_stat.kind == .directory) {
-            try self.sendFiledOfDir(src.dir_path, src.prefix);
+            try self.sendFiledOfDir(category, src.dir_path, src.prefix);
         }
     }
 }
 
-fn sendFiledOfDir(self: *Self, dir_path: core.FilePath, prefix: core.FilePath) !void {
+fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.FilePath, prefix: core.FilePath) !void {
     var dir = try std.fs.cwd().openDir(dir_path, .{});
     defer dir.close();
 
@@ -118,12 +118,12 @@ fn sendFiledOfDir(self: *Self, dir_path: core.FilePath, prefix: core.FilePath) !
 
     while (try iter.next()) |entry| {
         if (entry.kind == .file) {
-            try self.sendFile(entry.dir, entry.path, prefix);
+            try self.sendFile(category, entry.dir, entry.path, prefix);
         }
     }
 }
 
-fn sendFile(self: *Self, base_dir: std.fs.Dir, file_path: core.FilePath, prefix: core.FilePath) !void {
+fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, prefix: core.FilePath) !void {
     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
     defer self.allocator.free(file_path_abs);
 
@@ -141,7 +141,7 @@ fn sendFile(self: *Self, base_dir: std.fs.Dir, file_path: core.FilePath, prefix:
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
         .source_path = try core.Event.Payload.SourcePath.init(
-            self.allocator, .{name, file_path_abs, hash, 1}
+            self.allocator, .{category, name, file_path_abs, hash, 1}
         ),
     });
 }

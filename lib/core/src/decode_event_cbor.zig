@@ -30,7 +30,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         .topic => |payload| {
             _ = try writer.writeEnum(types.TopicCategory, payload.category);
             _ = try writer.writeSlice(Symbol, payload.names);
-            _ = try writer.writeBool(payload.has_next);
+            _ = try writer.writeBool(payload.has_more);
         },
         // Watch event
         .ready_watch_path => {},
@@ -94,10 +94,10 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
             const category = try reader.readEnum(types.TopicCategory);
             const topic_names = try reader.readSlice(allocator, Symbol);
             defer allocator.free(topic_names);
-            const has_next = try reader.readBool();
+            const has_more = try reader.readBool();
 
             return .{
-                .topic = try Event.Payload.Topic.init(allocator, category, topic_names, has_next),
+                .topic = try Event.Payload.Topic.init(allocator, category, topic_names, has_more),
             };
         },
         // Watch event
@@ -176,10 +176,10 @@ test "Encode/Decode event" {
 
     const topic = try Event.Payload.Topic.init(allocator, .source, &.{"topic_a", "topic_b", "topic_c"}, false);
     defer topic.deinit();
-    const source_path = try Event.Payload.SourcePath.init(allocator, .{"Some-name", "Some-path", "Some-content", 1});
+    const source_path = try Event.Payload.SourcePath.init(allocator, .{.source, "Some-name", "Some-path", "Some-content", 1});
     defer source_path.deinit();
     const topic_body = try Event.Payload.TopicBody.init(allocator, 
-        .{ source_path.name, source_path.path, source_path.hash, 2 }, 
+        .{ source_path.category, source_path.name, source_path.path, source_path.hash, 2 }, 
         &.{
             .{ "topic_a", "topic_a_content" },
             .{ "topic_b", "topic_b_content" },
@@ -188,7 +188,7 @@ test "Encode/Decode event" {
     );
     defer topic_body.deinit();
     const skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator,
-        .{ source_path.name, source_path.path, source_path.hash, 3 }, 
+        .{ source_path.category, source_path.name, source_path.path, source_path.hash, 3 }, 
         .{.err, "SQL syntax error"}
     );
     defer skip_topic_body.deinit();

@@ -91,11 +91,25 @@ pub fn run(self: *Self, setting: Setting) !void {
             
             switch (item.event) {
                 .request_topic => {
-                    const topic = try core.Event.Payload.Topic.init(
-                        self.allocator, &.{c.topic_query, c.topic_placeholder, c.topic_select_list}
-                    );
-                    
                     topics: {
+                        const topic = try core.Event.Payload.Topic.init(
+                            self.allocator, 
+                            .source,
+                            &.{c.topic_query, c.topic_placeholder, c.topic_select_list},
+                            true,
+                        );
+                        
+                        try self.connection.dispatcher.post(.{.topic = topic});
+                        break :topics;
+                    }
+                    topics: {
+                        const topic = try core.Event.Payload.Topic.init(
+                            self.allocator, 
+                            .schema,
+                            &.{c.topic_schema_header, c.topic_schema_body},
+                            false,
+                        );
+                        
                         try self.connection.dispatcher.post(.{.topic = topic});
                         break :topics;
                     }

@@ -28,7 +28,9 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         .launched, .failed_launching => {},
         .request_topic => {},
         .topic => |payload| {
+            _ = try writer.writeEnum(types.TopicCategory, payload.category);
             _ = try writer.writeSlice(Symbol, payload.names);
+            _ = try writer.writeBool(payload.has_next);
         },
         // Watch event
         .ready_watch_path => {},
@@ -89,11 +91,13 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
         .failed_launching => return .failed_launching,
         .request_topic => return .request_topic,
         .topic => {
+            const category = try reader.readEnum(types.TopicCategory);
             const topic_names = try reader.readSlice(allocator, Symbol);
             defer allocator.free(topic_names);
+            const has_next = try reader.readBool();
 
             return .{
-                .topic = try Event.Payload.Topic.init(allocator, topic_names),
+                .topic = try Event.Payload.Topic.init(allocator, category, topic_names, has_next),
             };
         },
         // Watch event
@@ -170,7 +174,7 @@ test "Encode/Decode event" {
     var writer = try CborStream.Writer.init(allocator);
     defer writer.deinit();
 
-    const topic = try Event.Payload.Topic.init(allocator, &.{"topic_a", "topic_b", "topic_c"});
+    const topic = try Event.Payload.Topic.init(allocator, .source, &.{"topic_a", "topic_b", "topic_c"}, false);
     defer topic.deinit();
     const source_path = try Event.Payload.SourcePath.init(allocator, .{"Some-name", "Some-path", "Some-content", 1});
     defer source_path.deinit();

@@ -116,12 +116,19 @@ pub fn StructView(comptime T: type) type {
     return std.meta.Tuple(types[0..i]);
 }
 
+pub const TopicCategory = enum {
+    source, 
+    schema,
+};
+
 const EventPayload = struct {
     pub const Topic = struct {
         arena: *std.heap.ArenaAllocator,
+        category: TopicCategory,
         names: []const Symbol,
+        has_next: bool,
 
-        pub fn init(allocator: std.mem.Allocator, names: []const Symbol) !@This() {
+        pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_next: bool) !@This() {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             const a = arena.allocator();
@@ -133,7 +140,9 @@ const EventPayload = struct {
 
             return .{
                 .arena = arena,
+                .category = category,
                 .names = new_names,
+                .has_next = has_next,
             };
         }
         pub fn deinit(self: @This()) void {
@@ -141,7 +150,7 @@ const EventPayload = struct {
             self.arena.child_allocator.destroy(self.arena);
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.values());
+            return init(allocator, self.category, self.values(), self.has_next);
         }
         pub fn values(self: @This()) []const Symbol {
             return self.names;
@@ -446,7 +455,7 @@ test "Clone events" {
     const allocator = std.testing.allocator;
 
     topic: {
-        const expect_event: Event = .{ .topic = try Event.Payload.Topic.init(allocator, &.{"foo", "bar", "baz"}) };
+        const expect_event: Event = .{ .topic = try Event.Payload.Topic.init(allocator, .schema, &.{"foo", "bar", "baz"}, false) };
         defer expect_event.deinit();
         const event = try expect_event.clone(std.heap.page_allocator);
         defer event.deinit();

@@ -1,0 +1,1 @@
+CREATE TYPE Visibility as ENUM ('hide', 'visible')

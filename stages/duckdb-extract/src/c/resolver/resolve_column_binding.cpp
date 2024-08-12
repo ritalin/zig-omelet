@@ -176,9 +176,6 @@ auto ColumnExpressionVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression> &ex
 using namespace worker;
 using namespace Catch::Matchers;
 
-// using LogicalOperatorRef = duckdb::unique_ptr<duckdb::LogicalOperator>;
-// using BoundTableRef = duckdb::unique_ptr<duckdb::BoundTableRef>;
-
 struct ColumnBindingPair {
     duckdb::ColumnBinding binding;
     NullableLookup::Nullability nullable;
@@ -202,8 +199,6 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         auto stmt_type = evalStatementType(stmts[0]);
 
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-        // auto bound_table_ref = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
-        // auto catalogs = TableCatalogResolveVisitor::Resolve(bound_table_ref);
 
         NullableLookup field_lookup;
 

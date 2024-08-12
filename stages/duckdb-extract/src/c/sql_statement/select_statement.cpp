@@ -20,7 +20,7 @@ static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -
     }
 }
 
-static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void;
+static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::OrderModifier& order_bys, uint32_t depth) -> void;
 static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void;
 
 static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
@@ -84,7 +84,7 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
             }
 
             // order by(s)
-            walkOrderBysNodeInternal(collector, fn_expr.order_bys, depth+1);
+            walkOrderBysNodeInternal(collector, *fn_expr.order_bys, depth+1);
         }
         break;
     case duckdb::ExpressionClass::SUBQUERY:
@@ -110,8 +110,8 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
     }
 }
 
-static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::unique_ptr<duckdb::OrderModifier>& order_bys, uint32_t depth) -> void {
-    for (auto& order_by: order_bys->orders) {
+static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::OrderModifier& order_bys, uint32_t depth) -> void {
+    for (auto& order_by: order_bys.orders) {
         walkExpressionInternal(collector, order_by.expression, depth);
     }
 }
@@ -168,6 +168,43 @@ static auto walkTableRef(ParameterCollector& collector, duckdb::unique_ptr<duckd
     }
 }
 
+static auto walkStatementResultModifires(ParameterCollector& collector, duckdb::vector<duckdb::unique_ptr<duckdb::ResultModifier>>& modifiers, uint32_t depth) -> void {
+    for (auto& modifier: modifiers) {
+        switch (modifier->type) {
+        case duckdb::ResultModifierType::LIMIT_MODIFIER:
+            {
+                auto& mod_lim = modifier->Cast<duckdb::LimitModifier>();
+                if (mod_lim.offset) {
+                    walkExpressionInternal(collector, mod_lim.offset, depth);
+                }
+                if (mod_lim.limit) {
+                    walkExpressionInternal(collector, mod_lim.limit, depth);
+                }
+            }
+            break;
+        case duckdb::ResultModifierType::ORDER_MODIFIER:
+            walkOrderBysNodeInternal(collector, modifier->Cast<duckdb::OrderModifier>(), depth);
+            break;
+        case duckdb::ResultModifierType::DISTINCT_MODIFIER: 
+            break;
+        case duckdb::ResultModifierType::LIMIT_PERCENT_MODIFIER:
+            {
+                auto& mod_lim = modifier->Cast<duckdb::LimitPercentModifier>();
+                if (mod_lim.offset) {
+                    walkExpressionInternal(collector, mod_lim.offset, depth);
+                }
+                if (mod_lim.limit) {
+                    walkExpressionInternal(collector, mod_lim.limit, depth);
+                }
+            }
+            break;
+        default:
+            collector.channel.warn(std::format("[TODO] Not implemented result modifier: {} (depth: {})", magic_enum::enum_name(modifier->type), depth));
+            break;
+        }
+    }
+}
+
 static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void {
     switch (stmt.node->type) {
     case duckdb::QueryNodeType::SELECT_NODE: 
@@ -183,14 +220,18 @@ static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::S
                 walkExpressionInternal(collector, select_node.where_clause, depth+1);
             }
             if (select_node.groups.group_expressions.size() > 0) {
-                collector.channel.warn(std::format("[TODO] Unsupported group by clause (depth: {})", depth));
+                for (auto& expr: select_node.groups.group_expressions) {
+                    walkExpressionInternal(collector, expr, depth+1);
+                }
             }
             if (select_node.having) {
-                collector.channel.warn(std::format("[TODO] Unsupported having clause (depth: {})", depth));
+                walkExpressionInternal(collector, select_node.having, depth+1);
             }
             if (select_node.sample) {
                 collector.channel.warn(std::format("[TODO] Unsupported sample clause (depth: {})", depth));
             }
+            
+            walkStatementResultModifires(collector, select_node.modifiers, depth);
         }
         break;
     default: 
@@ -215,6 +256,7 @@ auto ParameterCollector::walkSelectStatement(duckdb::SelectStatement& stmt) -> P
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 using namespace worker;
 using namespace Catch::Matchers;
@@ -230,22 +272,33 @@ auto runTest(const std::string sql, const std::string expected, const ParamNameL
         .walkSelectStatement(stmt->Cast<duckdb::SelectStatement>())
     ;
 
-    SECTION("Walk result") {
+    query: {
+        UNSCOPED_INFO("Walk result");
         CHECK_THAT(stmt->ToString(), Equals(expected));
     }
-    SECTION("Statement type") {
+    statement_type: {
+        UNSCOPED_INFO("Statement type");
         CHECK(param_result.type == StatementType::Select);
     }
-    SECTION("Placeholder map") {
-        SECTION("map size") {
-            CHECK(param_result.lookup.size() == lookup.size());
+    placeholders: {
+        INFO("Placeholder maps");
+        map_size: {
+            UNSCOPED_INFO("map size");
+            REQUIRE(param_result.lookup.size() == lookup.size());
         }
-        SECTION("map entries") {
-            for (int i = 1; auto [positional, name]: param_result.lookup) {
-                SECTION(std::format("positional key exists#{}", i)) {
-                    CHECK(lookup.contains(positional));
+        entries: {
+            UNSCOPED_INFO("map entries");
+
+            auto view = param_result.lookup | std::views::keys;
+            auto keys = std::vector<PositionalParam>(view.begin(), view.end());
+
+            for (int i = 1; auto [positional, name]: lookup) {
+                positional: {
+                    UNSCOPED_INFO(std::format("positional key exists#{}", i));
+                    CHECK_THAT(keys, VectorContains(positional));
                 }
-                SECTION(std::format("named value exists#{}", i)) {
+                named: {
+                    UNSCOPED_INFO(std::format("named value exists#{}", i));
                     CHECK_THAT(name, Equals(lookup.at(positional)));
                 }
             }
@@ -460,9 +513,137 @@ TEST_CASE("Named parameter in where clause") {
     runTest(sql, expected, lookup);
 }
 
+TEST_CASE("Named parameter in group by clause") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        group by xyz, fmod(id, $weeks::int)
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo GROUP BY xyz, fmod(id, CAST($1 AS INTEGER))");
+    ParamNameLookup lookup{ {"1","weeks"} };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in having clause") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        having fmod(id, $weeks::int) > 0
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo HAVING (fmod(id, CAST($1 AS INTEGER)) > 0)");
+    ParamNameLookup lookup{ {"1","weeks"} };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER))");
+    ParamNameLookup lookup{ {"1","weeks"} };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause (plus limit/offset#1)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        offset $off
+        limit $min
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","off"},
+        {"3","lim"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause#2 (plus limit/offset#2)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        limit $min
+        offset $off
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","off"},
+        {"3","lim"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause#3 (plus limit only)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        limit $min
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $2");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","lim"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause#4 (plus offset only)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        offset $off
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) OFFSET $2");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","off"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause#5 (plus percentage limit/offset)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        offset $off
+        limit $min%
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($3) % OFFSET $2");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","off"},
+        {"3","lim"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Named parameter in order by clause#6 (plus percent limit only)") {
+    std::string sql(R"#(
+        select count( distinct *) as c from Foo
+        order by fmod(id, $weeks::int)
+        limit $min%
+    )#");
+    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($2) %");
+    ParamNameLookup lookup{ 
+        {"1","weeks"},
+        {"2","lim"},
+    };
+    
+    runTest(sql, expected, lookup);
+}
+
 TEST_CASE("Named parameter ????") {
     // TODO: not implement
-    // order by
     // window function
     //    * filter
     //    * partition

@@ -27,6 +27,19 @@ struct ColumnEntry {
     bool nullable;
 };
 
+enum class UserTypeKind {Enum};
+
+struct UserTypeEntry {
+    struct Member {
+        std::string field_name;
+        std::optional<std::string> field_type;
+    };
+
+    UserTypeKind kind;
+    std::string name;
+    std::vector<Member> fields;
+};
+
 class DummyExpression: public duckdb::Expression {
 public:
     DummyExpression(): duckdb::Expression(duckdb::ExpressionType::INVALID, duckdb::ExpressionClass::INVALID, duckdb::LogicalType::SQLNULL) {}
@@ -41,8 +54,10 @@ auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unor
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel&& channel) -> std::vector<ColumnEntry>;
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> std::vector<ColumnEntry>;
 
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel channel) -> NullableLookup;
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup;
+
+auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeEntry>;
 
 }

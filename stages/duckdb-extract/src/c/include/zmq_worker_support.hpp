@@ -13,6 +13,7 @@ public:
 public:
     auto sendWorkerResult(size_t stmt_offset, size_t stmt_count, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> void;
 public:
+    auto info(std::string message) -> void;
     auto warn(std::string message) -> void;
     auto err(std::string message) -> void;
 private:

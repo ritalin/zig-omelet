@@ -15,6 +15,16 @@ auto ZmqChannel::unitTestChannel() -> ZmqChannel {
     return ZmqChannel(std::nullopt, "", "unittest");
 }
 
+auto ZmqChannel::info(std::string message) -> void {
+    if (! this->socket) {
+        std::cout << std::format("log/level: info, message: {}", message) << std::endl;
+        return;
+    }
+    else {
+        sendWorkerLog(this->socket.value(), this->id, this->from, "info", message);
+    }
+}
+
 auto ZmqChannel::warn(std::string message) -> void {
     if (! this->socket) {
         std::cout << std::format("log/level: warn, message: {}", message) << std::endl;

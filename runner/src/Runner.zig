@@ -409,7 +409,6 @@ const PayloadCacheManager = struct {
             self.left_topics.deinit();
             self.source.deinit();
             self.allocator.destroy(self);
-            self.* = undefined;
         }
 
         pub fn isExpired(self: *Entry, hash: Symbol) bool {

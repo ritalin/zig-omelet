@@ -288,7 +288,7 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     }
 }
 
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel channel) -> NullableLookup {
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup {
     NullableLookup lookup;
 
     if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
@@ -335,10 +335,9 @@ static auto runResolveSelectListNullability(const std::string& sql, std::vector<
         try {
             conn.BeginTransaction();
 
-            auto stmts = conn.ExtractStatements(sql);
             auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
-
-            join_type_result = resolveSelectListNullability(bound_statement.plan, ZmqChannel::unitTestChannel());
+            auto channel = ZmqChannel::unitTestChannel();
+            join_type_result = resolveSelectListNullability(bound_statement.plan, channel);
 
             conn.Commit();
         }

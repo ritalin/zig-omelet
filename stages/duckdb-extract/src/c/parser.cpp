@@ -1,4 +1,5 @@
 #include <optional>
+#include <iostream>
 
 #include <duckdb.hpp>
 #include <duckdb/parser/query_node/list.hpp>
@@ -20,15 +21,13 @@
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
 
-#include <iostream>
-
 namespace worker {
 
 class DescribeWorker {
 public:
     duckdb::Connection conn;
 public:
-    DescribeWorker(worker::Database *db, std::string id, std::optional<void *> socket) 
+    DescribeWorker(worker::Database *db, std::string&& id, std::optional<void *>&& socket) 
         : conn(std::move(db->connect())), id(id), socket(socket) {}
 public:
     auto execute(std::string query) -> WorkerResultCode;
@@ -127,7 +126,8 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 auto bound_stmt = bindTypeToStatement(*this->conn.context, stmt->Copy());
 
                 param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
-                column_type_result = resolveColumnType(bound_stmt.plan, param_result.type, this->messageChannel("worker.parse"));
+                auto channel = this->messageChannel("worker.parse");
+                column_type_result = resolveColumnType(bound_stmt.plan, param_result.type, channel);
 
                 this->conn.Commit();
             }
@@ -160,7 +160,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 }
 
 extern "C" {
-    auto initCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
+    auto initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
         auto collector = new DescribeWorker(db, std::string(id, id_len), socket ? std::make_optional(socket) : std::nullopt);
 
@@ -168,14 +168,14 @@ extern "C" {
         return 0;
     }
 
-    auto deinitCollector(CollectorRef handle) -> void {
+    auto deinitSourceCollector(CollectorRef handle) -> void {
         delete reinterpret_cast<DescribeWorker *>(handle);
     }
 
-    auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> void {
+    auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> WorkerResultCode {
         auto collector = reinterpret_cast<DescribeWorker *>(handle);
 
-        collector->execute(std::string(query, query_len));
+        return collector->execute(std::string(query, query_len));
     }
 }
 
@@ -192,49 +192,5 @@ extern "C" {
 
 using namespace worker;
 using namespace Catch::Matchers;
-
-// TEST_CASE("Error SQL") {
-//     auto sql = std::string("SELT $1::int as a");
-
-//     auto db = worker::Database();
-//     auto collector = DescribeWorker(&db, "1", std::nullopt);
-    
-//     auto err = collector.execute(sql);
-
-//     SECTION("execute result code") {
-//         CHECK(err != 0);
-//     }
-// }
-
-// TEST_CASE("Prepend describe") {
-//     auto sql = std::string("select $1::int as a, xyz, 123, $2::text as c from Foo");
-
-//     auto db = worker::Database();
-//     auto collector = DescribeWorker(&db, "1", std::nullopt);
-
-//     auto conn = db.connect();;
-//     auto stmts = conn.ExtractStatements(sql);
-//     auto& stmt = stmts[0];
-//     ::prependDescribeKeyword(stmt->Cast<duckdb::SelectStatement>());
-
-//     SECTION("result") {
-//         CHECK_THAT(stmt->ToString(), Equals("DESCRIBE (SELECT CAST($1 AS INTEGER) AS a, xyz, 123, CAST($2 AS VARCHAR) AS c FROM Foo)"));
-//     }
-// }
-
-// TEST_CASE("Not exist relation") {
-//     auto sql = std::string("SELECT $1::int as p from Origin");
-
-//     auto db = worker::Database();
-//     auto collector = DescribeWorker(&db, "1", std::nullopt);
-//     auto stmts = std::move(collector.conn.ExtractStatements(sql));
-
-//     std::vector<DescribeResult> results;
-//     ::describeSelectStatement(collector, stmts[0]->Cast<duckdb::SelectStatement>(), results);
-
-//     SECTION("describe result") {
-//         REQUIRE(results.size() == 0);
-//     }
-// }
 
 #endif

@@ -73,7 +73,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     return std::move(result);
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel&& channel) -> std::vector<ColumnEntry> {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> std::vector<ColumnEntry> {
     if (stmt_type != StatementType::Select) return {};
 
     auto join_types = resolveSelectListNullability(op, channel);
@@ -119,7 +119,8 @@ static auto runBindStatement(const std::string sql, const std::vector<std::strin
         auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
         // auto bound_tables = bindTypeToTableRef(*conn.context, std::move(stmts[0]->Copy()), stmt_type);
 
-        column_result = resolveColumnType(bound_statement.plan, stmt_type, ZmqChannel::unitTestChannel());
+        auto channel = ZmqChannel::unitTestChannel();
+        column_result = resolveColumnType(bound_statement.plan, stmt_type, channel);
         conn.Commit();
     }
     catch (...) {

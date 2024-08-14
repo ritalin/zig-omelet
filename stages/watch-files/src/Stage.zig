@@ -79,7 +79,7 @@ pub fn run(self: *Self, setting: Setting) !void {
             
             switch (item.event) {
                 .ready_watch_path => {
-                    try self.sendAllFiles(.source, setting.sources);
+                    try self.sendAllFiles(setting.sources);
                     try self.connection.dispatcher.post(.finish_watch_path);
                 },
                 .quit => {
@@ -97,14 +97,14 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
 }
 
-fn sendAllFiles(self: *Self, category: core.TopicCategory, sources: []const Setting.SourceDir) !void {
+fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir) !void {
     for (sources) |src| {
         const file_stat = try std.fs.cwd().statFile(src.dir_path);
         if (file_stat.kind == .file) {
-            try self.sendFile(category, std.fs.cwd(), src.dir_path, src.prefix);
+            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.prefix);
         }
         else if (file_stat.kind == .directory) {
-            try self.sendFiledOfDir(category, src.dir_path, src.prefix);
+            try self.sendFiledOfDir(src.category, src.dir_path, src.prefix);
         }
     }
 }

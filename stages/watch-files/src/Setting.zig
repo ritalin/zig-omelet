@@ -14,6 +14,7 @@ watch: bool,
 standalone: bool,
 
 pub const SourceDir = struct {
+    category: core.TopicCategory,
     dir_path: core.FilePath, 
     prefix: core.FilePath,
 };
@@ -49,7 +50,8 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.request_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-    .{@tagName(.source_dir), .{.desc = "Source directores or files", .value = "PATH"}},
+    .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
+    .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
 
@@ -58,6 +60,7 @@ const ArgId = enum {
     subscribe_channel,
     log_level,
     source_dir,
+    schema_dir,
     watch,
     standalone,
 
@@ -65,7 +68,8 @@ const ArgId = enum {
         .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
-        .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
+        .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
+        .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
@@ -90,7 +94,10 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .subscribe_channel => builder.subscribe_channel = arg.value,
             .log_level => builder.log_level = arg.value,
             .source_dir => {
-                if (arg.value) |v| try builder.addSourceDir(v);
+                if (arg.value) |v| try builder.addSourceDir(.source, v);
+            },
+            .schema_dir => {
+                if (arg.value) |v| try builder.addSourceDir(.schema, v);
             },
             .watch => builder.watch = true,
             .standalone => builder.standalone = true,
@@ -104,16 +111,18 @@ const Builder = struct {
     request_channel: ?core.Symbol,
     subscribe_channel: ?core.Symbol,
     log_level: ?core.Symbol,
-    sources: std.ArrayList(core.FilePath),
+    sources: SourceList,
     watch: bool,
     standalone: bool,
+
+    const SourceList = std.ArrayList(struct {category: core.TopicCategory, path: core.FilePath});
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
             .request_channel = null,
             .subscribe_channel = null,
             .log_level = null,
-            .sources = std.ArrayList(core.FilePath).init(allocator),
+            .sources = SourceList.init(allocator),
             .watch = false,
             .standalone = false,
         };
@@ -123,8 +132,8 @@ const Builder = struct {
         self.sources.deinit();
     }
 
-    pub fn addSourceDir(self: *Builder, path: core.FilePath) !void {
-        return self.sources.append(path);
+    pub fn addSourceDir(self: *Builder, category: core.TopicCategory, path: core.FilePath) !void {
+        return self.sources.append(.{.category = category, .path = path});
     }
 
     pub fn build (self: Builder, arena: *std.heap.ArenaAllocator) !Setting {
@@ -139,7 +148,7 @@ const Builder = struct {
             return error.SettingLoadFailed;
         }
         if (self.sources.items.len == 0) {
-            log.warn("Need to specify at least one `source-dir` arg.\n\n", .{});
+            log.warn("Need to specify at least one `source-dir` and/or `schema-dir` arg(s).\n\n", .{});
             return error.SettingLoadFailed;
         }
 
@@ -151,13 +160,14 @@ const Builder = struct {
         var sources = std.ArrayList(SourceDir).init(allocator);
         defer sources.deinit();
 
-        for (self.sources.items) |path| {
-            const path_abs = std.fs.cwd().realpathAlloc(allocator, path) catch {
-                log.warn("can not resolve `source-dir` arg ({s}).\n\n", .{path});
+        for (self.sources.items) |item| {
+            const path_abs = std.fs.cwd().realpathAlloc(allocator, item.path) catch {
+                log.warn("can not resolve `{s}-dir` arg ({s}).\n\n", .{@tagName(item.category), item.path});
                 return error.SettingLoadFailed;
             };
 
             try sources.append(.{
+                .category = item.category,
                 .dir_path = path_abs,
                 .prefix = try allocator.dupe(u8, try resolvePrefix(path_abs)),
             });

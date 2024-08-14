@@ -20,7 +20,42 @@ private:
     std::optional<void*> socket;
 };
 
-static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> void {
+static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
+    switch (kind) {
+    case UserTypeKind::Enum: return std::move(std::to_string('enum'));
+    }
+}
+
+static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(2);
+    type_header: {
+        type_kind: {
+            encoder.addString(userTypeKindAsText(entry.kind));
+        }
+        type_name: {
+            encoder.addString(entry.name);
+        }
+    }
+    type_bodies: {
+        encoder.addArrayHeader(fields.size());
+        for (auto& field: fields) {
+            encoder.addArrayHeader(2);
+            encoder.addString(field.field_name);
+            if (field.field_type) {
+                encoder.addString(field.field_type.value());
+            }
+            else {
+                encoder.addNull();
+            }
+        }
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
+static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, int32_t stmt_offset, int32_t stmt_size, ZmqChannel&& channel) -> void {
     std::optional<UserTypeEntry> entry;
     try {
         conn.BeginTransaction();
@@ -38,12 +73,11 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
 
     send: {
         if (entry) {
-            // std::unordered_map<std::string, std::vector<char>> topic_bodies({
-            //     {topic_schema_header, encodeUserTypeHeader(entry.value())},
-            //     {topic_schema_body, encodeUserTypeBody(entry.value().fields)},
-            // });
+            std::unordered_map<std::string, std::vector<char>> topic_bodies({
+                {topic_user_type, encodeUserType(entry.value())},
+            });
 
-            // zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
+            channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
         }
     }
 }
@@ -61,7 +95,7 @@ auto UserTypeWorker::execute(std::string&& query) -> WorkerResultCode {
             const int32_t stmt_offset = 1;
             const int32_t stmt_size = 1;
 
-            executeInternal(this->conn, stmts[0], this->messageChannel("worker.user_type"));
+            executeInternal(this->conn, stmts[0], stmt_offset, stmt_size, this->messageChannel("worker.user_type"));
         }
 
         return no_error;

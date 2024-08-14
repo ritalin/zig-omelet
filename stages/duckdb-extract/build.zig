@@ -184,7 +184,8 @@ fn createWorkerModule(
         mod.addCSourceFiles(.{ 
             .root = b.path("src/c"),
             .files = &.{
-                "parser.cpp",
+                "parse_query.cpp",
+                "parse_schema.cpp",
                 "duckdb_database.cpp",
                 "zmq_worker_support.cpp",
                 "duckdb_params_collector.cpp",
@@ -193,6 +194,7 @@ fn createWorkerModule(
                 "resolver/resolve_select_list.cpp",
                 "resolver/resolve_column_binding.cpp",
                 "resolver/resolve_select_statement_nullable.cpp",
+                "resolver/resolve_user_type.cpp"
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

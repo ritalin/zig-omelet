@@ -121,7 +121,10 @@ pub fn run(self: *Self, setting: Setting) !void {
                     const p1 = try path.clone(self.allocator);
                     try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0, .item_count = 1});
 
-                    const worker = try ExtractWorker.init(self.allocator, self.database, path.path);
+                    const worker = try ExtractWorker.init(
+                        self.allocator, 
+                        path.category, self.database, path.path
+                    );
                     try self.connection.pull_sink_socket.spawn(worker);
                 },
                 .worker_result => |result| {

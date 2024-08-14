@@ -8,13 +8,15 @@ const Self = @This();
 allocator: std.mem.Allocator,
 path: [:0]const u8,
 database: c.DatabaseRef,
+on_handle: *const fn (database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void,
 
-pub fn init(allocator: std.mem.Allocator, database: c.DatabaseRef, file_path: core.Symbol) !*Self {
+pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory, database: c.DatabaseRef, file_path: core.Symbol) !*Self {
     const self = try allocator.create(Self);
     self.* = .{
         .allocator = allocator,
         .path = try allocator.dupeZ(u8, file_path),
         .database = database,
+        .on_handle = if (category == .source) SourceHandler.run else SchemaHandler.run,
     };
 
     return self;
@@ -28,10 +30,6 @@ pub fn deinit(self: *Self) void {
 const ResultSet = struct { core.Symbol, core.Symbol, bool };
 
 pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
-    var collector: c.CollectorRef = undefined;
-    _ = c.initCollector(self.database, self.path.ptr, self.path.len, socket.socket_, &collector);
-    defer c.deinitCollector(collector);
-
     var file = std.fs.cwd().openFile(self.path, .{}) catch |err| {
         const message = switch (err) {
             error.FileNotFound => try std.fmt.allocPrint(self.allocator, "File not found: {s}", .{self.path}),
@@ -52,22 +50,25 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     const query = try file.readToEndAlloc(self.allocator, meta.size());
     defer self.allocator.free(query);
 
-    c.executeDescribe(collector, query.ptr, query.len);
-
-    // const result_set: []const ResultSet = &.{
-    //     .{"a", "INTEGER", true },
-    //     .{"b", "VARCHAR", false },
-    // };
-
-    // var writer = try core.CborStream.Writer.init(self.allocator);
-    // defer writer.deinit();
-
-    // _ = try writer.writeSlice(ResultSet, result_set);
-
-    // defer socket.deinit();
-
-    // return self.allocator.dupe(u8, writer.buffer.items);
-    // const event: core.Event = .{
-    //     .worker_result = try core.EventPayload.WorkerResult.init(self.allocator, writer.buffer.items),
-    // };
+    self.on_handle(self.database, self.path, query, socket);
 }
+
+pub const SourceHandler = struct {
+    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void {
+        var collector: c.CollectorRef = undefined;
+        _ = c.initSourceCollector(database, file_path.ptr, file_path.len, socket.socket_, &collector);
+        defer c.deinitSourceCollector(collector);
+
+        _ = c.executeDescribe(collector, query.ptr, query.len);
+    }
+};
+
+pub const SchemaHandler = struct {
+    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void {
+        var collector: c.CollectorRef = undefined;
+        _ = c.initUserTypeCollector(database, file_path.ptr, file_path.len, socket.socket_, &collector);
+        defer c.deinitUserTypeCollector(collector);
+
+        _ = c.describeUserType(collector, query.ptr, query.len);
+    }
+};

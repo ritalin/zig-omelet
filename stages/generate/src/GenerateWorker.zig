@@ -11,6 +11,7 @@ source: core.Event.Payload.TopicBody,
 output_base_path: core.FilePath,
 output_path: core.FilePath,
 is_new: bool,
+on_handle: *const fn (builder: *CodeBuilder) anyerror!void,
 
 pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, output_dir_path: core.FilePath) !*Self {
     const output_base_path = try std.fs.cwd().realpathAlloc(allocator, output_dir_path);
@@ -27,6 +28,7 @@ pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, 
         .output_base_path = output_base_path,
         .output_path = output_path,
         .is_new = is_new,
+        .on_handle = if (source.header.category == .source) CodeBuilder.SourceGenerator.build else CodeBuilder.UserTypeGenerator.build,
     };
 
     return self;
@@ -60,19 +62,24 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         .result_set => |field_types| {
             try builder.applyResultSets(field_types);
         },
+        .user_type => |definition| {
+            _ = definition;
+            unreachable;
+        //     try builder.applyUserType(definition);
+        }
     };
 
     const payload = payload: {
         var writer = try core.CborStream.Writer.init(self.allocator);
         defer writer.deinit();
         
-        if (builder.build()) {
+        if (builder.buildWith(self.on_handle)) {
             _ = try writer.writeString(self.source.header.path);
             _ = try writer.writeString(self.output_path);
             _ = try writer.writeString("Successful");
             _ = try writer.writeEnum(ResultStatus, if (self.is_new) .new_file else .update_file);
         }
-        else  |err| switch (err) {
+        else |err| switch (err) {
             error.QueryFileGenerationFailed => {
                 _ = try writer.writeString(self.source.header.path);
                 _ = try writer.writeString(self.output_path);
@@ -83,6 +90,12 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
                 _ = try writer.writeString(self.source.header.path);
                 _ = try writer.writeString(self.output_path);
                 _ = try writer.writeString("Failed Typescript file");
+                _ = try writer.writeEnum(ResultStatus, .generate_failed);
+            },
+            else => {
+                _ = try writer.writeString(self.source.header.path);
+                _ = try writer.writeString(self.output_path);
+                _ = try writer.writeString("Unexpected error during generating stage");
                 _ = try writer.writeEnum(ResultStatus, .generate_failed);
             },
         }

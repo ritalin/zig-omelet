@@ -81,6 +81,12 @@ pub fn build(b: *std.Build) void {
             // Apply zmq communication cannel
             try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(run_cmd);
 
+            run_cmd.addArgs(&.{
+                "--log-level=trace",
+                "--source-dir=../../_sql-examples",
+                "--schema-dir=../../_schema-examples",
+            });
+
             // This creates a build step. It will be visible in the `zig build --help` menu,
             // and can be selected like this: `zig build run`
             // This will evaluate the `run` step rather than the default, which is "install".

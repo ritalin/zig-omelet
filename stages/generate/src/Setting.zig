@@ -68,15 +68,23 @@ const ArgId = enum {
 fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterator) !Builder {
     _ = args_iter.next();
 
+    var diag = clap.Diagnostic{};
     var parser = clap.streaming.Clap(ArgId, std.process.ArgIterator){
         .params = ArgId.Decls,
         .iter = args_iter,
+        .diagnostic = &diag,
     };
     _ = allocator;
 
     var builder = Builder.init();
 
-    while (try parser.next()) |arg| {
+    while (true) {
+        const arg_ = parser.next() catch |err| {
+            try diag.report(std.io.getStdErr().writer(), err);
+            return err;
+        };
+        const arg = arg_ orelse break;
+
         switch (arg.param.id) {
             .request_channel => builder.request_channel = arg.value,
             .subscribe_channel => builder.subscribe_channel = arg.value,

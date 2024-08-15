@@ -70,9 +70,10 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         .quit_all => {},
         .quit_accept => {},
         .quit => {},
-        .log => |payload| {
+        .log, .report_fatal => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Log), payload.values());
-        }
+        },
+        .pending_fatal_quit => {},
     }
 }
 
@@ -159,7 +160,15 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
             return .{
                 .log = try Event.Payload.Log.init(allocator, log),
             };
-        }
+        },
+        .report_fatal => {
+            const log = try reader.readTuple(StructView(Event.Payload.Log));
+
+            return .{
+                .report_fatal = try Event.Payload.Log.init(allocator, log),
+            };
+        },
+        .pending_fatal_quit => return .pending_fatal_quit,
     }
 }
 

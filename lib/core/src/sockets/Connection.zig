@@ -348,6 +348,32 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             });
         }
 
+        pub fn postFatal(self: *Self, stack_trace: ?*std.builtin.StackTrace) !void {
+            const message = err_message: {
+                if (stack_trace) |x| {
+                    var buf = std.ArrayList(u8).init(self.allocator);
+                    defer buf.deinit();
+
+                    var writer = buf.writer();
+                    try writer.print("{}", .{x});
+                    
+                    break:err_message try buf.toOwnedSlice();
+                }
+                else {
+                    break:err_message try self.allocator.dupe(u8, "Fatal eerror occured");
+                }
+            };
+            defer self.allocator.free(message);
+
+            try self.send_queue.prepend(.{
+                .allocator = self.allocator,
+                .kind = .post,
+                .socket = self.send_socket, 
+                .from = try self.allocator.dupe(u8, stage_name),
+                .event = .{.report_fatal = try types.Event.Payload.Log.init(self.allocator, .{.err, message})},
+            });
+        }
+
         pub fn tryReadyQuit(self: *Self, event: types.Event) !void {
             if (event.tag() == .quit) {
                 try self.approve();

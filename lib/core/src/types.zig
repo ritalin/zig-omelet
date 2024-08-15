@@ -90,6 +90,8 @@ pub const EventType = enum (u8) {
     quit,
     quit_accept,
     log,
+    report_fatal,
+    pending_fatal_quit,
 };
 /// Event type options
 pub const EventTypes = std.enums.EnumFieldStruct(EventType, bool, false);
@@ -373,6 +375,8 @@ pub const Event = union(EventType) {
     quit: void,
     quit_accept: void,
     log: Payload.Log,
+    report_fatal: Payload.Log,
+    pending_fatal_quit: void,
 
     pub const Payload = EventPayload;
     pub usingnamespace EventOperation;
@@ -411,6 +415,8 @@ fn deinitEvent(event: Event) void {
         .quit => {},
         .quit_accept => {},
         .log => |data| data.deinit(),
+        .report_fatal => |data| data.deinit(),
+        .pending_fatal_quit => {},
     }
 }
 pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
@@ -446,6 +452,8 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
         .quit_all => .quit_all,
         .quit_accept => .quit_accept,
         .log => |payload| .{.log = try payload.clone(allocator)},
+        .report_fatal => |payload| .{.log = try payload.clone(allocator)},
+        .pending_fatal_quit => .pending_fatal_quit,
     };
 
     std.debug.assert(event.tag() == cloned_event.tag());

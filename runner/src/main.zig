@@ -41,7 +41,11 @@ pub fn main() !void {
     const config: Config = .{
         .stage_watch = .{
             .path = exe_prefix ++ "-" ++ "watch-files",
-            .extra_args = &.{@tagName(.source_dir_path), @tagName(.watch)},
+            .extra_args = &.{
+                @tagName(.source_dir_path), 
+                @tagName(.schema_dir_path), 
+                @tagName(.watch)
+            },
             .managed = true,
         },
         .stage_extract = &.{

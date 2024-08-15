@@ -66,50 +66,58 @@ pub fn run(self: *Self, setting: Setting) !void {
     try self.connection.dispatcher.state.ready();
 
     while (self.connection.dispatcher.isReady()) {
-        const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
-            error.InvalidResponse => {
-                try self.logger.log(.warn, "Unexpected data received", .{});
-                continue;
-            },
-            else => return err,
-        };
-
-        if (_item) |item| {
-            defer item.deinit();
-            
-            switch (item.event) {
-                .ready_watch_path => {
-                    try self.sendAllFiles(setting.sources);
-                    try self.connection.dispatcher.post(.finish_watch_path);
-                },
-                .quit => {
-                    try self.connection.dispatcher.quitAccept();
-                },
-                .quit_all => {
-                    try self.connection.dispatcher.quitAccept();
-                    try self.connection.pull_sink_socket.stop();
-                },
-                else => {
-                    try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
-                },
+        self.waitNextDispatch(setting) catch {
+            if (true) {
+            try self.connection.dispatcher.postFatal(@errorReturnTrace());
             }
-        }
+        };
     }
+}
+
+fn waitNextDispatch(self: *Self, setting: Setting) !void {
+    const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
+        error.InvalidResponse => {
+            try self.logger.log(.warn, "Unexpected data received", .{});
+            return;
+        },
+        else => return err,
+    };
+
+    if (_item) |item| {
+        defer item.deinit();
+        
+        switch (item.event) {
+            .ready_watch_path => {
+                try self.sendAllFiles(setting.sources);
+                try self.connection.dispatcher.post(.finish_watch_path);
+            },
+            .quit => {
+                try self.connection.dispatcher.quitAccept();
+            },
+            .quit_all => {
+                try self.connection.dispatcher.quitAccept();
+                try self.connection.pull_sink_socket.stop();
+            },
+            else => {
+                try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
+            },
+        }
+    }  
 }
 
 fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir) !void {
     for (sources) |src| {
         const file_stat = try std.fs.cwd().statFile(src.dir_path);
         if (file_stat.kind == .file) {
-            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.prefix);
+            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.dir_path);
         }
         else if (file_stat.kind == .directory) {
-            try self.sendFiledOfDir(src.category, src.dir_path, src.prefix);
+            try self.sendFiledOfDir(src.category, src.dir_path);
         }
     }
 }
 
-fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.FilePath, prefix: core.FilePath) !void {
+fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.FilePath) !void {
     var dir = try std.fs.cwd().openDir(dir_path, .{});
     defer dir.close();
 
@@ -118,19 +126,19 @@ fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.File
 
     while (try iter.next()) |entry| {
         if (entry.kind == .file) {
-            try self.sendFile(category, entry.dir, entry.path, prefix);
+            try self.sendFile(category, entry.dir, entry.basename, entry.path);
         }
     }
 }
 
-fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, prefix: core.FilePath) !void {
+fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, name: core.FilePath) !void {
+    const base_dir_path = try base_dir.realpathAlloc(self.allocator, ".");
+    defer self.allocator.free(base_dir_path);
+
     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
     defer self.allocator.free(file_path_abs);
 
     try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});
-
-    const name = try std.fs.path.relative(self.allocator, prefix, file_path_abs);
-    defer self.allocator.free(name);
 
     var file = try base_dir.openFile(file_path, .{});
     defer file.close();

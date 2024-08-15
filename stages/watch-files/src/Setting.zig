@@ -16,7 +16,6 @@ standalone: bool,
 pub const SourceDir = struct {
     category: core.TopicCategory,
     dir_path: core.FilePath, 
-    prefix: core.FilePath,
 };
 
 pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
@@ -169,7 +168,6 @@ const Builder = struct {
             try sources.append(.{
                 .category = item.category,
                 .dir_path = path_abs,
-                .prefix = try allocator.dupe(u8, try resolvePrefix(path_abs)),
             });
         }
 
@@ -186,12 +184,3 @@ const Builder = struct {
         };
     }
 };
-
-fn resolvePrefix(path: core.FilePath) !core.FilePath {
-    const state = try std.fs.cwd().statFile(path);
-    if (state.kind == .file) {
-        if (std.fs.path.dirname(path)) |prefix| return prefix;
-    }
-    
-    return path;
-}

@@ -106,7 +106,7 @@ pub fn run(self: *Self, setting: Setting) !void {
                         const topic = try core.Event.Payload.Topic.init(
                             self.allocator, 
                             .schema,
-                            &.{c.topic_schema_header, c.topic_schema_body},
+                            &.{c.topic_user_type},
                             false,
                         );
                         

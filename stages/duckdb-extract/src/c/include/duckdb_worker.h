@@ -15,7 +15,7 @@ typedef enum {
 #define topic_placeholder "placeholder"
 #define topic_select_list "select-list"
 
-#define topic_user_type "usertype"
+#define topic_user_type "user-type"
 
 #ifdef __cplusplus
 extern "C" {

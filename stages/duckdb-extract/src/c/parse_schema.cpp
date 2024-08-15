@@ -39,8 +39,8 @@ static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
         }
     }
     type_bodies: {
-        encoder.addArrayHeader(fields.size());
-        for (auto& field: fields) {
+        encoder.addArrayHeader(entry.fields.size());
+        for (auto& field: entry.fields) {
             encoder.addArrayHeader(2);
             encoder.addString(field.field_name);
             if (field.field_type) {

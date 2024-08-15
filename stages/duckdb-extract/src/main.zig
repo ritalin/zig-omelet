@@ -29,6 +29,7 @@ pub fn main() !void {
     // c.executeDescribe(collector, sql.ptr, sql.len);
 
     var setting = Setting.loadFromArgs(allocator) catch {
+        // std.debug.dumpStackTrace(@errorReturnTrace().?.*);
         try Setting.help(std.io.getStdErr().writer());
         std.process.exit(1);
     };

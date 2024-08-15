@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
             try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(run_cmd);
 
             run_cmd.addArgs(&.{
-                "--log-leven=trace",
+                "--log-level=trace",
                 "--schema-dir=./_schema-examples"
             });
             // This creates a build step. It will be visible in the `zig build --help` menu,

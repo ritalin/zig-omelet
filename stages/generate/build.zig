@@ -76,27 +76,20 @@ pub fn build(b: *std.Build) void {
             if (b.args) |args| {
                 run_cmd.addArgs(args);
             }
+
+            // Apply zmq communication cannel
+            try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(run_cmd);
+            run_cmd.addArgs(&.{
+                "--output-dir=../../_dump/ts",
+                "--log-level=trace",
+            });
+
             // This creates a build step. It will be visible in the `zig build --help` menu,
             // and can be selected like this: `zig build run`
             // This will evaluate the `run` step rather than the default, which is "install".
             const run_step = b.step("run", "Run the app");
             run_step.dependOn(&run_cmd.step);
             break:app_runner;
-        }
-        test_fright: {
-            const test_fright_cmd = b.addRunArtifact(exe);
-            test_fright_cmd.step.dependOn(b.getInstallStep());
-
-            // Apply zmq communication cannel
-            try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(test_fright_cmd);
-            test_fright_cmd.addArgs(&.{
-                "--output-dir=../../_dump/ts",
-                "--log-level=trace",
-            });
-            const test_fright_run_step = b.step("test-run", "Run the app fro test fright");
-            test_fright_run_step.dependOn(&test_fright_cmd.step);
-
-            break :test_fright;
         }
         break:app_module;
     }

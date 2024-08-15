@@ -67,9 +67,7 @@ pub fn run(self: *Self, setting: Setting) !void {
 
     while (self.connection.dispatcher.isReady()) {
         self.waitNextDispatch(setting) catch {
-            if (true) {
             try self.connection.dispatcher.postFatal(@errorReturnTrace());
-            }
         };
     }
 }

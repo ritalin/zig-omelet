@@ -67,70 +67,76 @@ pub fn run(self: *Self, setting: Setting) !void {
     try self.connection.dispatcher.state.ready();
 
     while (self.connection.dispatcher.isReady()) {
-        const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
-            error.InvalidResponse => {
-                try self.logger.log(.warn, "Unexpected data received", .{});
-                continue;
-            },
-            else => return err,
+        self.waitNextDispatch(setting, &lookup) catch {
+            try self.connection.dispatcher.postFatal(@errorReturnTrace());
         };
+    }
+}
 
-        if (_item) |*item| {
-            defer item.deinit();
+fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
+    const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
+        error.InvalidResponse => {
+            try self.logger.log(.warn, "Unexpected data received", .{});
+            return;
+        },
+        else => return err,
+    };
 
-            switch (item.event) {
-                .ready_topic_body => {
-                    try self.logger.log(.debug, "Ready for generating", .{});
-                    try self.connection.dispatcher.post(.ready_generate);
-                },
-                .topic_body => |source| {
-                    try self.connection.dispatcher.approve();
-                    try self.logger.log(.debug, "Accept source: `{s}`", .{source.header.path});
+    if (_item) |*item| {
+        defer item.deinit();
 
-                    const path = try source.header.clone(self.allocator);
-                    try lookup.put(path.path, path);
+        switch (item.event) {
+            .ready_topic_body => {
+                try self.logger.log(.debug, "Ready for generating", .{});
+                try self.connection.dispatcher.post(.ready_generate);
+            },
+            .topic_body => |source| {
+                try self.connection.dispatcher.approve();
+                try self.logger.log(.debug, "Accept source: `{s}`", .{source.header.path});
 
-                    const worker = try GenerateWorker.init(self.allocator, source, setting.output_dir_path);
-                    try self.connection.pull_sink_socket.spawn(worker);
-                    try self.connection.dispatcher.post(.ready_generate);
-                },
-                .worker_result => |result| {
-                    try self.processWorkResult(result.content, &lookup);
+                const path = try source.header.clone(self.allocator);
+                try lookup.put(path.path, path);
 
-                    if (self.connection.dispatcher.state.level.terminating) {
-                        if (lookup.count() == 0) {
-                            try self.connection.dispatcher.post(.ready_generate);
-                        }
-                    }
-                },
-                .finish_topic_body => {
-                    try self.connection.dispatcher.approve();
+                const worker = try GenerateWorker.init(self.allocator, source, setting.output_dir_path);
+                try self.connection.pull_sink_socket.spawn(worker);
+                try self.connection.dispatcher.post(.ready_generate);
+            },
+            .worker_result => |result| {
+                try self.processWorkResult(result.content, lookup);
+
+                if (self.connection.dispatcher.state.level.terminating) {
                     if (lookup.count() == 0) {
-                        if (!self.connection.dispatcher.state.level.terminating) {
-                            try self.connection.dispatcher.state.receiveTerminate();
-                            try self.connection.dispatcher.post(.finish_generate);
-                        }
+                        try self.connection.dispatcher.post(.ready_generate);
                     }
-                    else {
-                        try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
+                }
+            },
+            .finish_topic_body => {
+                try self.connection.dispatcher.approve();
+                if (lookup.count() == 0) {
+                    if (!self.connection.dispatcher.state.level.terminating) {
+                        try self.connection.dispatcher.state.receiveTerminate();
+                        try self.connection.dispatcher.post(.finish_generate);
                     }
-                },
-                .quit => {
-                    if (lookup.count() == 0) {
-                        try self.connection.dispatcher.quitAccept();
-                    }
-                },
-                .quit_all => {
+                }
+                else {
+                    try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
+                }
+            },
+            .quit => {
+                if (lookup.count() == 0) {
                     try self.connection.dispatcher.quitAccept();
-                    try self.connection.pull_sink_socket.stop();
-                },
-                .log => |log| {
-                    try self.logger.log(log.level, "{s}", .{log.content});
-                },
-                else => {
-                    try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
-                },
-            }
+                }
+            },
+            .quit_all => {
+                try self.connection.dispatcher.quitAccept();
+                try self.connection.pull_sink_socket.stop();
+            },
+            .log => |log| {
+                try self.logger.log(log.level, "{s}", .{log.content});
+            },
+            else => {
+                try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
+            },
         }
     }
 }

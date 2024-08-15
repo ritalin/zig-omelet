@@ -74,85 +74,93 @@ pub fn run(self: *Self, setting: Setting) !void {
         break :launch;
     }
 
-    var body_lookup = std.StringHashMap(LookupEntry).init(self.allocator);
-    defer body_lookup.deinit();
+    var lookup = std.StringHashMap(LookupEntry).init(self.allocator);
+    defer lookup.deinit();
 
     while (self.connection.dispatcher.isReady()) {
-        const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
-            error.InvalidResponse => {
-                try self.logger.log(.warn, "Unexpected data received", .{});
-                continue;
-            },
-            else => return err,
+        self.waitNextDispatch(setting, &lookup) catch {
+            try self.connection.dispatcher.postFatal(@errorReturnTrace());
         };
+    }
+}
 
-        if (_item) |item| {
-            defer item.deinit();
-            
-            switch (item.event) {
-                .request_topic => {
-                    topics: {
-                        const topic = try core.Event.Payload.Topic.init(
-                            self.allocator, 
-                            .source,
-                            &.{c.topic_query, c.topic_placeholder, c.topic_select_list},
-                            true,
-                        );
-                        
-                        try self.connection.dispatcher.post(.{.topic = topic});
-                        break :topics;
-                    }
-                    topics: {
-                        const topic = try core.Event.Payload.Topic.init(
-                            self.allocator, 
-                            .schema,
-                            &.{c.topic_user_type},
-                            false,
-                        );
-                        
-                        try self.connection.dispatcher.post(.{.topic = topic});
-                        break :topics;
-                    }
-                },
-                .source_path => |path| {
-                    try self.logger.log(.debug, "Accept source path: {s}", .{path.path});
-                    try self.logger.log(.trace, "Begin worker process", .{});
+fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(LookupEntry)) !void {
+    _ = setting;
+    
+    const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
+        error.InvalidResponse => {
+            try self.logger.log(.warn, "Unexpected data received", .{});
+            return;
+        },
+        else => return err,
+    };
 
-                    const p1 = try path.clone(self.allocator);
-                    try body_lookup.put(p1.path, .{.path = p1, .ref_count = 0, .item_count = 1});
-
-                    const worker = try ExtractWorker.init(
+    if (_item) |item| {
+        defer item.deinit();
+        
+        switch (item.event) {
+            .request_topic => {
+                topics: {
+                    const topic = try core.Event.Payload.Topic.init(
                         self.allocator, 
-                        path.category, self.database, path.path
+                        .source,
+                        &.{c.topic_query, c.topic_placeholder, c.topic_select_list},
+                        true,
                     );
-                    try self.connection.pull_sink_socket.spawn(worker);
-                },
-                .worker_result => |result| {
-                    const event = try self.processWorkerResult(item.from, result.content, &body_lookup);
-                    try self.connection.dispatcher.post(event);
-                    try self.logger.log(.trace, "End worker process", .{});
-                },
-                .finish_source_path => {
-                    if (body_lookup.count() == 0) {
-                        try self.connection.dispatcher.post(.finish_topic_body);
-                    }
-                    else {
-                        try self.connection.dispatcher.state.receiveTerminate();
-                    }
-                },
-                .quit => {
-                    if (body_lookup.count() == 0) {
-                        try self.connection.dispatcher.quitAccept();
-                    }
-                },
-                .quit_all => {
+                    
+                    try self.connection.dispatcher.post(.{.topic = topic});
+                    break :topics;
+                }
+                topics: {
+                    const topic = try core.Event.Payload.Topic.init(
+                        self.allocator, 
+                        .schema,
+                        &.{c.topic_user_type},
+                        false,
+                    );
+                    
+                    try self.connection.dispatcher.post(.{.topic = topic});
+                    break :topics;
+                }
+            },
+            .source_path => |path| {
+                try self.logger.log(.debug, "Accept source path: {s}", .{path.path});
+                try self.logger.log(.trace, "Begin worker process", .{});
+
+                const p1 = try path.clone(self.allocator);
+                try lookup.put(p1.path, .{.path = p1, .ref_count = 0, .item_count = 1});
+
+                const worker = try ExtractWorker.init(
+                    self.allocator, 
+                    path.category, self.database, path.path
+                );
+                try self.connection.pull_sink_socket.spawn(worker);
+            },
+            .worker_result => |result| {
+                const event = try self.processWorkerResult(item.from, result.content, lookup);
+                try self.connection.dispatcher.post(event);
+                try self.logger.log(.trace, "End worker process", .{});
+            },
+            .finish_source_path => {
+                if (lookup.count() == 0) {
+                    try self.connection.dispatcher.post(.finish_topic_body);
+                }
+                else {
+                    try self.connection.dispatcher.state.receiveTerminate();
+                }
+            },
+            .quit => {
+                if (lookup.count() == 0) {
                     try self.connection.dispatcher.quitAccept();
-                    try self.connection.pull_sink_socket.stop();
-                },
-                else => {
-                    try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
-                },
-            }
+                }
+            },
+            .quit_all => {
+                try self.connection.dispatcher.quitAccept();
+                try self.connection.pull_sink_socket.stop();
+            },
+            else => {
+                try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
+            },
         }
     }
 }

@@ -63,9 +63,7 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
             try builder.applyResultSets(field_types);
         },
         .user_type => |definition| {
-            _ = definition;
-            unreachable;
-        //     try builder.applyUserType(definition);
+            try builder.applyUserType(definition);
         }
     };
 

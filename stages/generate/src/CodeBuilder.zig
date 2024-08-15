@@ -11,29 +11,38 @@ const ResultEntryMap = std.enums.EnumMap(std.meta.FieldEnum(Target), Symbol);
 const Namespace = "Sql";
 const ToArrayFn = "export const toArray = (parameter: Parameter) => Object.values(parameter)";
 
+const IdentifierFormatter = @import("./IdentifierFormatter.zig");
+
 allocator: std.mem.Allocator,
 output_dir: std.fs.Dir,
-
-// query: ?Symbol,
-// parameters: ?Symbol,
-// result_set: ?Symbol,
 entries: ResultEntryMap,
 
 pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !Self {
     const dir = dir: {
         var parent_dir = try std.fs.cwd().makeOpenPath(prefix_dir_path, .{});
         defer parent_dir.close();
-        break :dir try parent_dir.makeOpenPath(if (dest_dir_path.len > 0) dest_dir_path else prefix_dir_path, .{});
+
+        const path = try toPascalCasePath(allocator, dest_dir_path);
+        defer allocator.free(path);
+        break :dir try parent_dir.makeOpenPath(path, .{});
     };
 
     return .{
         .allocator = allocator,
         .output_dir = dir,
         .entries = ResultEntryMap{},
-        // .query = null,
-        // .parameters = null,
-        // .result_set = null,
     };
+}
+
+fn toPascalCasePath(allocator: std.mem.Allocator, file_path: FilePath) !FilePath {
+    var iter = std.mem.splitBackwards(u8, file_path, std.fs.path.sep_str);
+
+    const last = try IdentifierFormatter.format(allocator, iter.first(), .pascal_case);
+    defer allocator.free(last);
+
+    const rest = iter.rest();
+
+    return if (rest.len > 0) std.fs.path.join(allocator, &.{rest, last}) else allocator.dupe(u8, last);
 }
 
 pub fn deinit(self: *Self) void {
@@ -44,15 +53,10 @@ pub fn deinit(self: *Self) void {
             self.allocator.free(v);
         }
     }
-
-    // if (self.query) |x| self.allocator.free(x);
-    // if (self.parameters) |x| self.allocator.free(x);
-    // if (self.result_set) |x| self.allocator.free(x);
 }
 
 pub fn applyQuery(self: *Self, query: Symbol) !void {
     self.entries.put(.query, try self.allocator.dupe(u8, query));
-    // self.query = try self.allocator.dupe(u8, query);
 }
 
 pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
@@ -70,7 +74,7 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
 
     // `  1: number | null`,
     for (parameters) |p| {
-        const field = try std.ascii.allocLowerString(temp_allocator, p.field_name);
+        const field = try IdentifierFormatter.format(temp_allocator, p.field_name, .camel_case);
         const key = key: {
             if (p.field_type) |t| {
                 break :key try std.ascii.allocUpperString(temp_allocator, t);
@@ -89,7 +93,6 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
     try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
     
     self.entries.put(.parameter, try buf.toOwnedSlice());
-    // self.parameters = try buf.toOwnedSlice();
 }
 
 pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
@@ -110,21 +113,34 @@ pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
     // a: number | null
     for (result_set) |c| {
         // TODO: supports camelCase
-        const field = try std.ascii.allocLowerString(temp_allocator, c.field_name);
+        const field = name: {
+            if (try isLiteral(temp_allocator, c.field_name)) {
+                break:name try IdentifierFormatter.format(temp_allocator, c.field_name, .camel_case);
+            }
+            else {
+                break:name try std.fmt.allocPrint(temp_allocator, "\"{s}\"", .{c.field_name});
+            }
+        };
+
         const key = try std.ascii.allocUpperString(temp_allocator, c.field_type);
 
         const ts_type = TypeMappingRules.get(key) orelse {
             return error.UnsupportedDbType;
         };
-        try writer.print((" " ** (INDENT_LEVEL*2)) ++ "{s}: {s} {s},\n", .{
+        try writer.print((" " ** (INDENT_LEVEL*2)) ++ "{s}: {s}{s},\n", .{
             field, ts_type,
-            if (c.nullable) "| null" else ""
+            if (c.nullable) " | null" else ""
         });
     }
     try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
     
     self.entries.put(.result_set, try buf.toOwnedSlice());
-    // self.result_set = try buf.toOwnedSlice();
+}
+
+fn isLiteral(allocator: std.mem.Allocator, symbol: Symbol) !bool {
+    var tz = std.zig.Tokenizer.init(try allocator.dupeZ(u8, symbol));
+    
+    return tz.next().loc.end == symbol.len;
 }
 
 fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
@@ -144,7 +160,9 @@ pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
     const INDENT_LEVEL = 2;
 
     if (user_type.header.kind == .@"enum") {
-        try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{user_type.header.name});
+        try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{
+            try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
+        });
 
         try writeLiteral(&writer, user_type.fields[0].field_name);
 
@@ -205,7 +223,7 @@ pub const UserTypeGenerator = struct {
     pub fn build(builder: *CodeBuilder) anyerror!void {
         var out_dir = try builder.output_dir.makeOpenPath("user-types", .{});
         defer out_dir.close();
-        
+
         writeTypescriptTypes(out_dir, &.{builder.entries.get(.user_type)}) catch {
             return error.TypeFileGenerationFailed;
         };
@@ -253,8 +271,6 @@ pub const Parser = struct {
     }
 
     fn parsePlaceholder(allocator: std.mem.Allocator, content: Symbol) ![]const FieldTypePair {
-        // const result = try std.json.parseFromSlice([]const FieldTypePair, allocator, content, .{});
-        // return result.value;
         var reader = core.CborStream.Reader.init(content);
 
         const values = try reader.readSlice(allocator, core.StructView(FieldTypePair)); 
@@ -278,13 +294,8 @@ pub const Parser = struct {
         var result_set = try allocator.alloc(ResultSetColumn, values.len);
 
         for (values, 0..) |v, i| {
-            const field_name = 
-                if (try isLiteral(allocator, v[0])) try allocator.dupe(u8, v[0]) 
-                else try std.fmt.allocPrint(allocator, "\"{s}\"", .{v[0]})
-            ;
-
             result_set[i] = .{
-                .field_name = field_name,
+                .field_name = v[0],
                 .field_type = v[1],
                 .nullable = v[2],
             };
@@ -312,12 +323,6 @@ pub const Parser = struct {
             .header = .{ .kind = header[0], .name = header[1] },
             .fields = fields,
         };
-    }
-
-    fn isLiteral(allocator: std.mem.Allocator, symbol: Symbol) !bool {
-        var tz = std.zig.Tokenizer.init(try allocator.dupeZ(u8, symbol));
-        
-        return tz.next().loc.end == symbol.len;
     }
 
     pub const ResultWalker = struct {
@@ -483,7 +488,7 @@ fn placeholderToCbor(allocator: std.mem.Allocator, items: []const FieldTypePair)
     return writer.buffer.toOwnedSlice();
 }
 
-test "parse parameter" {
+test "parse parameter#1" {
     const allocator = std.testing.allocator;
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -519,7 +524,7 @@ test "parse parameter" {
     }
 }
 
-test "parse parameter with any type" {
+test "parse parameter#2 (with any type)" {
     const allocator = std.testing.allocator;
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -652,7 +657,7 @@ test "parse result set with aliasless field name" {
     };
 
     const expect: []const ResultSetColumn = &.{
-        .{.field_name = "\"Cast(a as INTEGER)\"", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "Cast(a as INTEGER)", .field_type = "INTEGER", .nullable = false},
         .{.field_name = "bar_baz", .field_type = "VARCHAR", .nullable = true},
     };
 
@@ -749,29 +754,32 @@ test "parse enum user type" {
     }
 }
 
-test "generate name parameter code" {
+fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol) !void {
     const allocator = std.testing.allocator;
 
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    try builder.applyPlaceholder(parameters);
+
+    const apply_result = builder.entries.get(.parameter);
+    try std.testing.expect(apply_result != null);
+
+    const result = apply_result.?;
+
+    try std.testing.expectEqualStrings(expect, result);
+}
+
+test "generate name parameter code#1" {
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "id", .field_type = "BIGINT"},
         .{.field_name = "name", .field_type = "VARCHAR"},
     };
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
-
-    var builder = try Self.init(allocator, parent_path, "foo");
-    defer builder.deinit();
-
-    try builder.applyPlaceholder(parameters);
-
-    const apply_result = builder.entries.get(.parameter);
-    try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
     const expect = 
         \\  export type Parameter = {
         \\    id: number | null,
@@ -779,32 +787,14 @@ test "generate name parameter code" {
         \\  }
     ;
 
-    try std.testing.expectEqualStrings(expect, result);
+    try runApplyPlaceholder(parameters, expect);
 }
 
-test "generate name parameter code for upper case field" {
-    const allocator = std.testing.allocator;
-
+test "generate name parameter code#2 (upper case field)" {
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "ID", .field_type = "BIGINT"},
         .{.field_name = "NAME", .field_type = "VARCHAR"},
     };
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
-
-    var builder = try Self.init(allocator, parent_path, "foo");
-    defer builder.deinit();
-
-    try builder.applyPlaceholder(parameters);
-
-    const apply_result = builder.entries.get(.parameter);
-    try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
     const expect = 
         \\  export type Parameter = {
         \\    id: number | null,
@@ -812,32 +802,14 @@ test "generate name parameter code for upper case field" {
         \\  }
     ;
 
-    try std.testing.expectEqualStrings(expect, result);
+    try runApplyPlaceholder(parameters, expect);
 }
 
-test "generate name parameter code from lower-case" {
-    const allocator = std.testing.allocator;
-
+test "generate name parameter code#3 (lower-case)" {
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "id", .field_type = "int"},
         .{.field_name = "name", .field_type = "varchar"},
     };
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
-
-    var builder = try Self.init(allocator, parent_path, "foo");
-    defer builder.deinit();
-
-    try builder.applyPlaceholder(parameters);
-
-    const apply_result = builder.entries.get(.parameter);
-    try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
     const expect = 
         \\  export type Parameter = {
         \\    id: number | null,
@@ -845,32 +817,14 @@ test "generate name parameter code from lower-case" {
         \\  }
     ;
 
-    try std.testing.expectEqualStrings(expect, result);
+    try runApplyPlaceholder(parameters, expect);
 }
 
-test "generate name parameter code with any type" {
-    const allocator = std.testing.allocator;
-
+test "generate name parameter code#4 (with any type)" {
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "id", .field_type = null},
         .{.field_name = "name", .field_type = null},
     };
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
-
-    var builder = try Self.init(allocator, parent_path, "foo");
-    defer builder.deinit();
-
-    try builder.applyPlaceholder(parameters);
-
-    const apply_result = builder.entries.get(.parameter);
-    try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
     const expect = 
         \\  export type Parameter = {
         \\    id: any | null,
@@ -878,32 +832,44 @@ test "generate name parameter code with any type" {
         \\  }
     ;
 
-    try std.testing.expectEqualStrings(expect, result);
+    try runApplyPlaceholder(parameters, expect);
+}
+
+test "generate name parameter code#5 (with snake_case)" {
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "user_id", .field_type = "int"},
+        .{.field_name = "user_name", .field_type = "text"},
+    };
+    const expect = 
+        \\  export type Parameter = {
+        \\    userId: number | null,
+        \\    userName: string | null,
+        \\  }
+    ;
+
+    try runApplyPlaceholder(parameters, expect);
+}
+
+test "generate name parameter code#5 (with PascalCase)" {
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "UserId", .field_type = "int"},
+        .{.field_name = "UserName", .field_type = "text"},
+    };
+    const expect = 
+        \\  export type Parameter = {
+        \\    userId: number | null,
+        \\    userName: string | null,
+        \\  }
+    ;
+
+    try runApplyPlaceholder(parameters, expect);
 }
 
 test "generate positional parameter code" {
-    const allocator = std.testing.allocator;
-
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "1", .field_type = "float"},
         .{.field_name = "2", .field_type = "text"},
     };
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
-
-    var builder = try Self.init(allocator, parent_path, "foo");
-    defer builder.deinit();
-
-    try builder.applyPlaceholder(parameters);
-
-    const apply_result = builder.entries.get(.parameter);
-    try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
     const expect = 
         \\  export type Parameter = {
         \\    1: number | null,
@@ -911,16 +877,26 @@ test "generate positional parameter code" {
         \\  }
     ;
 
-    try std.testing.expectEqualStrings(expect, result);
+    try runApplyPlaceholder(parameters, expect);
 }
 
 test "generate positional parameter code with any type" {
-    const allocator = std.testing.allocator;
-
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "1", .field_type = null},
         .{.field_name = "2", .field_type = null},
     };
+    const expect = 
+        \\  export type Parameter = {
+        \\    1: any | null,
+        \\    2: any | null,
+        \\  }
+    ;
+
+    try runApplyPlaceholder(parameters, expect);
+}
+
+fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol) !void {
+    const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
@@ -930,35 +906,99 @@ test "generate positional parameter code with any type" {
     var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
-    try builder.applyPlaceholder(parameters);
+    try builder.applyResultSets(parameters);
 
-    const apply_result = builder.entries.get(.parameter);
+    const apply_result = builder.entries.get(.result_set);
     try std.testing.expect(apply_result != null);
-
-    const result = apply_result.?;
-
-    const expect = 
-        \\  export type Parameter = {
-        \\    1: any | null,
-        \\    2: any | null,
-        \\  }
-    ;
-
-    try std.testing.expectEqualStrings(expect, result);
+    try std.testing.expectEqualStrings(expect, apply_result.?);
 }
 
-test "generate enum user type" {
-    const allocator = std.testing.allocator;
-
-    const enum_type: UserTypeDef = .{
-        .header = .{
-            .kind = .@"enum", .name = "Visibility",
-        },
-        .fields = &.{
-            .{.field_name = "hide", .field_type = null}, 
-            .{.field_name = "visible", .field_type = null}, 
-        },
+test "generate select list#1 (lowercase field)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    const expect = 
+        \\  export type ResultSet = {
+        \\    id: number,
+        \\    kind: number,
+        \\    value: string,
+        \\  }
+    ;
+    try runApplyResultSets(result_set, expect);
+}
+
+test "generate select list#2 (PascalCase field)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "userId", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "profileKind", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
+    };
+    const expect = 
+        \\  export type ResultSet = {
+        \\    userId: number,
+        \\    profileKind: number,
+        \\    remarks: string,
+        \\  }
+    ;
+    try runApplyResultSets(result_set, expect);
+}
+
+test "generate select list#3 (lower snake_case field)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "user_id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "profile_kind", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
+    };
+    const expect = 
+        \\  export type ResultSet = {
+        \\    userId: number,
+        \\    profileKind: number,
+        \\    remarks: string,
+        \\  }
+    ;
+    try runApplyResultSets(result_set, expect);
+}
+
+test "generate select list#4 (upper snake_case field)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "USER_ID", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "PROFILE_KIND", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "REMARKS", .field_type = "VARCHAR", .nullable = false},
+    };
+    const expect = 
+        \\  export type ResultSet = {
+        \\    userId: number,
+        \\    profileKind: number,
+        \\    remarks: string,
+        \\  }
+    ;
+    try runApplyResultSets(result_set, expect);
+}
+
+test "generate select list#5 (nullable field)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .field_type = "INTEGER", .nullable = true},
+        .{.field_name = "value", .field_type = "VARCHAR", .nullable = true},
+    };
+    const expect = 
+        \\  export type ResultSet = {
+        \\    id: number,
+        \\    kind: number | null,
+        \\    value: string | null,
+        \\  }
+    ;
+    try runApplyResultSets(result_set, expect);
+}
+
+test "generate select list#6 (field without alias)" {
+
+}
+
+fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol) !void {
+    const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
@@ -972,11 +1012,75 @@ test "generate enum user type" {
 
     const apply_result = builder.entries.get(.user_type);
     try std.testing.expect(apply_result != null);
+    try std.testing.expectEqualStrings(expect, apply_result.?);
+}
 
+test "generate enum user type#1 (PascalCase type name)" {
+    const enum_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"enum", .name = "Visibility",
+        },
+        .fields = &.{
+            .{.field_name = "hide", .field_type = null}, 
+            .{.field_name = "visible", .field_type = null}, 
+        },
+    };
     const expect = 
         \\  export type Visibility = 'hide' | 'visible'
     ;
-    try std.testing.expectEqualStrings(expect, apply_result.?);
+
+    try runApplyUserType(enum_type, expect);
+}
+
+test "generate enum user type#2 (lowercase type name)" {
+    const enum_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"enum", .name = "visibility",
+        },
+        .fields = &.{
+            .{.field_name = "hide", .field_type = null}, 
+            .{.field_name = "visible", .field_type = null}, 
+        },
+    };
+    const expect = 
+        \\  export type Visibility = 'hide' | 'visible'
+    ;
+
+    try runApplyUserType(enum_type, expect);
+}
+
+test "generate enum user type#3 (UPPER CASE type name)" {
+    const enum_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"enum", .name = "VISIBILITY",
+        },
+        .fields = &.{
+            .{.field_name = "hide", .field_type = null}, 
+            .{.field_name = "visible", .field_type = null},
+        },
+    };
+    const expect = 
+        \\  export type Visibility = 'hide' | 'visible'
+    ;
+
+    try runApplyUserType(enum_type, expect);
+}
+
+test "generate enum user type#3 (snake_case type name)" {
+    const enum_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"enum", .name = "USER_PROFILE_KIND",
+        },
+        .fields = &.{
+            .{.field_name = "admin", .field_type = null}, 
+            .{.field_name = "general", .field_type = null},
+        },
+    };
+    const expect = 
+        \\  export type UserProfileKind = 'admin' | 'general'
+    ;
+
+    try runApplyUserType(enum_type, expect);
 }
 
 test "Output build result" {
@@ -995,11 +1099,8 @@ test "Output build result" {
 
     try builder.buildWith(SourceGenerator.build);
 
-    var dir = try output_dir.dir.openDir("foo", .{});
-    defer dir.close();
-
     query: {
-        var file = try output_dir.dir.openFile("foo/query.sql", .{.mode = .read_only});
+        var file = try output_dir.dir.openFile("Foo/query.sql", .{.mode = .read_only});
         defer file.close();
 
         const meta = try file.metadata();
@@ -1011,7 +1112,7 @@ test "Output build result" {
         break :query;
     }
     placeholder: {
-        var file = try output_dir.dir.openFile("foo/types.ts", .{});
+        var file = try output_dir.dir.openFile("Foo/types.ts", .{});
         defer file.close();
 
         const meta = try file.metadata();
@@ -1041,11 +1142,8 @@ test "Output build enum user type" {
 
     try builder.buildWith(UserTypeGenerator.build);
 
-    var dir = try output_dir.dir.openDir("foo", .{});
-    defer dir.close();
-
     user_type: {
-        var file = try output_dir.dir.openFile("foo/user-types/types.ts", .{});
+        var file = try output_dir.dir.openFile("Foo/user-types/types.ts", .{});
         defer file.close();
 
         const meta = try file.metadata();

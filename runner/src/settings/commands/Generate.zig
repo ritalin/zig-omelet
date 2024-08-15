@@ -45,7 +45,7 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         source_dir_path,
-        schema_dir_path, 
+        schema_dir_path,
         output_dir_path,
         watch,
 

@@ -75,7 +75,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
 
                     if (left_launching <= 0) {
-                        try self.onAfterLaunch();
+                        try self.onAfterLaunch(item.socket);
                     }
                 },
                 .failed_launching => {
@@ -87,7 +87,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         systemLog.debug("Received to failed launching: '{s}' (left: {})", .{item.from, left_launching});
                     }
                     if (left_launching <= 0) {
-                        try self.onAfterLaunch();
+                        try self.onAfterLaunch(item.socket);
                     }
                 },
                 .topic => |payload| {
@@ -190,6 +190,9 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     // request quit for Generate stage
                     try self.connection.dispatcher.reply(item.socket, .quit);
                 },
+                .pending_fatal_quit => {
+                    try self.connection.dispatcher.post(.quit_all);
+                },
                 .quit_accept => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
 
@@ -205,6 +208,11 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.reply(item.socket, .ack);
                     log(payload.level, item.from, payload.content);
                 },
+                .report_fatal => |payload| {
+                    try self.connection.dispatcher.reply(item.socket, .quit);
+                    log(payload.level, item.from, payload.content);
+                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_fatal_quit);
+                },
                 else => {
                     try self.connection.dispatcher.reply(item.socket, .ack);
                     systemLog.debug("Discard command: {}", .{std.meta.activeTag(item.event)});
@@ -216,10 +224,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     systemLog.debug("terminated", .{});
 }
 
-fn onAfterLaunch(self: Self) !void {
+fn onAfterLaunch(self: Self, socket: *zmq.ZSocket) !void {
     if (self.connection.dispatcher.state.level.terminating) {
         traceLog.debug("Stopping launch process", .{});
-        try self.connection.dispatcher.post(.quit_all);
+        try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit);
     }
     else {
         traceLog.debug("Received launched all", .{});

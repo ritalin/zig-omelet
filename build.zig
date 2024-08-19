@@ -79,23 +79,48 @@ pub fn build(b: *std.Build) !void {
     test_fright_cmd: {
         const cmd = b.addRunArtifact(stage_runner);
         cmd.step.dependOn(b.getInstallStep());
-
-        const test_fright_sc = command: {
-            if (b.args) |args| {
-                if (args.len > 0) {
-                    cmd.addArgs(args[1..]);
-                    break :command args[0];
-                }
-            }
-            break :command "generate";
-        };
+        
         @import("stage_runner").applyRunnerChannel(cmd);
-        cmd.addArgs(&.{
-            test_fright_sc,
+        // var inspection = try SettingInspection.inspectArgId(b.allocator, b.args);
+        
+        // general_args: {
+        //     var iter = try inspection.iterate(b.allocator, .cmd_general);
+        //     defer iter.deinit(b.allocator);
+        //     while (iter.next()) |arg| { cmd.addArg(arg); }
+        //     break:general_args;
+        // }
+        // subcommand: {
+        //     if (inspection.subcommand_tag) |sc| {
+        //         cmd.addArg(inspection.subcommand().?);
+
+        //         var iter = try inspection.iterateFromSubcommand(b.allocator, sc);
+        //         defer iter.deinit(b.allocator);
+        //         while (iter.next()) |arg| { cmd.addArg(arg); }
+        //     }
+        //     else {
+        //         cmd.addArg("generate");
+        //     }
+        //     break:subcommand;
+        // }
+
+        // const default_args: []const []const u8 = &.{
+        //     "--source-dir=./_sql-examples",
+        //     "--output-dir=./_dump/ts",
+        //     "--schema-dir=./_schema-examples",
+        // };
+        // for (default_args) |arg| {
+        //     if (!inspection.args.contains(arg)) { cmd.addArg(arg); }
+        // }
+        const default_args: []const []const u8 = &.{
+            "generate",
             "--source-dir=./_sql-examples",
             "--output-dir=./_dump/ts",
             "--schema-dir=./_schema-examples",
-        });
+            "--schema-include-filter=user_types",
+        };
+        for (default_args) |arg| {
+            cmd.addArg(arg);
+        }
 
         const run_step = b.step("test-run", "Run the app as test frighting");
         run_step.dependOn(&cmd.step);
@@ -132,4 +157,6 @@ fn addTestAll(b: *std.Build) void {
             }
         }
     }
-} 
+}
+
+const SettingInspection = @import("./build_support.zig").SettingInspection;

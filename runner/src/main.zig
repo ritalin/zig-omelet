@@ -42,8 +42,9 @@ pub fn main() !void {
         .stage_watch = .{
             .path = exe_prefix ++ "-" ++ "watch-files",
             .extra_args = &.{
-                @tagName(.source_dir_path), 
-                @tagName(.schema_dir_path), 
+                @tagName(.source_dir_set), 
+                @tagName(.schema_dir_set), 
+                @tagName(.schema_filter_set), 
                 @tagName(.watch)
             },
             .managed = true,
@@ -51,7 +52,7 @@ pub fn main() !void {
         .stage_extract = &.{
             .{
                 .path = exe_prefix ++ "-" ++ "duckdb-extract",
-                .extra_args = &.{@tagName(.schema_dir_path)},
+                .extra_args = &.{@tagName(.schema_dir_set)},
                 .managed = true,
             },
         },

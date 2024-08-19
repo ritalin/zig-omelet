@@ -162,6 +162,10 @@ fn initStageProcess(
         break :generate;
     }
 
+    const cli_args = try std.mem.join(allocator, " ", args.items);
+    defer allocator.free(cli_args);
+    log.debug("stage args: {s}", .{cli_args});
+
     var process = std.process.Child.init(try args.toOwnedSlice(), allocator);
     process.stderr_behavior = .Ignore;
     process.stdout_behavior = .Ignore;
@@ -211,9 +215,10 @@ const GeneralConfigMap =
 ;
 const GenerateConfigMap = 
     ConfigBindMap(GenerateSetting).init(&.{
-        .{.source_dir_path, Binder.Generate.bindSourceDir},
-        .{.schema_dir_path, Binder.Generate.bindSchemaDir},
+        .{.source_dir_set, Binder.Generate.bindSourceDir},
+        .{.schema_dir_set, Binder.Generate.bindSchemaDir},
         .{.output_dir_path, Binder.Generate.bindOutputDir},
+        .{.schema_filter_set, Binder.Generate.bindSchemaFilter},
         .{.watch, Binder.Generate.bindWatchMode},
     })
 ;
@@ -251,14 +256,14 @@ const Binder = struct {
             const decl = comptime findDecl(ArgId, decls, .source_dir_path);
             try args.append("--" ++ decl.names.long.?);
 
-            for (setting.source_dir_path) |path| {
+            for (setting.source_dir_set) |path| {
                 try args.append(path);
             }
     
             return .success;
     }
         fn bindSchemaDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            if (setting.schema_dir_path == null) {
+            if (setting.schema_dir_set.len == 0) {
                 log.warn("Need to specify `--schema-dir` arg", .{});
                 return .{
                     .help = .{.tags = &.{ .cmd_generate, .cmd_general }, .command = .generate },
@@ -267,8 +272,9 @@ const Binder = struct {
 
             const decl = comptime findDecl(ArgId, decls, .schema_dir_path);
             try args.append("--" ++ decl.names.long.?);
-            try args.append(setting.schema_dir_path.?);
-
+            for (setting.schema_dir_set) |path| {
+                try args.append(path);
+            }
             return .success;
         }
         fn bindOutputDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
@@ -285,6 +291,17 @@ const Binder = struct {
                 try args.append("--" ++ decl.names.long.?);
             }
 
+            return .success;
+        }
+        fn bindSchemaFilter(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+            if (setting.schema_filter_set.len > 0) {
+                const decl = comptime findDecl(ArgId, decls, .schema_filter);
+                try args.append("--" ++ decl.names.long.?);
+
+                for (setting.schema_filter_set) |path| {
+                    try args.append(path);
+                }
+            }
             return .success;
         }
     };

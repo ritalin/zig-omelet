@@ -4,10 +4,10 @@ const core = @import("core");
 
 const help = @import("../help.zig");
 
-const GenerateSetting = @import("./Generate.zig");
+pub const Generate = @import("./Generate.zig");
 
 pub const CommandSetting = union(help.CommandArgId) {
-    generate: GenerateSetting,
+    generate: Generate,
 
     pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
         const id = findTag(parser.diagnostic) catch  |err| switch (err) {
@@ -19,7 +19,7 @@ pub const CommandSetting = union(help.CommandArgId) {
         
         switch (id) {
             .generate => {
-                const setting = GenerateSetting.loadArgs(arena, Iterator, parser.iter) 
+                const setting = Generate.loadArgs(arena, Iterator, parser.iter) 
                 catch {
                     return .{
                         .help = .{.tags = &.{ .cmd_generate, .cmd_general }, .command = .generate }
@@ -39,7 +39,7 @@ pub const CommandSetting = union(help.CommandArgId) {
     }
 };
 
-fn findTag(diag: ?*clap.Diagnostic) !help.CommandArgId {
+pub fn findTag(diag: ?*clap.Diagnostic) !help.CommandArgId {
     if (diag == null) return error.ShowGeneralHelp;
     return std.meta.stringToEnum(help.CommandArgId, diag.?.arg) orelse return error.ShowGeneralHelp;
 }

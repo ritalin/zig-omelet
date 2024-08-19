@@ -3,7 +3,7 @@ const std = @import("std");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -91,7 +91,9 @@ pub fn build(b: *std.Build) void {
     }
 
     test_module: {
+        const test_prefix = "test";
         const exe_unit_tests = b.addTest(.{
+            .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
@@ -129,6 +131,10 @@ pub fn build(b: *std.Build) void {
             const test_step = b.step("test", "Run unit tests");
             test_step.dependOn(&run_exe_unit_tests.step);
             break:test_runner;
+        }
+        test_artifact: {
+            b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+            break:test_artifact;
         }
         break:test_module;
     }

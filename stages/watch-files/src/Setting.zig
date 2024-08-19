@@ -3,6 +3,7 @@ const clap = @import("clap");
 const core = @import("core");
 
 const log = core.Logger.SystemDirect(@import("build_options").app_context);
+const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 
 const Setting = @This();
 
@@ -10,11 +11,18 @@ arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
 log_level: core.LogLevel,
 sources: []const SourceDir,
+schema_filter: PathMatcher,
 watch: bool,
 standalone: bool,
 
 pub const SourceDir = struct {
     category: core.TopicCategory,
+    dir_path: core.FilePath, 
+};
+
+const FilterKind = enum {include, exclude};
+pub const FilterDir = struct {
+    kind: FilterKind,
     dir_path: core.FilePath, 
 };
 
@@ -51,6 +59,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
     .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
+    .{@tagName(.schema_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
 
@@ -60,6 +69,7 @@ const ArgId = enum {
     log_level,
     source_dir,
     schema_dir,
+    schema_filter,
     watch,
     standalone,
 
@@ -69,6 +79,7 @@ const ArgId = enum {
         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
         .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
+        .{.id = .schema_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
@@ -106,6 +117,9 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .schema_dir => {
                 if (arg.value) |v| try builder.addSourceDir(.schema, v);
             },
+            .schema_filter => {
+                if (arg.value) |v| try builder.addFilterDir(.include, v);
+            },
             .watch => builder.watch = true,
             .standalone => builder.standalone = true,
         }
@@ -119,17 +133,20 @@ const Builder = struct {
     subscribe_channel: ?core.Symbol,
     log_level: ?core.Symbol,
     sources: SourceList,
+    schema_filters: FilterList,
     watch: bool,
     standalone: bool,
 
-    const SourceList = std.ArrayList(struct {category: core.TopicCategory, path: core.FilePath});
-
+    const SourceList = std.ArrayList(struct {category: core.TopicCategory, path: core.FilePath});    const FilterKind = enum {include, exclude};
+    const FilterList = std.ArrayList(struct {kind: PathMatcher.FilterKind, path: core.FilePath});
+    
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
             .request_channel = null,
             .subscribe_channel = null,
             .log_level = null,
             .sources = SourceList.init(allocator),
+            .schema_filters = FilterList.init(allocator),
             .watch = false,
             .standalone = false,
         };
@@ -137,10 +154,15 @@ const Builder = struct {
 
     pub fn deinit(self: *Builder) void {
         self.sources.deinit();
+        self.schema_filters.deinit();
     }
 
     pub fn addSourceDir(self: *Builder, category: core.TopicCategory, path: core.FilePath) !void {
         return self.sources.append(.{.category = category, .path = path});
+    }
+
+    pub fn addFilterDir(self: *Builder, kind: PathMatcher.FilterKind, path: core.FilePath) !void {
+        return self.schema_filters.append(.{.kind = kind, .path = path});
     }
 
     pub fn build (self: Builder, arena: *std.heap.ArenaAllocator) !Setting {
@@ -179,6 +201,29 @@ const Builder = struct {
             });
         }
 
+        var filter_builder = PathMatcher.Builder.init(allocator);
+        defer filter_builder.deinit();
+
+        for (sources.items) |src| {
+            if (src.category == .schema) {
+                for (self.schema_filters.items) |filter| {
+                    const path = try std.fs.path.join(allocator, &.{src.dir_path, filter.path});
+                    defer allocator.free(path);
+
+                    if (std.fs.accessAbsolute(path, .{})) {
+                        const path_u = try toUnicodeString(allocator, path);
+                        defer allocator.free(path_u);
+
+                        try filter_builder.addFilterDir(.include, path_u);
+                    }
+                    else |err| switch (err) {
+                        error.FileNotFound => {},
+                        else => return err,
+                    }
+                }
+            }
+        }
+
         return .{
             .arena = arena,
             .endpoints = .{
@@ -187,8 +232,11 @@ const Builder = struct {
             },
             .log_level = log_level,
             .sources = try sources.toOwnedSlice(),
+            .schema_filter = try filter_builder.build(),
             .watch = self.watch,
             .standalone = self.standalone,
         };
     }
 };
+
+pub const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;

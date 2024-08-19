@@ -28,3 +28,6 @@ pub fn main() !void {
     log.debug("Finished", .{});
 }
 
+test "main" {
+    std.testing.refAllDecls(@This());
+}

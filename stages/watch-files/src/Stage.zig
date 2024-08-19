@@ -3,6 +3,7 @@ const zmq = @import("zmq");
 const core = @import("core");
 
 const Setting = @import("./Setting.zig");
+const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 const app_context = @import("build_options").app_context;
 
 const Symbol = core.Symbol;
@@ -86,7 +87,7 @@ fn waitNextDispatch(self: *Self, setting: Setting) !void {
         
         switch (item.event) {
             .ready_watch_path => {
-                try self.sendAllFiles(setting.sources);
+                try self.sendAllFiles(setting.sources, setting.schema_filter);
                 try self.connection.dispatcher.post(.finish_watch_path);
             },
             .quit => {
@@ -103,19 +104,19 @@ fn waitNextDispatch(self: *Self, setting: Setting) !void {
     }  
 }
 
-fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir) !void {
+fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir, filter: PathMatcher) !void {
     for (sources) |src| {
         const file_stat = try std.fs.cwd().statFile(src.dir_path);
         if (file_stat.kind == .file) {
-            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.dir_path);
+            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.dir_path, filter);
         }
         else if (file_stat.kind == .directory) {
-            try self.sendFiledOfDir(src.category, src.dir_path);
+            try self.sendFiledOfDir(src.category, src.dir_path, filter);
         }
     }
 }
 
-fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.FilePath) !void {
+fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.FilePath, filter: PathMatcher) !void {
     var dir = try std.fs.cwd().openDir(dir_path, .{});
     defer dir.close();
 
@@ -124,19 +125,35 @@ fn sendFiledOfDir(self: *Self, category: core.TopicCategory, dir_path: core.File
 
     while (try iter.next()) |entry| {
         if (entry.kind == .file) {
-            try self.sendFile(category, entry.dir, entry.basename, entry.path);
+            try self.sendFile(category, entry.dir, entry.basename, entry.path, filter);
         }
     }
 }
 
-fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, name: core.FilePath) !void {
+const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
+
+fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, name: core.FilePath, filter: PathMatcher) !void {
     const base_dir_path = try base_dir.realpathAlloc(self.allocator, ".");
     defer self.allocator.free(base_dir_path);
 
     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
     defer self.allocator.free(file_path_abs);
 
-    try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});
+    if (category == .schema) {
+        const path_u = try toUnicodeString(self.allocator, file_path_abs);
+        defer self.allocator.free(path_u);
+
+        const filter_result = filter.match(path_u);
+        if (filter_result == null) return;
+
+        if (filter_result) |kinds| {
+            if (! kinds.contains(.include)) {
+                return;
+            }
+        }
+    }
+
+    try self.logger.log(.debug, "Sending source and/or schema file: `{s}`", .{file_path_abs});
 
     var file = try base_dir.openFile(file_path, .{});
     defer file.close();

@@ -1,9 +1,10 @@
 const std = @import("std");
-const types = @import("../types.zig");
+const Symbol = @import("../types.zig").Symbol;
+const LogLevel = @import("../events/events.zig").LogLevel;
 
-pub fn resolveLogLevel(value: ?types.Symbol) !types.LogLevel {
+pub fn resolveLogLevel(value: ?Symbol) !LogLevel {
     if (value) |v| {
-        return std.meta.stringToEnum(types.LogLevel, v)
+        return std.meta.stringToEnum(LogLevel, v)
         orelse return error.SettingLoadFailed;
     }
     else {

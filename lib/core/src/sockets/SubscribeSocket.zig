@@ -2,10 +2,10 @@ const std = @import("std");
 const zmq = @import("zmq");
 
 const types = @import("../types.zig");
-const helpers = @import("../helpers.zig");
+const events = @import("../events/events.zig");
 
 const Self = @This();
-const EventTypeSet = std.enums.EnumSet(types.EventType);
+const EventTypeSet = std.enums.EnumSet(events.EventType);
 
 allocator: std.mem.Allocator,
 socket: *zmq.ZSocket,
@@ -33,8 +33,8 @@ pub fn connect(self: *Self, endpoint_channel: types.Symbol) !void {
     return self.socket.connect(endpoint_channel);
 }
 
-pub fn addFilters(self: *Self, filters: types.EventTypes) !void {
-    try helpers.addSubscriberFilters(self.socket, filters);
+pub fn addFilters(self: *Self, filters: events.EventTypes) !void {
+    try events.addSubscriberFilters(self.socket, filters);
 
     self.filters.setUnion(EventTypeSet.init(filters));
 }

@@ -1,10 +1,11 @@
 const std = @import("std");
 const zmq = @import("zmq");
 
-const types = @import("./types.zig");
 const Symbol = types.Symbol;
 const Connection = @import("./sockets/Connection.zig");
 
+const types = @import("./types.zig");
+const events = @import("./events/events.zig");
 
 var level_filter = resetFilter(.info);
 
@@ -24,7 +25,7 @@ pub fn withAppContext(comptime app_context: Symbol) type {
             };
         }
 
-        pub fn log(self: *Self, log_level: types.LogLevel, comptime content: Symbol, args: anytype) !void {
+        pub fn log(self: *Self, log_level: events.LogLevel, comptime content: Symbol, args: anytype) !void {
             if (level_filter.contains(log_level)) {
                 var buf = std.ArrayList(u8).init(self.allocator);
                 defer buf.deinit();
@@ -36,8 +37,8 @@ pub fn withAppContext(comptime app_context: Symbol) type {
                     Stage.log(log_level, app_context, buf.items);
                 }
 
-                const event: types.Event = .{
-                    .log = try types.Event.Payload.Log.init(
+                const event: events.Event = .{
+                    .log = try events.Event.Payload.Log.init(
                         self.allocator, .{log_level, buf.items}
                     )
                 };
@@ -50,7 +51,7 @@ pub fn withAppContext(comptime app_context: Symbol) type {
 
 /// Log received from stage
 pub const Stage = struct {
-    pub fn log(level: types.LogLevel, stage_name: types.Symbol, message: []const u8) void {
+    pub fn log(level: events.LogLevel, stage_name: types.Symbol, message: []const u8) void {
         if (level_filter.contains(level)) {
             const log_level = level.toStdLevel();
             
@@ -134,14 +135,14 @@ pub fn TraceDirect(comptime stage_name: types.Symbol) type {
     return Direct(stage_name, .trace);
 }
 
-pub fn filterWith(level: types.LogLevel) void {
+pub fn filterWith(level: events.LogLevel) void {
     level_filter = resetFilter(level);
 }
 
-fn resetFilter(level: types.LogLevel) types.LogLevelSet {
-    var filter = types.LogLevelSet.initFull();
+fn resetFilter(level: events.LogLevel) events.LogLevelSet {
+    var filter = events.LogLevelSet.initFull();
 
-    const field_len = std.meta.fields(types.LogLevel).len;
+    const field_len = std.meta.fields(events.LogLevel).len;
     for (@intFromEnum(level)+1..field_len) |value| {
         filter.remove(@enumFromInt(value));
     }
@@ -149,6 +150,6 @@ fn resetFilter(level: types.LogLevel) types.LogLevelSet {
     return filter;
 }
 
-pub fn stringToLogLevel(s: types.Symbol) types.LogLevel {
-    return std.meta.stringToEnum(types.LogLevel, s) orelse .err;
+pub fn stringToLogLevel(s: types.Symbol) events.LogLevel {
+    return std.meta.stringToEnum(events.LogLevel, s) orelse .err;
 }

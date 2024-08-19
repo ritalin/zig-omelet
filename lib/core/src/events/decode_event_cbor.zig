@@ -4,11 +4,14 @@ const c = @cImport({
     @cInclude("cbor/cbor.h");
 });
 
-const types = @import("./types.zig");
-const StructView = types.StructView;
-const Symbol = types.Symbol;
-const Event = types.Event;
-const CborStream = @import("./CborStream.zig");
+const core_types = @import("../types.zig");
+const Symbol = core_types.Symbol;
+const CborStream = @import("../CborStream.zig");
+
+const event_types = @import("./event_types.zig");
+const StructView = event_types.StructView;
+const EventType = event_types.EventType;
+const Event = event_types.Event;
 
 pub fn encodeEvent(allocator: std.mem.Allocator, event: Event) ![]const u8 {
     var writer = try CborStream.Writer.init(allocator);
@@ -28,7 +31,7 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         .launched, .failed_launching => {},
         .request_topic => {},
         .topic => |payload| {
-            _ = try writer.writeEnum(types.TopicCategory, payload.category);
+            _ = try writer.writeEnum(event_types.TopicCategory, payload.category);
             _ = try writer.writeSlice(Symbol, payload.names);
             _ = try writer.writeBool(payload.has_more);
         },
@@ -77,12 +80,12 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
     }
 }
 
-pub fn decodeEvent(allocator: std.mem.Allocator, event_type: types.EventType, data: []const u8) !types.Event {
+pub fn decodeEvent(allocator: std.mem.Allocator, event_type: EventType, data: []const u8) !Event {
     var reader = CborStream.Reader.init(data);
     return decodeEventInternal(allocator, event_type, &reader);
 }
 
-fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType, reader: *CborStream.Reader) !types.Event {
+fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, reader: *CborStream.Reader) !Event {
     switch (event_type) {
         // Response events
         .ack => return .ack,
@@ -92,7 +95,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: types.EventType
         .failed_launching => return .failed_launching,
         .request_topic => return .request_topic,
         .topic => {
-            const category = try reader.readEnum(types.TopicCategory);
+            const category = try reader.readEnum(event_types.TopicCategory);
             const topic_names = try reader.readSlice(allocator, Symbol);
             defer allocator.free(topic_names);
             const has_more = try reader.readBool();

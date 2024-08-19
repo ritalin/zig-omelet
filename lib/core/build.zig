@@ -5,6 +5,11 @@ pub const builder_supports = struct {
     pub const LazyPath = @import("./src/builder_supports/LazyPath.zig");
 };
 
+pub const settings = struct {
+    pub usingnamespace @import("./src/settings/types.zig");
+};
+pub usingnamespace @import("./src/types.zig");
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.

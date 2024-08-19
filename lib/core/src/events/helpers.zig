@@ -1,7 +1,9 @@
 const std = @import("std");
 const zmq = @import("zmq");
 
-const types = @import("./types.zig");
+const types = @import("../types.zig");
+const event_types = @import("./event_types.zig");
+
 const cbor = @import("./decode_event_cbor.zig");
 const encodeEvent = cbor.encodeEvent;
 const decodeEvent = cbor.decodeEvent;
@@ -117,8 +119,8 @@ pub fn bytesToHexAlloc(allocator: std.mem.Allocator, input: []const u8) ![]const
     return result;
 }
 
-pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !void {
-    var it = std.enums.EnumSet(types.EventType).init(events).iterator();
+pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: event_types.EventTypes) !void {
+    var it = std.enums.EnumSet(event_types.EventType).init(events).iterator();
 
     while (it.next()) |ev| {
         const filter: []const u8 = @tagName(ev);
@@ -127,7 +129,7 @@ pub fn addSubscriberFilters(socket: *zmq.ZSocket, events: types.EventTypes) !voi
 }
 
 /// Send event type only
-pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, from: StageName, ev: types.Event) !void {
+pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, from: StageName, ev: event_types.Event) !void {
     const data = try encodeEvent(allocator, ev);
     defer allocator.free(data);
     
@@ -137,7 +139,7 @@ pub fn sendEvent(allocator: std.mem.Allocator, socket: *zmq.ZSocket, from: Stage
     try sendPayloadInternal(allocator, socket, "", false);
 }
 
-fn sendEventTypeInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: types.EventType, has_more: bool) !void {
+fn sendEventTypeInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, ev: event_types.EventType, has_more: bool) !void {
     // std.debug.print("[DEBUG] Sending event: '{}' (more: {})\n", .{ev, has_more});
     var msg = try zmq.ZMessage.init(allocator, @tagName(ev));
     defer {
@@ -162,13 +164,13 @@ fn sendPayloadInternal(allocator: std.mem.Allocator, socket: *zmq.ZSocket, paylo
 }
 
 /// Receive event type only
-fn receiveEventType(socket: *zmq.ZSocket) !types.EventType {
+fn receiveEventType(socket: *zmq.ZSocket) !event_types.EventType {
     var frame = try socket.receive(.{});
     defer frame.deinit();
 
     const msg = try frame.data();
 
-    const event_type = std.meta.stringToEnum(types.EventType, msg);
+    const event_type = std.meta.stringToEnum(event_types.EventType, msg);
 
     if (event_type == null) {
         std.debug.print("[DEBUG] Received unexpected raw event: {s}\n", .{msg});
@@ -194,7 +196,7 @@ fn receivePayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !types.Sym
 }
 
 /// Receive event
-pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !struct{StageName, types.Event} {    
+pub fn receiveEventWithPayload(allocator: std.mem.Allocator, socket: *zmq.ZSocket) !struct{StageName, event_types.Event} {    
     // event type
     const event_type = try receiveEventType(socket);
     // from

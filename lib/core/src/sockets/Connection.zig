@@ -8,7 +8,7 @@ const std = @import("std");
 const zmq = @import("zmq");
 
 const types = @import("../types.zig");
-const helpers = @import("../helpers.zig");
+const events = @import("../events/events.zig");
 const SubscribeSocket = @import("./SubscribeSocket.zig");
 const PullSinkSocket = @import("./PullSinkSocket.zig");
 const Logger = @import("../Logger.zig");
@@ -112,7 +112,7 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
                         Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
                         try dispatcher.receive_pending.enqueue(entry);
 
-                        helpers.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
+                        events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
                             else => {
                                 Trace.debug("Unexpected error on sending: {}", .{err});
                                 return err;
@@ -131,7 +131,7 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
                 defer it.deinit();
 
                 while (it.next()) |item| {
-                    const event = try helpers.receiveEventWithPayload(dispatcher.allocator, item.socket);
+                    const event = try events.receiveEventWithPayload(dispatcher.allocator, item.socket);
 
                     Trace.debug("Received command: {} ({})", .{std.meta.activeTag(event[1]), dispatcher.receive_queue.count()});
 
@@ -203,7 +203,7 @@ pub fn Server(comptime stage_name: types.Symbol) type {
                         dispatcher.send_queue.count()
                     });
 
-                    helpers.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
+                    events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
                         else => {
                             // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
                             return err;
@@ -225,9 +225,9 @@ pub fn Server(comptime stage_name: types.Symbol) type {
                 defer it.deinit();
 
                 while (it.next()) |item| {
-                    const event = helpers.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
+                    const event = events.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
                         // error.InvalidResponse => {
-                        //     try helpers.sendEvent(dispatcher.allocator, item.socket, .nack);
+                        //     try events.sendEvent(dispatcher.allocator, item.socket, .nack);
                         //     continue;
                         // },
                         else => return err,
@@ -318,7 +318,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             self.allocator.destroy(self);
         }
 
-        pub fn post(self: *Self, event: types.Event) !void {
+        pub fn post(self: *Self, event: events.Event) !void {
             try self.send_queue.enqueue(.{ 
                 .allocator = self.allocator,
                 .kind = .post,
@@ -328,7 +328,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             });
         }
 
-        pub fn reply(self: *Self, socket: *zmq.ZSocket, event: types.Event) !void {
+        pub fn reply(self: *Self, socket: *zmq.ZSocket, event: events.Event) !void {
             try self.send_queue.prepend(.{ 
                 .allocator = self.allocator,
                 .kind = .reply,
@@ -338,7 +338,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             });
         }
 
-        pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: types.Event) !void {
+        pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: events.Event) !void {
             try self.receive_queue.prepend(.{
                 .allocator = self.allocator,
                 .kind = .response,
@@ -370,11 +370,11 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
                 .kind = .post,
                 .socket = self.send_socket, 
                 .from = try self.allocator.dupe(u8, stage_name),
-                .event = .{.report_fatal = try types.Event.Payload.Log.init(self.allocator, .{.err, message})},
+                .event = .{.report_fatal = try events.Event.Payload.Log.init(self.allocator, .{.err, message})},
             });
         }
 
-        pub fn tryReadyQuit(self: *Self, event: types.Event) !void {
+        pub fn tryReadyQuit(self: *Self, event: events.Event) !void {
             if (event.tag() == .quit) {
                 try self.approve();
                 try self.state.readyQuit();
@@ -426,7 +426,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             socket: *zmq.ZSocket,
             kind: enum { post, reply, response},
             from: types.Symbol,
-            event: types.Event,
+            event: events.Event,
 
             pub fn deinit(self: @This()) void {
                 self.allocator.free(self.from);

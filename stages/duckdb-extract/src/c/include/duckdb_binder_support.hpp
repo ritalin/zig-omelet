@@ -9,11 +9,21 @@ namespace worker {
 using PositionalParam = std::string;
 using NamedParam = std::string;
 using ParamNameLookup = std::unordered_map<PositionalParam, NamedParam>;
+
+template<typename TKey>
+using UserTypeLookup = std::unordered_map<TKey, std::string>;
+
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
 
+struct ParamCollectionResult {
+    StatementType type;
+    ParamNameLookup names;
+    UserTypeLookup<PositionalParam> param_user_types;
+    UserTypeLookup<duckdb::idx_t> sel_list_user_types;
+};
 struct ParamEntry {
     PositionalParam position;
     NamedParam name;
@@ -50,10 +60,11 @@ public:
 auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle;
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
 auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string>;
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult;
 
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ParamNameLookup& lookup) -> std::vector<ParamEntry>;
+auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, const UserTypeLookup<PositionalParam>& user_type_lookup) -> std::vector<ParamEntry>;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> std::vector<ColumnEntry>;
 
 auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup;

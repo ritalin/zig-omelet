@@ -38,7 +38,7 @@ private:
     std::optional<void *> socket;
 };
 
-static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParameterCollector::Result {
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult {
     ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
     if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
@@ -47,7 +47,7 @@ static auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, Zmq
     else {
         collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
 
-        return {.type = StatementType::Invalid, .lookup{}};
+        return {.type = StatementType::Invalid, .names{}, .param_user_types{}};
     }
 }
 
@@ -100,6 +100,25 @@ static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> std::vector<
     return std::move(encoder.rawBuffer());
 }
 
+static auto encodeBoundUserType(UserTypeLookup<PositionalParam>&& param_user_types, UserTypeLookup<duckdb::idx_t>&& sel_list_user_types) -> std::vector<char> {
+    auto user_types_view_1 = param_user_types | std::views::values;
+    auto user_types_view_2 = sel_list_user_types | std::views::values;
+    
+    std::unordered_set<std::string> user_types;
+    std::ranges::move(user_types_view_1.begin(), user_types_view_1.end(), std::inserter(user_types, user_types.end()));
+    std::ranges::move(user_types_view_2.begin(), user_types_view_2.end(), std::inserter(user_types, user_types.end()));
+
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(user_types.size());
+
+    for (auto& name: user_types) {
+        encoder.addString(name);
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
 auto DescribeWorker::messageChannel(const std::string& from) -> ZmqChannel {
     return ZmqChannel(this->socket, this->id, from);
 }
@@ -125,7 +144,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 
                 auto bound_stmt = bindTypeToStatement(*this->conn.context, stmt->Copy());
 
-                param_type_result = resolveParamType(bound_stmt.plan, param_result.lookup);
+                param_type_result = resolveParamType(bound_stmt.plan, std::move(param_result.names), param_result.param_user_types);
                 auto channel = this->messageChannel("worker.parse");
                 column_type_result = resolveColumnType(bound_stmt.plan, param_result.type, channel);
 
@@ -142,6 +161,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 {topic_query, std::vector<char>(q.cbegin(), q.cend())},
                 {topic_placeholder, encodePlaceholder(std::move(param_type_result))},
                 {topic_select_list, encodeSelectList(std::move(column_type_result))},
+                {bound_user_type, encodeBoundUserType(std::move(param_result.param_user_types), std::move(param_result.sel_list_user_types))}
             });
             zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
         }

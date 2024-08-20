@@ -43,22 +43,27 @@ auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unor
 }
 
 auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
-    if (this->map.contains(old_name)) {
-        return this->map[old_name];
+    if (this->name_map.contains(old_name)) {
+        return this->name_map[old_name];
     }    
     else if (this->param_type == StatementParameterStyle::Positional) {
-        this->map[old_name] = old_name;
+        this->name_map[old_name] = old_name;
         return old_name;
     }
     
     else {
         ++this->gen_position;
         auto next = std::to_string(*this->gen_position);
-        this->map[old_name] = next;
+        this->name_map[old_name] = next;
 
         return next;
     }
 }
+
+auto ParameterCollector::paramUserType(std::string position, std::string type_name) -> void {
+    this->param_user_type_map[position] = type_name;
+}
+
 
 }
 

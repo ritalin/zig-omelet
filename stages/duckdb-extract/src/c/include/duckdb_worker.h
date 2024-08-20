@@ -14,6 +14,7 @@ typedef enum {
 #define topic_query "query"
 #define topic_placeholder "placeholder"
 #define topic_select_list "select-list"
+#define bound_user_type "bound-user-type"
 
 #define topic_user_type "user-type"
 

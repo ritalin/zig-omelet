@@ -65,7 +65,7 @@ pub fn run(self: *Self, setting: Setting) !void {
     }
     
     launch: {
-        if (try self.tryLoadSchema(setting.schema_dir_path)) {
+        if (try self.tryLoadSchema(setting.schema_dir_set)) {
             try self.connection.dispatcher.post(.launched);
         }
         else {
@@ -165,19 +165,21 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(Lo
     }
 }
 
-fn tryLoadSchema(self: *Self, schema_dir_path: core.FilePath) !bool {
-    const err = c.loadSchema(self.database, schema_dir_path.ptr, schema_dir_path.len);
-    switch (err) {
-        c.schema_dir_not_found => {
-            try self.logger.log(.err, "Launch failed. Invalid schema location.", .{});
-        },
-        c.schema_load_failed => {
-            try self.logger.log(.err, "Launch failed. Invalid schema definitions.", .{});
-        },
-        else => {},
+fn tryLoadSchema(self: *Self, schema_dir_set: []const core.FilePath) !bool {
+    for (schema_dir_set) |path| {
+        const err = c.loadSchema(self.database, path.ptr, path.len);
+        switch (err) {
+            c.schema_dir_not_found => {
+                try self.logger.log(.err, "Launch failed. Invalid schema location. ({s})", .{path});
+            },
+            c.schema_load_failed => {
+                try self.logger.log(.err, "Launch failed. Invalid schema definitions.", .{});
+            },
+            else => {},
+        }
     }
 
-    return err == c.no_error;
+    return true;
 }
 
 const WorkerResultTags = std.StaticStringMap(core.EventType).initComptime(.{

@@ -87,7 +87,7 @@ fn waitNextDispatch(self: *Self, setting: Setting) !void {
         
         switch (item.event) {
             .ready_watch_path => {
-                try self.sendAllFiles(setting.sources, setting.schema_filter);
+                try self.sendAllFiles(setting.sources, setting.filter);
                 try self.connection.dispatcher.post(.finish_watch_path);
             },
             .quit => {
@@ -139,7 +139,7 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
     defer self.allocator.free(file_path_abs);
 
-    if (category == .schema) {
+    // if (category == .schema) {
         const path_u = try toUnicodeString(self.allocator, file_path_abs);
         defer self.allocator.free(path_u);
 
@@ -151,9 +151,9 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
                 return;
             }
         }
-    }
+    // }
 
-    try self.logger.log(.debug, "Sending source and/or schema file: `{s}`", .{file_path_abs});
+    try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});
 
     var file = try base_dir.openFile(file_path, .{});
     defer file.close();

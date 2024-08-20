@@ -10,7 +10,7 @@ arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
 log_level: core.LogLevel,
 standalone: bool,
-schema_dir_path: core.FilePath,
+schema_dir_set: []const core.FilePath,
 
 pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
     var arena = try allocator.create(std.heap.ArenaAllocator);
@@ -73,9 +73,8 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
         .iter = args_iter,
         .diagnostic = &diag,
     };
-    _ = allocator;
 
-    var builder = Builder.init();
+    var builder = Builder.init(allocator);
 
     while (true) {
         const arg_ = parser.next() catch |err| {
@@ -89,7 +88,7 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .subscribe_channel => builder.subscribe_channel = arg.value,
             .log_level => builder.log_level = arg.value,
             .standalone => builder.standalone = true,
-            .schema_dir => builder.schema_dir_path = arg.value,
+            .schema_dir => try builder.schema_dir_set.append(arg.value),
         }
     }
 
@@ -101,20 +100,20 @@ const Builder = struct {
     subscribe_channel: ?core.Symbol,
     log_level: ?core.Symbol,
     standalone: bool,
-    schema_dir_path: ?core.FilePath,
+    schema_dir_set: std.ArrayList(?core.FilePath),
 
-    pub fn init() Builder {
+    pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
             .request_channel = null,
             .subscribe_channel = null,
             .log_level = null,
             .standalone = false,
-            .schema_dir_path = null,
+            .schema_dir_set = std.ArrayList(?core.FilePath).init(allocator),
         };
     }
 
     pub fn deinit(self: *Builder) void {
-        _ = self;
+        self.schema_dir_set.deinit();
     }
 
     pub fn build (self: Builder, arena: *std.heap.ArenaAllocator) !Setting {
@@ -134,9 +133,17 @@ const Builder = struct {
             return err;
         };
 
-        if (self.schema_dir_path == null) {
+        if (self.schema_dir_set.items.len == 0) {
             log.warn("Need to specify a `schema-dir` arg.\n\n", .{});
             return error.SettingLoadFailed;
+        }
+        
+        var schemas = std.ArrayList(core.FilePath).init(allocator);
+        defer schemas.deinit();
+        for (self.schema_dir_set.items) |path_| {
+            if (path_) |path| {
+                try schemas.append(try allocator.dupe(u8, path));
+            }
         }
 
         return .{
@@ -147,7 +154,7 @@ const Builder = struct {
             },
             .log_level = log_level,
             .standalone = self.standalone,
-            .schema_dir_path = try allocator.dupe(u8, self.schema_dir_path.?),
+            .schema_dir_set = try schemas.toOwnedSlice(),
         };
     }
 };

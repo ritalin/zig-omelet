@@ -11,7 +11,7 @@ arena: *std.heap.ArenaAllocator,
 endpoints: core.Endpoints,
 log_level: core.LogLevel,
 sources: []const SourceDir,
-schema_filter: PathMatcher,
+filter: PathMatcher,
 watch: bool,
 standalone: bool,
 
@@ -58,8 +58,8 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
-    .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
-    .{@tagName(.schema_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
+    // .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
+    .{@tagName(.include_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
 
@@ -68,8 +68,8 @@ const ArgId = enum {
     subscribe_channel,
     log_level,
     source_dir,
-    schema_dir,
-    schema_filter,
+    // schema_dir,
+    include_filter,
     watch,
     standalone,
 
@@ -78,8 +78,8 @@ const ArgId = enum {
         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
-        .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
-        .{.id = .schema_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
+        // .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
+        .{.id = .include_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
@@ -114,10 +114,10 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .source_dir => {
                 if (arg.value) |v| try builder.addSourceDir(.source, v);
             },
-            .schema_dir => {
-                if (arg.value) |v| try builder.addSourceDir(.schema, v);
-            },
-            .schema_filter => {
+            // .schema_dir => {
+            //     if (arg.value) |v| try builder.addSourceDir(.schema, v);
+            // },
+            .include_filter => {
                 if (arg.value) |v| try builder.addFilterDir(.include, v);
             },
             .watch => builder.watch = true,
@@ -133,7 +133,7 @@ const Builder = struct {
     subscribe_channel: ?core.Symbol,
     log_level: ?core.Symbol,
     sources: SourceList,
-    schema_filters: FilterList,
+    filters: FilterList,
     watch: bool,
     standalone: bool,
 
@@ -146,7 +146,7 @@ const Builder = struct {
             .subscribe_channel = null,
             .log_level = null,
             .sources = SourceList.init(allocator),
-            .schema_filters = FilterList.init(allocator),
+            .filters = FilterList.init(allocator),
             .watch = false,
             .standalone = false,
         };
@@ -154,7 +154,7 @@ const Builder = struct {
 
     pub fn deinit(self: *Builder) void {
         self.sources.deinit();
-        self.schema_filters.deinit();
+        self.filters.deinit();
     }
 
     pub fn addSourceDir(self: *Builder, category: core.TopicCategory, path: core.FilePath) !void {
@@ -162,7 +162,7 @@ const Builder = struct {
     }
 
     pub fn addFilterDir(self: *Builder, kind: PathMatcher.FilterKind, path: core.FilePath) !void {
-        return self.schema_filters.append(.{.kind = kind, .path = path});
+        return self.filters.append(.{.kind = kind, .path = path});
     }
 
     pub fn build (self: Builder, arena: *std.heap.ArenaAllocator) !Setting {
@@ -177,7 +177,7 @@ const Builder = struct {
             return error.SettingLoadFailed;
         }
         if (self.sources.items.len == 0) {
-            log.warn("Need to specify at least one `source-dir` and/or `schema-dir` arg(s).\n\n", .{});
+            log.warn("Need to specify at least one `source-dir` arg(s).\n\n", .{});
             return error.SettingLoadFailed;
         }
 
@@ -205,8 +205,8 @@ const Builder = struct {
         defer filter_builder.deinit();
 
         for (sources.items) |src| {
-            if (src.category == .schema) {
-                for (self.schema_filters.items) |filter| {
+        //     if (src.category == .schema) {
+                for (self.filters.items) |filter| {
                     const path = try std.fs.path.join(allocator, &.{src.dir_path, filter.path});
                     defer allocator.free(path);
 
@@ -221,7 +221,7 @@ const Builder = struct {
                         else => return err,
                     }
                 }
-            }
+        //     }
         }
 
         return .{
@@ -232,7 +232,7 @@ const Builder = struct {
             },
             .log_level = log_level,
             .sources = try sources.toOwnedSlice(),
-            .schema_filter = try filter_builder.build(),
+            .filter = try filter_builder.build(),
             .watch = self.watch,
             .standalone = self.standalone,
         };

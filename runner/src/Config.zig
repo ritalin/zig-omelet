@@ -218,7 +218,7 @@ const GenerateConfigMap =
         .{.source_dir_set, Binder.Generate.bindSourceDir},
         .{.schema_dir_set, Binder.Generate.bindSchemaDir},
         .{.output_dir_path, Binder.Generate.bindOutputDir},
-        .{.schema_filter_set, Binder.Generate.bindSchemaFilter},
+        .{.filter_set, Binder.Generate.bindFilter},
         .{.watch, Binder.Generate.bindWatchMode},
     })
 ;
@@ -254,9 +254,9 @@ const Binder = struct {
         const decls = ArgId.Decls;
         fn bindSourceDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             const decl = comptime findDecl(ArgId, decls, .source_dir_path);
-            try args.append("--" ++ decl.names.long.?);
 
             for (setting.source_dir_set) |path| {
+                try args.append("--" ++ decl.names.long.?);
                 try args.append(path);
             }
     
@@ -271,8 +271,8 @@ const Binder = struct {
             }
 
             const decl = comptime findDecl(ArgId, decls, .schema_dir_path);
-            try args.append("--" ++ decl.names.long.?);
             for (setting.schema_dir_set) |path| {
+                try args.append("--" ++ decl.names.long.?);
                 try args.append(path);
             }
             return .success;
@@ -293,12 +293,11 @@ const Binder = struct {
 
             return .success;
         }
-        fn bindSchemaFilter(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            if (setting.schema_filter_set.len > 0) {
-                const decl = comptime findDecl(ArgId, decls, .schema_filter);
-                try args.append("--" ++ decl.names.long.?);
-
-                for (setting.schema_filter_set) |path| {
+        fn bindFilter(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+            if (setting.filter_set.len > 0) {
+                const decl = comptime findDecl(ArgId, decls, .source_filter);
+                for (setting.filter_set) |path| {
+                    try args.append("--" ++ decl.names.long.?);
                     try args.append(path);
                 }
             }

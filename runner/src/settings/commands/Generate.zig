@@ -7,7 +7,7 @@ const help = @import("../help.zig");
 
 source_dir_set: []core.FilePath,
 schema_dir_set: []core.FilePath,
-schema_filter_set: []core.FilePath,
+filter_set: []core.FilePath,
 output_dir_path: core.FilePath,
 watch: bool,
 
@@ -25,7 +25,8 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
     defer builder.deinit();
 
     while (true) {
-        const arg_ = parser.next() catch {
+        const arg_ = parser.next() catch |err| {
+            try diag.report(std.io.getStdErr().writer(), err);
             return error.ShowCommandHelp;
         };
         if (arg_ == null) {
@@ -36,7 +37,7 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
             switch (arg.param.id) {
                 .source_dir_path => try builder.source_dir_set.append(arg.value),
                 .schema_dir_path => try builder.schema_dir_set.append(arg.value),
-                .schema_filter => try builder.schema_filter_set.append(arg.value),
+                .source_filter => try builder.filter_set.append(arg.value),
                 .output_dir_path => builder.output_dir_path = arg.value,
                 .watch => builder.watch = true,
             }
@@ -48,14 +49,14 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         source_dir_path,
         schema_dir_path,
-        schema_filter,
+        source_filter,
         output_dir_path,
         watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .source_dir_path, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
             .{.id = .schema_dir_path, .names = .{.long = "schema-dir"}, .takes_value = .one},
-            .{.id = .schema_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
+            .{.id = .source_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
             .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
             .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
@@ -68,7 +69,7 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
 const Builder = struct {
     source_dir_set: std.ArrayList(?core.FilePath),
     schema_dir_set: std.ArrayList(?core.FilePath),
-    schema_filter_set: std.ArrayList(?core.FilePath),
+    filter_set: std.ArrayList(?core.FilePath),
     output_dir_path: ?core.FilePath = null,
     watch: bool = false,
 
@@ -76,14 +77,14 @@ const Builder = struct {
         return .{
             .source_dir_set = std.ArrayList(?core.FilePath).init(allocator),
             .schema_dir_set = std.ArrayList(?core.FilePath).init(allocator),
-            .schema_filter_set = std.ArrayList(?core.FilePath).init(allocator),
+            .filter_set = std.ArrayList(?core.FilePath).init(allocator),
        };
     }
 
     pub fn deinit(self: *Builder) void {
         self.source_dir_set.deinit();
         self.schema_dir_set.deinit();
-        self.schema_filter_set.deinit();
+        self.filter_set.deinit();
     }
 
     pub fn build(self: Builder, allocator: std.mem.Allocator) !Self {
@@ -120,11 +121,11 @@ const Builder = struct {
             return error.SettingLoadFailed;
         }
 
-        var schema_filter_set = try std.ArrayList(core.FilePath).initCapacity(allocator, self.schema_filter_set.items.len);
-        defer schema_filter_set.deinit();
-        for (self.schema_filter_set.items) |filter| {
+        var filters = try std.ArrayList(core.FilePath).initCapacity(allocator, self.filter_set.items.len);
+        defer filters.deinit();
+        for (self.filter_set.items) |filter| {
             if (filter) |x| {
-                try schema_filter_set.append(try allocator.dupe(u8, x));
+                try filters.append(try allocator.dupe(u8, x));
             }
         }
 
@@ -142,7 +143,7 @@ const Builder = struct {
         return .{
             .source_dir_set = try sources.toOwnedSlice(),
             .schema_dir_set = try schemas.toOwnedSlice(),
-            .schema_filter_set = try schema_filter_set.toOwnedSlice(),
+            .filter_set = try filters.toOwnedSlice(),
             .output_dir_path = output_dir_path,
             .watch = self.watch,
         };

@@ -137,7 +137,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             auto param_result = walkSQLStatement(stmt, this->messageChannel("worker.parse"));
             auto q = stmt->ToString();
             
-            std::vector<ParamEntry> param_type_result;
+            ParamResolveResult param_type_result;
             std::vector<ColumnEntry> column_type_result;
             try {
                 this->conn.BeginTransaction();
@@ -159,7 +159,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 
             std::unordered_map<std::string, std::vector<char>> topic_bodies({
                 {topic_query, std::vector<char>(q.cbegin(), q.cend())},
-                {topic_placeholder, encodePlaceholder(std::move(param_type_result))},
+                {topic_placeholder, encodePlaceholder(std::move(param_type_result.params))},
                 {topic_select_list, encodeSelectList(std::move(column_type_result))},
                 {bound_user_type, encodeBoundUserType(std::move(param_result.param_user_types), std::move(param_result.sel_list_user_types))}
             });

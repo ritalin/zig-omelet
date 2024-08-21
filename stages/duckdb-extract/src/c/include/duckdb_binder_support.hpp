@@ -3,6 +3,7 @@
 #include <duckdb.hpp>
 #include "zmq_worker_support.hpp"
 #include "duckdb_nullable_lookup.hpp"
+#include "cbor_encode.hpp"
 
 namespace worker {
 
@@ -71,9 +72,10 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, const UserTypeLookup<PositionalParam>& user_type_lookup) -> ParamResolveResult;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> std::vector<ColumnEntry>;
-
 auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup;
-
 auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeEntry>;
+
+auto pickEnumUserType(const duckdb::LogicalType &ty, const std::string& type_name) -> UserTypeEntry;
+auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void;
 
 }

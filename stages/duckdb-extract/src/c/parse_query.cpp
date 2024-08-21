@@ -119,6 +119,21 @@ static auto encodeBoundUserType(UserTypeLookup<PositionalParam>&& param_user_typ
     return std::move(encoder.rawBuffer());
 }
 
+static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_types, std::vector<UserTypeEntry>&& sel_list_anon_types) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(param_anon_types.size() + sel_list_anon_types.size());
+
+    for (auto& entry: param_anon_types) {
+        encodeUserType(encoder, entry);
+    }
+    for (auto& entry: sel_list_anon_types) {
+        encodeUserType(encoder, entry);
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
 auto DescribeWorker::messageChannel(const std::string& from) -> ZmqChannel {
     return ZmqChannel(this->socket, this->id, from);
 }
@@ -161,7 +176,8 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
                 {topic_query, std::vector<char>(q.cbegin(), q.cend())},
                 {topic_placeholder, encodePlaceholder(std::move(param_type_result.params))},
                 {topic_select_list, encodeSelectList(std::move(column_type_result))},
-                {bound_user_type, encodeBoundUserType(std::move(param_result.param_user_types), std::move(param_result.sel_list_user_types))}
+                {bound_user_type, encodeBoundUserType(std::move(param_result.param_user_types), std::move(param_result.sel_list_user_types))},
+                {anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), {})}
             });
             zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
         }

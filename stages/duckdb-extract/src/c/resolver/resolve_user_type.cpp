@@ -25,21 +25,6 @@ private:
     UserTypeEntry& entry;
 };
 
-static auto resolveEnumType(UserTypeEntry& entry, duckdb::CreateTypeInfo& info) -> void {
-    entry.kind = UserTypeKind::Enum;
-    entry.name = info.name;
-
-    auto& ext_info = info.type.AuxInfo()->Cast<duckdb::EnumTypeInfo>();
-    auto members = duckdb::FlatVector::GetData<duckdb::string_t>(ext_info.GetValuesInsertOrder());
-    auto member_size = ext_info.GetDictSize();
-
-    entry.fields.reserve(member_size);
-
-    for (const auto *it = members; it != members + member_size; ++it) {
-        entry.fields.emplace_back(it->GetString());
-    }
-}
-
 auto CreateOperatorVisitor::VisitOperator(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> void {
     switch (op->type) {
     case duckdb::LogicalOperatorType::LOGICAL_CREATE_TYPE: 
@@ -48,7 +33,7 @@ auto CreateOperatorVisitor::VisitOperator(duckdb::unique_ptr<duckdb::LogicalOper
             auto& info = op_create.info->Cast<duckdb::CreateTypeInfo>();
             if (info.type.Contains(duckdb::LogicalTypeId::ENUM)) {
                 this->handled = true;
-                resolveEnumType(this->entry, info);
+                this->entry = pickEnumUserType(info.type, info.name);
             }
             else {
                 this->channel.warn(std::format("[TODO] Unsupported user defined type: {}", magic_enum::enum_name(info.type.id())));

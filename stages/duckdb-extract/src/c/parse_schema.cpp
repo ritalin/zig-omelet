@@ -20,37 +20,9 @@ private:
     std::optional<void*> socket;
 };
 
-static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
-    switch (kind) {
-    case UserTypeKind::Enum: return std::move(std::to_string('enum'));
-    }
-}
-
 static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
     CborEncoder encoder;
-
-    encoder.addArrayHeader(2);
-    type_header: {
-        type_kind: {
-            encoder.addString(userTypeKindAsText(entry.kind));
-        }
-        type_name: {
-            encoder.addString(entry.name);
-        }
-    }
-    type_bodies: {
-        encoder.addArrayHeader(entry.fields.size());
-        for (auto& field: entry.fields) {
-            encoder.addArrayHeader(2);
-            encoder.addString(field.field_name);
-            if (field.field_type) {
-                encoder.addString(field.field_type.value());
-            }
-            else {
-                encoder.addNull();
-            }
-        }
-    }
+    encodeUserType(encoder, entry);
 
     return std::move(encoder.rawBuffer());
 }

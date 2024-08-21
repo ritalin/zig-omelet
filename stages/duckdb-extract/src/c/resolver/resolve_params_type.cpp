@@ -3,17 +3,11 @@
 #include <duckdb.hpp>
 #include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/expression/list.hpp>
-#include <duckdb/common/extra_type_info.hpp>
-#include <duckdb/common/types/vector.hpp>
 
 #include <magic_enum/magic_enum.hpp>
 
 #include "duckdb_params_collector.hpp"
 #include "duckdb_binder_support.hpp"
-
-// #include <duckdb/parser/query_node/list.hpp>
-// #include <duckdb/parser/expression/list.hpp>
-// #include <duckdb/catalog/catalog_entry/type_catalog_entry.hpp>
 
 namespace worker {
 
@@ -62,27 +56,6 @@ auto LogicalParameterVisitor::hasAnyType(const PositionalParam& position, const 
     return hasAnyTypeInternal(this->param_types, position, type_name);
 }
 
-static auto collectAnonymousUserType(const duckdb::BoundParameterExpression &expr, const std::string type_name) -> UserTypeEntry {
-    auto *ext_info = expr.return_type.AuxInfo();
-
-    std::vector<UserTypeEntry::Member> fields;
-    if (ext_info->type == duckdb::ExtraTypeInfoType::ENUM_TYPE_INFO) {
-        auto& enum_ext_info = ext_info->Cast<duckdb::EnumTypeInfo>();
-        auto values = duckdb::FlatVector::GetData<duckdb::string_t>(enum_ext_info.GetValuesInsertOrder());
-        auto size = enum_ext_info.GetDictSize();;
-        
-        for (auto iter = values; iter != values + size; ++iter) {
-            fields.push_back({.field_name = iter->GetString()});
-        }
-    }
-
-    return {
-        .kind = UserTypeKind::Enum,
-        .name = type_name,
-        .fields = fields,
-    };
-}
-
 static std::unordered_set<duckdb::LogicalTypeId> user_type_id_set{duckdb::LogicalTypeId::ENUM};
 
 auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
@@ -93,8 +66,8 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
         }
         else {
             // process as anonymous user type
-            type_name = std::format("{}#{}", magic_enum::enum_name(expr.return_type.id()), expr.identifier);
-            this->anon_types.push_back(collectAnonymousUserType(expr, type_name));
+            type_name = std::format("Param::{}#{}", magic_enum::enum_name(expr.return_type.id()), expr.identifier);
+            this->anon_types.push_back(pickEnumUserType(expr.return_type, type_name));
         }
     }
     else {
@@ -409,9 +382,9 @@ TEST_CASE("Resolve enum parameter#1 (anonymous/select-list)") {
     std::string sql("select $vis::enum('hide','visible') as vis");
 
     ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","ENUM#1"}};
+    ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
     AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
+        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
     };
 
     runResolveParamType(sql, {}, lookup, bound_types, anon_types);
@@ -434,9 +407,9 @@ TEST_CASE("Resolve enum parameter#3 (anonymous/where)") {
     std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
 
     ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","ENUM#1"}};
+    ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
     AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
+        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
     };
 
     runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);

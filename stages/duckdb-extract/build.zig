@@ -148,11 +148,12 @@ pub fn build(b: *std.Build) void {
             // running the unit tests.
             const test_step = b.step("test", "Run unit tests");
             test_step.dependOn(&run_exe_unit_tests.step);
+
+            test_artifact: {
+                test_step.dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+                break:test_artifact;
+            }
             break:test_runner;
-        }
-        test_artifact: {
-            b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
-            break:test_artifact;
         }
         break:test_module;
     }
@@ -187,14 +188,15 @@ fn createWorkerModule(
                 "parse_query.cpp",
                 "parse_schema.cpp",
                 "duckdb_database.cpp",
-                "zmq_worker_support.cpp",
                 "duckdb_params_collector.cpp",
                 "sql_statement/select_statement.cpp",
                 "resolver/resolve_params_type.cpp",
                 "resolver/resolve_select_list.cpp",
                 "resolver/resolve_column_binding.cpp",
                 "resolver/resolve_select_statement_nullable.cpp",
-                "resolver/resolve_user_type.cpp"
+                "resolver/resolve_user_type.cpp",
+                "supports/zmq_worker_support.cpp",
+                "supports/user_type_support.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

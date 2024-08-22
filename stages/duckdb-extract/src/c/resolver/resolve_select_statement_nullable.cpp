@@ -50,7 +50,7 @@ static auto tryGetColumnRefNullabilities(const duckdb::LogicalGet& op, ZmqChanne
             );
         })
     ;
-    return std::move(ColumnRefNullabilityMap(constraints.begin(), constraints.end()));
+    return ColumnRefNullabilityMap(constraints.begin(), constraints.end());
 }
 
 auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {

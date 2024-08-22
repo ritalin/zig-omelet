@@ -13,7 +13,7 @@ namespace worker {
 
 class LogicalParameterVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-    LogicalParameterVisitor(ParamNameLookup&& names_ref, const UserTypeLookup<PositionalParam>& user_types_ref): names(names_ref), user_types(user_types_ref) {}
+    LogicalParameterVisitor(ParamNameLookup&& names_ref): names(names_ref) {}
 public:
     auto VisitResult() -> ParamResolveResult;
 protected:
@@ -22,9 +22,9 @@ private:
     auto hasAnyType(const PositionalParam& position, const std::string& type_name) -> bool;
 private:
     ParamNameLookup names;
-    UserTypeLookup<PositionalParam> user_types;
-    std::unordered_map<PositionalParam, ParamEntry> parameters;
     std::unordered_multimap<PositionalParam, std::string> param_types;
+    std::unordered_map<PositionalParam, ParamEntry> parameters;
+    std::vector<std::string> user_type_names;
     std::vector<UserTypeEntry> anon_types;
 };
 
@@ -34,7 +34,11 @@ auto LogicalParameterVisitor::VisitResult() -> ParamResolveResult {
     std::vector<ParamEntry> params(view.begin(), view.end());
     std::ranges::sort(params, {}, &ParamEntry::sort_order);
 
-    return {.params = std::move(params), .anon_types = std::move(this->anon_types)};
+    return {
+        .params = std::move(params), 
+        .user_type_names = std::move(user_type_names),
+        .anon_types = std::move(this->anon_types)
+    };
 }
 
 static inline auto hasAnyTypeInternal(const std::unordered_multimap<PositionalParam, std::string>& param_types, const PositionalParam& position, const std::string& type_name) -> bool {
@@ -56,15 +60,12 @@ auto LogicalParameterVisitor::hasAnyType(const PositionalParam& position, const 
     return hasAnyTypeInternal(this->param_types, position, type_name);
 }
 
-static std::unordered_set<duckdb::LogicalTypeId> user_type_id_set{duckdb::LogicalTypeId::ENUM};
-
 auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     std::string type_name;
-    if (user_type_id_set.contains(expr.return_type.id())) {
-        if (this->names.contains(expr.identifier) && this->user_types.contains(expr.identifier)) {
-            type_name = this->user_types.at(expr.identifier);
-        }
-        else {
+
+    if (isEnumUserType(expr.return_type)) {
+        type_name = userTypeName(expr.return_type);
+        if (type_name == "") {
             // process as anonymous user type
             type_name = std::format("Param::{}#{}", magic_enum::enum_name(expr.return_type.id()), expr.identifier);
             this->anon_types.push_back(pickEnumUserType(expr.return_type, type_name));
@@ -94,8 +95,8 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
     return nullptr;
 }
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, const UserTypeLookup<PositionalParam>& user_type_lookup) -> ParamResolveResult {
-    LogicalParameterVisitor visitor(std::move(name_lookup), std::move(user_type_lookup));
+auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup) -> ParamResolveResult {
+    LogicalParameterVisitor visitor(std::move(name_lookup));
     visitor.VisitOperator(*op);
 
     return visitor.VisitResult();
@@ -111,6 +112,8 @@ auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamName
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+
+#include "duckdb_database.hpp"
 
 using namespace worker;
 using namespace Catch::Matchers;
@@ -129,17 +132,63 @@ TEST_CASE("Typename checking#1 (same type)") {
     }
 }
 
+static auto expectAnonymousUserType(const UserTypeEntry& actual, const UserTypeEntry& expect, size_t i, size_t depth) -> void {
+    anon_type_kind: {
+        UNSCOPED_INFO(std::format("[{}] anon type kind#{}", depth, i));
+        CHECK(actual.kind == expect.kind);
+    }
+    anon_type_name: {
+        UNSCOPED_INFO(std::format("[{}] anon type named#{}", depth, i));
+        CHECK_THAT(actual.name, Equals(expect.name));
+    }
+    anon_type_field_entries: {
+        anonymous_type_field_size: {
+            UNSCOPED_INFO(std::format("[{}] Parameter size#{}", depth, i));
+            REQUIRE(actual.fields.size() == expect.fields.size());
+        }
+
+        auto field_view = expect.fields | std::views::transform([](auto f) {
+            return std::pair<std::string, UserTypeEntry::Member>(f.field_name, f);
+        });
+        std::unordered_map<std::string, UserTypeEntry::Member> field_lookup(field_view.begin(), field_view.end());
+
+        for (int j = 0; auto& field: actual.fields) {
+            has_anon_field: {
+                UNSCOPED_INFO(std::format("[{}] valid field named#{} of anon type#{}", depth, j, i));
+                REQUIRE(field_lookup.contains(field.field_name));
+            }
+
+            auto& expect_field = field_lookup.at(field.field_name);
+
+            anon_type_field_name: {
+                UNSCOPED_INFO(std::format("[{}] field named#{} of anon type#{}", depth, j, i));
+                CHECK_THAT(field.field_name, Equals(expect_field.field_name));
+            }
+            anon_type_field_type: {
+                UNSCOPED_INFO(std::format("field type#{} of anon type#{}", j, i));
+                CHECK((bool)field.field_type == (bool)expect_field.field_type);
+
+                if (field.field_type) {
+                    expectAnonymousUserType(*field.field_type, *expect_field.field_type, i, depth+1);
+                }
+            }
+            ++j;
+        }
+    }
+}
+
 static auto runResolveParamType(
     const std::string& sql, const std::vector<std::string>& schemas, 
     const ParamNameLookup& name_lookup, const ParamTypeLookup& param_types, AnonTypeExpects anon_type_expects) -> void 
 {
-    auto db = duckdb::DuckDB(nullptr);
-    auto conn = duckdb::Connection(db);
+    auto db = Database();
+    auto conn = db.connect();
 
     prepare_schema: {
         for (auto& schema: schemas) {
             conn.Query(schema);
         }
+        db.retainUserTypeName(conn);
     }
 
     auto stmts = conn.ExtractStatements(sql);
@@ -156,7 +205,7 @@ static auto runResolveParamType(
     ParamCollectionResult walk_result;
     try {
         conn.BeginTransaction();
-        walk_result = std::move(walkSQLStatement(stmt, ZmqChannel::unitTestChannel()));
+        walk_result = walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
         bind_result = binder->Bind(*stmt->Copy());
         conn.Commit();
     }
@@ -165,7 +214,7 @@ static auto runResolveParamType(
         throw;
     }
 
-    auto [resolve_result, anon_types] = resolveParamType(bind_result.plan, std::move(walk_result.names), walk_result.param_user_types);
+    auto [resolve_result, user_type_names, anon_types] = resolveParamType(bind_result.plan, std::move(walk_result.names));
 
     parameter_size: {
         UNSCOPED_INFO("Parameter size");
@@ -212,51 +261,7 @@ static auto runResolveParamType(
                 REQUIRE(lookup.contains(entry.name));
             }
 
-            auto& expect = lookup[entry.name];
-
-            anon_type_kind: {
-                UNSCOPED_INFO(std::format("anon type kind#{}", i));
-                CHECK(entry.kind == expect.kind);
-            }
-            anon_type_name: {
-                UNSCOPED_INFO(std::format("anon type named#{}", i));
-                CHECK_THAT(entry.name, Equals(expect.name));
-            }
-            anon_type_field_entries: {
-                anonymous_type_field_size: {
-                    UNSCOPED_INFO("Parameter size");
-                    REQUIRE(entry.fields.size() == expect.fields.size());
-                }
-
-                auto field_view = expect.fields | std::views::transform([](auto f) {
-                    return std::pair<std::string, UserTypeEntry::Member>(f.field_name, f);
-                });
-                std::unordered_map<std::string, UserTypeEntry::Member> field_lookup(field_view.begin(), field_view.end());
-
-                for (int j = 0; auto& field: entry.fields) {
-                    has_anon_field: {
-                        UNSCOPED_INFO(std::format("valid field named#{} of anon type#{}", j, i));
-                        REQUIRE(field_lookup.contains(field.field_name));
-                    }
-
-                    auto& expect_field = field_lookup[field.field_name];
-
-                    anon_type_field_name: {
-                        UNSCOPED_INFO(std::format("field named#{} of anon type#{}", j, i));
-                        CHECK_THAT(field.field_name, Equals(expect_field.field_name));
-                    }
-                    anon_type_field_type: {
-                        UNSCOPED_INFO(std::format("field type#{} of anon type#{}", j, i));
-                        CHECK(field.field_type.has_value() == expect_field.field_type.has_value());
-
-                        if (field.field_type.has_value()) {
-                            CHECK_THAT(field.field_type.value(), Equals(expect_field.field_type.value()));
-                        }
-                    }
-                    ++j;
-                }
-            }
-            ++i;
+            expectAnonymousUserType(entry, lookup.at(entry.name), i++, 0);
         }
     }
 }
@@ -379,15 +384,16 @@ TEST_CASE("Resolve duplicated named parameter on select list and where clause wi
 }
 
 TEST_CASE("Resolve enum parameter#1 (anonymous/select-list)") {
+    std::string schema("CREATE TYPE Visibility as ENUM ('hide','visible')");
     std::string sql("select $vis::enum('hide','visible') as vis");
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
     AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
+        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
     };
 
-    runResolveParamType(sql, {}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#2 (predefined/select-list)") {
@@ -401,22 +407,34 @@ TEST_CASE("Resolve enum parameter#2 (predefined/select-list)") {
     runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
 }
 
-TEST_CASE("Resolve enum parameter#3 (anonymous/where)") {
+TEST_CASE("Resolve enum parameter#3 (anonymous/where#1)") {
     std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
-    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
+    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis ENUM('hide', 'visible') not null)");
     std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
     AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { {.field_name = "hide"}, {.field_name = "visible"} }},
+        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
     };
 
     runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
 }
 
-TEST_CASE("Resolve enum parameter#3 (predefined/where)") {
-    std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
+TEST_CASE("Resolve enum parameter#4 (anonymous/where#2)") {
+    std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
+    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
+    std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
+
+    ParamNameLookup lookup{{"1","vis"}};
+    ParamTypeLookup bound_types{{"1","Visibility"}};
+    AnonTypeExpects anon_types{};
+
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
+}
+
+TEST_CASE("Resolve enum parameter#5 (predefined/where)") {
+    std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
     std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
     std::string sql("select * from Control where vis = $vis::Visibility");
 

@@ -13,6 +13,7 @@ public:
 public:
     auto connect() -> duckdb::Connection;
     auto loadSchemaAll(const std::filesystem::path& schema_dir) -> WorkerResultCode;
+    auto retainUserTypeName(duckdb::Connection& conn) -> void;
 private:
     duckdb::DuckDB db;
 };

@@ -79,7 +79,7 @@ auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel
     CreateOperatorVisitor visitor(entry, channel);
     visitor.VisitOperator(op);
 
-    return std::move(visitor.handled ? std::make_optional(entry) : std::nullopt);
+    return visitor.handled ? std::make_optional<UserTypeEntry>(entry) : std::nullopt;
 }
 
 }
@@ -136,6 +136,39 @@ static auto runUnsuportedSchema(const std::string& sql, const std::vector<std::s
     }
 }
 
+static auto expectUserType(const UserTypeEntry& actial, const UserTypeEntry& expect, size_t depth) -> void {
+    type_kind: {
+        UNSCOPED_INFO(std::format("[{}] User type kind", depth));
+        CHECK(actial.kind == expect.kind);
+    }
+    type_name: {
+        UNSCOPED_INFO(std::format("[{}] User type name", depth));
+        CHECK_THAT(actial.name, Equals(expect.name));
+    }
+    fields: {
+        UNSCOPED_INFO(std::format("[{}] field size", depth));
+        REQUIRE(actial.fields.size() == expect.fields.size());
+
+        for (int i = 0; auto& expect_field: expect.fields) {
+            auto& x = actial.fields[i];
+            UNSCOPED_INFO(std::format("[{}] field#{}", depth, i+1));
+            field_name: {
+                UNSCOPED_INFO(std::format("[{}] field name", depth));
+                CHECK_THAT(x.field_name, Equals(expect_field.field_name));
+            }
+            field_type: {
+                UNSCOPED_INFO(std::format("[{}] field type", depth));
+                CHECK((bool)x.field_type == (bool)expect_field.field_type);
+
+                if (x.field_type) {
+                    expectUserType(*x.field_type, *expect_field.field_type, depth+1);
+                }
+            }
+            ++i;
+        }
+    }
+}
+
 static auto runResolveUserType(const std::string& sql, UserTypeKind kind, const std::string& type_name, const std::vector<UserTypeEntry::Member>& expect_fields) -> void {
     auto entry = runResolveUserTypeInternal(sql, {});
 
@@ -143,36 +176,7 @@ static auto runResolveUserType(const std::string& sql, UserTypeKind kind, const 
         UNSCOPED_INFO("has entry");
         REQUIRE((bool)entry);
     }
-    type_kind: {
-        UNSCOPED_INFO("User type kind");
-        CHECK(entry.value().kind == kind);
-    }
-    type_name: {
-        UNSCOPED_INFO("User type name");
-        CHECK_THAT(entry.value().name, Equals(type_name));
-    }
-    fields: {
-        UNSCOPED_INFO("field size");
-        REQUIRE(entry.value().fields.size() == expect_fields.size());
-
-        for (int i = 0; auto& expect: expect_fields) {
-            auto& x = entry.value().fields[i];
-            UNSCOPED_INFO("field#" << i+1);
-            field_name: {
-                UNSCOPED_INFO("field name");
-                CHECK_THAT(x.field_name, Equals(expect.field_name));
-            }
-            field_type: {
-                UNSCOPED_INFO("field type");
-                CHECK(x.field_type.has_value() == expect.field_type.has_value());
-
-                if (x.field_type.has_value()) {
-                    CHECK_THAT(x.field_type.value(), Equals(expect.field_type.value()));
-                }
-            }
-            ++i;
-        }
-    }
+    expectUserType(entry.value(), {.kind = kind, .name = type_name, .fields = expect_fields}, 0);
 }
 
 TEST_CASE("Unsupported schema#1 (table)") {
@@ -205,8 +209,8 @@ TEST_CASE("Extract enum type") {
     std::string sql("create type Visibility as ENUM ('hide', 'visible')");
 
     std::vector<UserTypeEntry::Member> expects{
-        {.field_name = "hide", .field_type = std::nullopt},
-        {.field_name = "visible", .field_type = std::nullopt},
+        UserTypeEntry::Member("hide"),
+        UserTypeEntry::Member("visible"),
     };
     runResolveUserType(sql, UserTypeKind::Enum, "Visibility", expects);
 }

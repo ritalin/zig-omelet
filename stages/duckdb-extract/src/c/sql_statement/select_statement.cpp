@@ -47,16 +47,6 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
         {
             auto& cast_expr = expr->Cast<duckdb::CastExpression>();
             walkExpressionInternal(collector, cast_expr.child, depth+1);
-
-            user_type_name: {
-                if (cast_expr.child->expression_class ==  duckdb::ExpressionClass::PARAMETER) {
-                    auto user_type_name = pickUserTypeName(cast_expr);
-                    if (user_type_name) {
-                        auto& child_expr = cast_expr.child->Cast<duckdb::ParameterExpression>();
-                        collector.paramUserType(child_expr.identifier, user_type_name.value());
-                    }
-                }
-            }
         }
         break;
     case duckdb::ExpressionClass::COMPARISON:
@@ -276,8 +266,6 @@ auto ParameterCollector::walkSelectStatement(duckdb::SelectStatement& stmt) -> P
     return {
         .type = StatementType::Select, 
         .names = swapMapEntry(this->name_map), 
-        .param_user_types = std::move(this->param_user_type_map),
-        .sel_list_user_types = std::move(this->sel_list_user_type_map),
     };
 }
 
@@ -299,9 +287,7 @@ using namespace Catch::Matchers;
 auto runTest(
     const std::string sql, 
     const std::string expected, 
-    const ParamNameLookup& lookup, 
-    const UserTypeLookup<PositionalParam>& param_user_types, 
-    const UserTypeLookup<duckdb::idx_t>& sel_list_user_types) -> void 
+    const ParamNameLookup& lookup) -> void 
 {
     auto database = duckdb::DuckDB(nullptr);
     auto conn = duckdb::Connection(database);
@@ -345,26 +331,6 @@ auto runTest(
                 }
             }
         }
-        param_user_type_entry: {
-            UNSCOPED_INFO("user types size");
-            REQUIRE(param_result.param_user_types.size() == param_user_types.size());
-
-            UNSCOPED_INFO("user type entries");
-
-            auto view = param_result.param_user_types | std::views::keys;
-            auto keys = std::vector<PositionalParam>(view.begin(), view.end());
-
-            for (int i = 1; auto [positional, type_name]: param_user_types) {
-                user_type_positional: {
-                    UNSCOPED_INFO(std::format("positional key exists#{}", i));
-                    CHECK_THAT(keys, VectorContains(positional));
-                }
-                user_type_name: {
-                    UNSCOPED_INFO(std::format("named value exists#{}", i));
-                    CHECK_THAT(type_name, Equals(param_user_types.at(positional)));
-                }
-            }
-        }
     }
 }
 
@@ -372,160 +338,128 @@ TEST_CASE("Positional parameter") {
     std::string sql("select $1 as a from Foo");
     std::string expected("SELECT $1 AS a FROM Foo");
     ParamNameLookup lookup{ {"1","1"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
 
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Positional parameter without alias") {
     std::string sql("select $1 from Foo where kind = $2");
     std::string expected("SELECT $1 FROM Foo WHERE (kind = $2)");
     ParamNameLookup lookup{ {"1","1"}, {"2","2"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
     
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Positional parameter underdering") {
     std::string sql("select $2 as a from Foo where kind = $1");
     std::string expected("SELECT $2 AS a FROM Foo WHERE (kind = $1)");
     ParamNameLookup lookup{ {"2","2"}, {"1","1"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
 
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Auto incremental positional parameter") {
     std::string sql("select $2 as a, ? as b from Foo where kind = $1");
     std::string expected("SELECT $2 AS a, $3 AS b FROM Foo WHERE (kind = $1)");
     ParamNameLookup lookup{ {"2","2"}, {"3","3"}, {"1","1"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
 
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter") {
     std::string sql("select $value as a from Foo where kind = $kind");
     std::string expected("SELECT $1 AS a FROM Foo WHERE (kind = $2)");
     ParamNameLookup lookup{ {"1","value"}, {"2", "kind"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
 
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter with type cast") {
     std::string sql("select $value::int as a from Foo");
     std::string expected("SELECT CAST($1 AS INTEGER) AS a FROM Foo");
     ParamNameLookup lookup{ {"1","value"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter without alias") {
     std::string sql("select $v, v from Foo");
     std::string expected(R"(SELECT $1 AS "$v", v FROM Foo)");
     ParamNameLookup lookup{ {"1","v"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter with type cast without alias") {
     std::string sql("select $user_name::text, user_name from Foo");
     std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS "CAST($user_name AS VARCHAR)", user_name FROM Foo)#");
     ParamNameLookup lookup{ {"1","user_name"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
 
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named duplicated parameter with type cast with alias") {
     std::string sql("select $user_name::text u1, $u2_id::int as u2_id, $user_name::text u2, user_name from Foo");
     std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS u1, CAST($2 AS INTEGER) AS u2_id, CAST($1 AS VARCHAR) AS u2, user_name FROM Foo)#");
     ParamNameLookup lookup{ {"1","user_name"}, {"2","u2_id"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter as expr without alias") {
     std::string sql("select $x::int + $y::int from Foo");
     std::string expected(R"#(SELECT (CAST($1 AS INTEGER) + CAST($2 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#");
     ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter include betteen without alias") {
     std::string sql("select $v::int between $x::int and $y::int from Foo");
     std::string expected(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($2 AS INTEGER) AND CAST($3 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#");
     ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter include case expr without alias#1") {
     std::string sql("select case when $v::int = 0 then $x::int else $y::int end from Foo");
     std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
     ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter include case expr without alias#2") {
     std::string sql("select case $v::int when 99 then $y::int else $x::int end from Foo");
     std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($y AS INTEGER)) ELSE CAST($x AS INTEGER) END" FROM Foo)#");
     ParamNameLookup lookup{ {"1","v"}, {"2","y"}, {"3","x"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter include logical operator without alias") {
     std::string sql("select $x::int = 123 AND $y::text = 'abc' from Foo");
     std::string expected(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($2 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#");
     ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in function args without alias") {
     std::string sql("select string_agg(s, $sep::text) from Foo");
     std::string expected(R"#(SELECT string_agg(s, CAST($1 AS VARCHAR)) AS "string_agg(s, CAST($sep AS VARCHAR))" FROM Foo)#");
     ParamNameLookup lookup{ {"1","sep"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in function args without alias#2") {
     std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
     std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM range(0, 360, 30) AS t(n))#");
     ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in subquery without alias") {
@@ -535,10 +469,8 @@ TEST_CASE("Named parameter in subquery without alias") {
     )#");
     std::string expected(R"#(SELECT (SELECT ((Foo.v + Point.x) + CAST($1 AS INTEGER)) FROM Point) AS "(SELECT ((Foo.v + Point.x) + CAST($offset AS INTEGER)) FROM Point)" FROM Foo)#");
     ParamNameLookup lookup{ {"1","offset"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter without alias in exists clause") {
@@ -548,10 +480,8 @@ TEST_CASE("Named parameter without alias in exists clause") {
     )#");
     std::string expected(R"#(SELECT EXISTS(SELECT ((Foo.v - Point.x) > CAST($1 AS INTEGER)) FROM Point) AS "EXISTS(SELECT ((Foo.v - Point.x) > CAST($diff AS INTEGER)) FROM Point)" FROM Foo)#");
     ParamNameLookup lookup{ {"1","diff"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter without alias in any clause") {
@@ -560,40 +490,32 @@ TEST_CASE("Named parameter without alias in any clause") {
     )#");
     std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($step AS INTEGER))))")#");
     ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter without alias in any clause#2") {
     std::string sql(R"#(select $v::int = any(range(0, 10, $step::int)))#");
     std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($step AS INTEGER)))))")#");
     ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in table function args") {
     std::string sql("select id * 101 from range(0, 10, $step::int) t(id)");
     std::string expected(R"#(SELECT (id * 101) FROM range(0, 10, CAST($1 AS INTEGER)) AS t(id))#");
     ParamNameLookup lookup{ {"1","step"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in joined condition") {
     std::string sql("select * from Foo join Bar on Foo.v = Bar.v and Bar.x = $x::int");
     std::string expected("SELECT * FROM Foo INNER JOIN Bar ON (((Foo.v = Bar.v) AND (Bar.x = CAST($1 AS INTEGER))))");
     ParamNameLookup lookup{ {"1","x"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in derived table (subquery)") {
@@ -604,10 +526,8 @@ TEST_CASE("Named parameter in derived table (subquery)") {
     )#");
     std::string expected(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($2 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
     ParamNameLookup lookup{ {"1","v"}, {"2","s"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in where clause") {
@@ -617,10 +537,8 @@ TEST_CASE("Named parameter in where clause") {
     )#");
     std::string expected("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($2 AS INTEGER)))");
     ParamNameLookup lookup{ {"1","v"}, {"2","k"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in group by clause") {
@@ -630,10 +548,8 @@ TEST_CASE("Named parameter in group by clause") {
     )#");
     std::string expected("SELECT count(DISTINCT *) AS c FROM Foo GROUP BY xyz, fmod(id, CAST($1 AS INTEGER))");
     ParamNameLookup lookup{ {"1","weeks"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in having clause") {
@@ -643,10 +559,8 @@ TEST_CASE("Named parameter in having clause") {
     )#");
     std::string expected("SELECT count(DISTINCT *) AS c FROM Foo HAVING (fmod(id, CAST($1 AS INTEGER)) > 0)");
     ParamNameLookup lookup{ {"1","weeks"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause") {
@@ -656,10 +570,8 @@ TEST_CASE("Named parameter in order by clause") {
     )#");
     std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER))");
     ParamNameLookup lookup{ {"1","weeks"} };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause (plus limit/offset#1)") {
@@ -675,10 +587,8 @@ TEST_CASE("Named parameter in order by clause (plus limit/offset#1)") {
         {"2","off"},
         {"3","lim"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause#2 (plus limit/offset#2)") {
@@ -694,10 +604,8 @@ TEST_CASE("Named parameter in order by clause#2 (plus limit/offset#2)") {
         {"2","off"},
         {"3","lim"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause#3 (plus limit only)") {
@@ -711,10 +619,8 @@ TEST_CASE("Named parameter in order by clause#3 (plus limit only)") {
         {"1","weeks"},
         {"2","lim"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause#4 (plus offset only)") {
@@ -728,10 +634,8 @@ TEST_CASE("Named parameter in order by clause#4 (plus offset only)") {
         {"1","weeks"},
         {"2","off"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause#5 (plus percentage limit/offset)") {
@@ -747,10 +651,8 @@ TEST_CASE("Named parameter in order by clause#5 (plus percentage limit/offset)")
         {"2","off"},
         {"3","lim"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter in order by clause#6 (plus percent limit only)") {
@@ -764,10 +666,8 @@ TEST_CASE("Named parameter in order by clause#6 (plus percent limit only)") {
         {"1","weeks"},
         {"2","lim"},
     };
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Positional enum parameter (anonymous/select-list)") {
@@ -775,10 +675,8 @@ TEST_CASE("Positional enum parameter (anonymous/select-list)") {
 
     std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
     ParamNameLookup lookup{{"1","1"}};
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named enum parameter (anonymous/select-list)") {
@@ -786,10 +684,8 @@ TEST_CASE("Named enum parameter (anonymous/select-list)") {
 
     std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
     ParamNameLookup lookup{{"1","vis"}};
-    UserTypeLookup<PositionalParam> param_user_types{};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Positional enum parameter (predefined/select-list)") {
@@ -797,10 +693,8 @@ TEST_CASE("Positional enum parameter (predefined/select-list)") {
 
     std::string expected("SELECT CAST($1 AS Visibility) AS vis");
     ParamNameLookup lookup{{"1","1"}};
-    UserTypeLookup<PositionalParam> param_user_types{{"1","Visibility"}};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{{0, "Visibility"}};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named enum parameter (predefined/select-list)") {
@@ -808,10 +702,8 @@ TEST_CASE("Named enum parameter (predefined/select-list)") {
 
     std::string expected("SELECT CAST($1 AS Visibility) AS vis");
     ParamNameLookup lookup{{"1","vis"}};
-    UserTypeLookup<PositionalParam> param_user_types{{"1","Visibility"}};
-    UserTypeLookup<duckdb::idx_t> sel_list_user_types{{0, "Visibility"}};
    
-    runTest(sql, expected, lookup, param_user_types, sel_list_user_types);
+    runTest(sql, expected, lookup);
 }
 
 TEST_CASE("Named parameter ????") {

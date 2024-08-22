@@ -4,9 +4,18 @@
 #include <duckdb/common/extra_type_info.hpp>
 #include <duckdb/common/types/vector.hpp>
 
-#include "duckdb_binder_support.hpp"
+#include "user_type_support.hpp"
 
 namespace worker {
+
+auto isEnumUserType(const duckdb::LogicalType &ty) -> bool {
+    return ty.id() == duckdb::LogicalTypeId::ENUM;
+}
+
+auto userTypeName(const duckdb::LogicalType& ty) -> std::string {
+    return ty.AuxInfo()->alias;
+}
+
 
 auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_name) -> UserTypeEntry {
     auto *ext_info = ty.AuxInfo();
@@ -18,20 +27,20 @@ auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_nam
         auto size = enum_ext_info.GetDictSize();;
         
         for (auto iter = values; iter != values + size; ++iter) {
-            fields.push_back({.field_name = iter->GetString()});
+            fields.push_back(UserTypeEntry::Member(iter->GetString()));
         }
     }
 
     return {
         .kind = UserTypeKind::Enum,
         .name = type_name,
-        .fields = fields,
+        .fields = std::move(fields),
     };
 }
 
 static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     switch (kind) {
-    case UserTypeKind::Enum: return std::move(std::to_string('enum'));
+    case UserTypeKind::Enum: return std::to_string('enum');
     }
 }
 
@@ -51,7 +60,7 @@ auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void {
             encoder.addArrayHeader(2);
             encoder.addString(field.field_name);
             if (field.field_type) {
-                encoder.addString(field.field_type.value());
+                encodeUserType(encoder, *field.field_type);
             }
             else {
                 encoder.addNull();

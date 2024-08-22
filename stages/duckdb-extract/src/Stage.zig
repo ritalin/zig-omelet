@@ -179,6 +179,17 @@ fn tryLoadSchema(self: *Self, schema_dir_set: []const core.FilePath) !bool {
         }
     }
 
+    user_type: {
+        const err = c.retainUserTypeName(self.database);
+        switch (err) {
+            c.invalid_schema_catalog => {
+                try self.logger.log(.err, "Launch failed. Invalid schema catalog.", .{});
+            },
+            else => {},
+        }
+        break:user_type;
+    }
+
     return true;
 }
 

@@ -72,8 +72,6 @@ auto bindTypeToTableRef(duckdb::ClientContext& context, duckdb::unique_ptr<duckd
     binder->parameters = &parameters;
 
     return bindTypeToTableRefInternal(binder, select_stmt.node->Cast<duckdb::SelectNode>());
-
-    // return std::move(binder->Bind(*node->Cast<duckdb::SelectNode>().from_table));
 }
 
 auto TableCatalogResolveVisitor::VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void {

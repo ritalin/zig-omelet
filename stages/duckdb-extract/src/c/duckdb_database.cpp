@@ -3,8 +3,11 @@
 #include <cctype>
 
 #include <duckdb.hpp>
+#include <duckdb/catalog/catalog_entry/type_catalog_entry.hpp>
+#include <duckdb/common/extra_type_info.hpp>
 
 #include "duckdb_database.hpp"
+#include "duckdb_binder_support.hpp"
 #include "duckdb_worker.h"
 
 namespace worker {
@@ -66,7 +69,29 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
     return no_error;
 }
 
+auto Database::retainUserTypeName(duckdb::Connection& conn) -> void {
+    conn.BeginTransaction();
+    try {
+        auto schemas = duckdb::Catalog::GetAllSchemas(*conn.context);
+        for (auto &schema: schemas) {
+            schema.get().Scan(*conn.context, duckdb::CatalogType::TYPE_ENTRY, [&](duckdb::CatalogEntry &entry) { 
+                if (! entry.internal) {
+                    auto& type_entry = entry.Cast<duckdb::TypeCatalogEntry>(); 
+                    type_entry.user_type.GetAuxInfoShrPtr()->alias = type_entry.name;
+                }
+            });
+        };
+        conn.Commit();
+    }
+    catch(...) {
+        conn.Rollback();
+        throw;
+    }
+
 }
+
+}
+
 
 // --------------------------------------------------------------------------------------------------------------
 
@@ -84,10 +109,23 @@ extern "C" {
         delete reinterpret_cast<worker::Database *>(handle);
     }
 
-    auto loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len) -> int32_t {
+    auto loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len) -> WorkerResultCode {
         auto db = reinterpret_cast<worker::Database *>(handle);
         return db->loadSchemaAll(std::string(schema_dir_path, schema_dir_len));
     }
+
+    auto retainUserTypeName(DatabaseRef handle) -> WorkerResultCode {
+        auto db = reinterpret_cast<worker::Database *>(handle);
+        try {
+            auto conn = db->connect();
+            db->retainUserTypeName(conn);
+            return no_error;
+        }
+        catch (...) {
+            return invalid_schema_catalog;
+        }
+    }
+
 }
 
 #ifndef DISABLE_CATCH2_TEST

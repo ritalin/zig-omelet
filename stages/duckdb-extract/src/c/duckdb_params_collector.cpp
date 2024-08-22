@@ -60,11 +60,6 @@ auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
     }
 }
 
-auto ParameterCollector::paramUserType(std::string position, std::string type_name) -> void {
-    this->param_user_type_map[position] = type_name;
-}
-
-
 }
 
 #ifndef DISABLE_CATCH2_TEST

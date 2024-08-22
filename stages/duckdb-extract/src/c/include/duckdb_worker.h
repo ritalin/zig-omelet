@@ -7,6 +7,7 @@ typedef enum {
     no_error = 0,
     schema_dir_not_found,
     schema_load_failed,
+    invalid_schema_catalog,
     invalid_sql,
     describe_filed,
 } WorkerResultCode;
@@ -24,12 +25,13 @@ typedef enum {
 extern "C" {
 #endif
 
-typedef struct Database *DatabaseRef;
-typedef struct Collector *CollectorRef;
+typedef struct OpaqueDatabase *DatabaseRef;
+typedef struct OpaqueCollector *CollectorRef;
 
 int32_t initDatabase(DatabaseRef *handle);
 void deinitDatabase(DatabaseRef handle);
-int32_t loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len);
+WorkerResultCode loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len);
+WorkerResultCode retainUserTypeName(DatabaseRef handle);
 
 int32_t initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle);
 void deinitSourceCollector(CollectorRef handle);

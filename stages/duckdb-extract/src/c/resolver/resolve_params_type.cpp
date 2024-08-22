@@ -36,7 +36,7 @@ auto LogicalParameterVisitor::VisitResult() -> ParamResolveResult {
 
     return {
         .params = std::move(params), 
-        .user_type_names = std::move(user_type_names),
+        .user_type_names = std::move(this->user_type_names),
         .anon_types = std::move(this->anon_types)
     };
 }
@@ -65,7 +65,10 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
 
     if (isEnumUserType(expr.return_type)) {
         type_name = userTypeName(expr.return_type);
-        if (type_name == "") {
+        if (type_name != "") {
+            this->user_type_names.push_back(type_name);
+        }
+        else {
             // process as anonymous user type
             type_name = std::format("Param::{}#{}", magic_enum::enum_name(expr.return_type.id()), expr.identifier);
             this->anon_types.push_back(pickEnumUserType(expr.return_type, type_name));
@@ -119,6 +122,7 @@ using namespace worker;
 using namespace Catch::Matchers;
 
 using ParamTypeLookup = std::unordered_map<NamedParam, std::string>;
+using UserTypeExpects = std::vector<std::string>;
 using AnonTypeExpects = std::vector<UserTypeEntry>;
 
 TEST_CASE("Typename checking#1 (same type)") {
@@ -179,7 +183,8 @@ static auto expectAnonymousUserType(const UserTypeEntry& actual, const UserTypeE
 
 static auto runResolveParamType(
     const std::string& sql, const std::vector<std::string>& schemas, 
-    const ParamNameLookup& name_lookup, const ParamTypeLookup& param_types, AnonTypeExpects anon_type_expects) -> void 
+    const ParamNameLookup& name_lookup, const ParamTypeLookup& param_types, 
+    UserTypeExpects user_type_expects, AnonTypeExpects anon_type_expects) -> void 
 {
     auto db = Database();
     auto conn = db.connect();
@@ -244,9 +249,25 @@ static auto runResolveParamType(
             ++i;
         }
     }
+    user_type_entries: {
+        user_type_size: {
+            UNSCOPED_INFO("User type size (predefined)");
+            REQUIRE(user_type_names.size() == user_type_expects.size());
+        }
+
+        std::unordered_set<std::string> lookup(user_type_expects.begin(), user_type_expects.end());
+
+        for (int i = 0; auto& name: user_type_names) {
+            has_user_type: {
+                UNSCOPED_INFO(std::format("valid user type named#{}", i));
+                REQUIRE(lookup.contains(name));   
+            }
+            ++i;
+        }
+    }
     anonymous_entries: {
         anonymous_type_size: {
-            UNSCOPED_INFO("Parameter size");
+            UNSCOPED_INFO("User type size (anonymous)");
             REQUIRE(anon_types.size() == anon_type_expects.size());
         }
 
@@ -271,9 +292,10 @@ TEST_CASE("Resolve without parameters") {
     std::string sql("select * from Foo");
     ParamNameLookup lookup{};
     ParamTypeLookup bound_types{};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve positional parameter on where clause") {
@@ -281,9 +303,10 @@ TEST_CASE("Resolve positional parameter on where clause") {
     std::string sql("select * from Foo where kind = $1");
     ParamNameLookup lookup{{"1","1"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve positional parameter on select list and where clause") {
@@ -291,9 +314,10 @@ TEST_CASE("Resolve positional parameter on select list and where clause") {
     std::string sql("select id, $2::text from Foo where kind = $1");
     ParamNameLookup lookup{{"1","1"}, {"2","2"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","VARCHAR"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve named parameter on where clause") {
@@ -301,9 +325,10 @@ TEST_CASE("Resolve named parameter on where clause") {
     std::string sql("select * from Foo where kind = $kind");
     ParamNameLookup lookup{{"1","kind"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve named parameter on select list and where clause") {
@@ -311,9 +336,10 @@ TEST_CASE("Resolve named parameter on select list and where clause") {
     std::string sql("select id, $phrase::text from Foo where kind = $kind");
     ParamNameLookup lookup{{"1","phrase"}, {"2","kind"}};
     ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve named parameters on joined select list and where clause") {
@@ -327,9 +353,10 @@ TEST_CASE("Resolve named parameters on joined select list and where clause") {
     )#");
     ParamNameLookup lookup{{"1","phrase"}, {"2", "serch_word"}, {"3","kind"}};
     ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve named parameter on select list and where clause with subquery") {
@@ -344,9 +371,10 @@ TEST_CASE("Resolve named parameter on select list and where clause with subquery
     )#");
     ParamNameLookup lookup{{"1","seq"}, {"2", "phrase"}, {"3","kind"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve duplicated named parameter on select list and where clause with subquery#1 (same type)") {
@@ -361,9 +389,10 @@ TEST_CASE("Resolve duplicated named parameter on select list and where clause wi
     )#");
     ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve duplicated named parameter on select list and where clause with subquery#2 (NOT same type)") {
@@ -378,9 +407,10 @@ TEST_CASE("Resolve duplicated named parameter on select list and where clause wi
     )#");
     ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
     ParamTypeLookup bound_types{{"1","INTEGER"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#1 (anonymous/select-list)") {
@@ -389,11 +419,12 @@ TEST_CASE("Resolve enum parameter#1 (anonymous/select-list)") {
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{
         {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
     };
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#2 (predefined/select-list)") {
@@ -402,9 +433,10 @@ TEST_CASE("Resolve enum parameter#2 (predefined/select-list)") {
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Visibility"}};
+    UserTypeExpects user_type_names{"Visibility"};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#3 (anonymous/where#1)") {
@@ -414,11 +446,12 @@ TEST_CASE("Resolve enum parameter#3 (anonymous/where#1)") {
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+    UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{
         {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
     };
 
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#4 (anonymous/where#2)") {
@@ -428,9 +461,10 @@ TEST_CASE("Resolve enum parameter#4 (anonymous/where#2)") {
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Visibility"}};
+    UserTypeExpects user_type_names{"Visibility"};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
 TEST_CASE("Resolve enum parameter#5 (predefined/where)") {
@@ -440,9 +474,10 @@ TEST_CASE("Resolve enum parameter#5 (predefined/where)") {
 
     ParamNameLookup lookup{{"1","vis"}};
     ParamTypeLookup bound_types{{"1","Visibility"}};
+    UserTypeExpects user_type_names{"Visibility"};
     AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, anon_types);
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
 #endif

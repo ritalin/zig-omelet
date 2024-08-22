@@ -104,7 +104,7 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(Lo
                     const topic = try core.Event.Payload.Topic.init(
                         self.allocator, 
                         .source,
-                        &.{c.topic_query, c.topic_placeholder, c.topic_select_list},
+                        &.{c.topic_query, c.topic_placeholder, c.topic_select_list, c.bound_user_type, c.anon_user_type},
                         true,
                     );
                     

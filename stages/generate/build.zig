@@ -129,11 +129,12 @@ pub fn build(b: *std.Build) void {
             // running the unit tests.
             const test_step = b.step("test", "Run unit tests");
             test_step.dependOn(&run_exe_unit_tests.step);
+
+            test_artifact: {
+                test_step.dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
+                break:test_artifact;
+            }
             break:test_runner;
-        }
-        test_artifact: {
-            b.getInstallStep().dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
-            break:test_artifact;
         }
         break:test_module;
     }

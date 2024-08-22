@@ -81,46 +81,51 @@ pub fn build(b: *std.Build) !void {
         cmd.step.dependOn(b.getInstallStep());
         
         @import("stage_runner").applyRunnerChannel(cmd);
-        // var inspection = try SettingInspection.inspectArgId(b.allocator, b.args);
+        var inspection = try SettingInspection.inspectArgId(b.allocator, b.args);
         
-        // general_args: {
-        //     var iter = try inspection.iterate(b.allocator, .cmd_general);
-        //     defer iter.deinit(b.allocator);
-        //     while (iter.next()) |arg| { cmd.addArg(arg); }
-        //     break:general_args;
-        // }
-        // subcommand: {
-        //     if (inspection.subcommand_tag) |sc| {
-        //         cmd.addArg(inspection.subcommand().?);
+        general_args: {
+            var iter = try inspection.iterate(b.allocator, .cmd_general);
+            defer iter.deinit(b.allocator);
+            while (iter.next()) |arg| { cmd.addArg(arg); }
+            break:general_args;
+        }
+        subcommand: {
+            if (inspection.subcommand_tag) |sc| {
+                cmd.addArg(inspection.subcommand().?);
 
-        //         var iter = try inspection.iterateFromSubcommand(b.allocator, sc);
-        //         defer iter.deinit(b.allocator);
-        //         while (iter.next()) |arg| { cmd.addArg(arg); }
-        //     }
-        //     else {
-        //         cmd.addArg("generate");
-        //     }
-        //     break:subcommand;
-        // }
+                var iter = try inspection.iterateFromSubcommand(b.allocator, sc);
+                defer iter.deinit(b.allocator);
+                while (iter.next()) |arg| { cmd.addArg(arg); }
+            }
+            else {
+                cmd.addArg("generate");
+            }
+            break:subcommand;
+        }
 
-        // const default_args: []const []const u8 = &.{
-        //     "--source-dir=./_sql-examples",
-        //     "--output-dir=./_dump/ts",
-        //     "--schema-dir=./_schema-examples",
-        // };
-        // for (default_args) |arg| {
-        //     if (!inspection.args.contains(arg)) { cmd.addArg(arg); }
-        // }
         const default_args: []const []const u8 = &.{
-            "generate",
+            "--source-dir=./_schema-examples/user_types", 
             "--source-dir=./_sql-examples",
+            "--schema-dir=./_schema-examples/user_types", 
+            "--schema-dir=./_schema-examples/tables",
             "--output-dir=./_dump/ts",
-            "--schema-dir=./_schema-examples",
-            "--schema-include-filter=user_types",
+            // "--schema-include-filter=user_types",
         };
         for (default_args) |arg| {
-            cmd.addArg(arg);
+            if (!inspection.args.contains(arg)) { cmd.addArg(arg); }
         }
+        // const default_args: []const []const u8 = &.{
+        //     "generate",
+            // "--source-dir=./_schema-examples/user_types", 
+            // "--source-dir=./_sql-examples",
+            // "--schema-dir=./_schema-examples/user_types", 
+            // "--schema-dir=./_schema-examples/tables",
+            // "--output-dir=./_dump/ts",
+        //     "--schema-include-filter=user_types",
+        // };
+        // for (default_args) |arg| {
+        //     cmd.addArg(arg);
+        // }
 
         const run_step = b.step("test-run", "Run the app as test frighting");
         run_step.dependOn(&cmd.step);
@@ -132,28 +137,36 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn addTestAll(b: *std.Build) void {
-    const run_step = b.step("test-all", "Run all unit tests");
+    const run_step = b.step("test", "Run all unit tests");
     var deps_iter = b.initialized_deps.valueIterator();
 
     while(deps_iter.next()) |dep| {
-        for (dep.*.builder.install_tls.step.dependencies.items) |dep_step| {
-            const inst: *std.Build.Step.InstallArtifact = dep_step.cast(std.Build.Step.InstallArtifact) orelse continue;
+        var tls_iter = dep.*.builder.top_level_steps.iterator();
+        while (tls_iter.next()) |entry| {
+            const tls = entry.value_ptr.*;
+            if (! std.mem.eql(u8, tls.step.name, "test")) continue;
 
-            if (inst.artifact.kind == .@"test") {
-                const path = b.pathResolve(&.{"test/", inst.artifact.name});
-                std.debug.print("Test found: {s}\n", .{path});
-                // install test artifact
-                const install_step = b.addInstallArtifact(
-                    inst.artifact, 
-                    .{
-                        .dest_sub_path = path, 
-                        .dest_dir = .{.override = .prefix}
-                    }
-                );
-                // invoke test
-                const invoke_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
-                invoke_step.step.dependOn(&install_step.step);
-                run_step.dependOn(&invoke_step.step);
+            for (tls.step.dependencies.items) |dep_step| {
+                if (dep_step.id != .install_artifact) continue;
+
+                const inst: *std.Build.Step.InstallArtifact = dep_step.cast(std.Build.Step.InstallArtifact) orelse continue;
+
+                if (inst.artifact.kind == .@"test") {
+                    const path = b.pathResolve(&.{"test/", inst.artifact.name});
+                    std.debug.print("Test found: {s}\n", .{path});
+                    // install test artifact
+                    const install_step = b.addInstallArtifact(
+                        inst.artifact, 
+                        .{
+                            .dest_sub_path = path, 
+                            .dest_dir = .{.override = .prefix}
+                        }
+                    );
+                    // invoke test
+                    const invoke_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
+                    invoke_step.step.dependOn(&install_step.step);
+                    run_step.dependOn(&invoke_step.step);
+                }
             }
         }
     }

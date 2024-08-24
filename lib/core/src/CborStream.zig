@@ -293,6 +293,18 @@ pub const Reader = struct {
         return value;
     }
 
+    pub fn readNull(self: *Self, comptime T: type) !?T {
+        _ = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        self.offset += self.raw_reader.msgidx;
+        
+        return null;
+    }
+
+    pub fn nextNull(self: *Self) !bool {
+        const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        return self.isNullResult(result);
+    }
+
     fn isNullResult(self: *Self, item: c.cbor_item_t) !bool {
         if ((item.type == c.CBOR_ITEM_SIMPLE_VALUE) and (item.size == 0)) {
             var v: u8 = undefined;
@@ -329,6 +341,14 @@ pub const Reader = struct {
         self.offset += self.raw_reader.msgidx;
 
         return value;
+    }
+
+    pub fn readSliceHeader(self: *Self) !usize {
+        const item = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(item.type == c.CBOR_ITEM_ARRAY);
+
+        self.offset += self.raw_reader.msgidx;
+        return item.size;
     }
 
     pub fn readSlice(self: *Self, allocator: std.mem.Allocator, comptime T: type) ![]const T {

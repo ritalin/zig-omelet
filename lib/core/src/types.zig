@@ -21,3 +21,5 @@ pub const Symbol = []const u8;
 pub const LogScope = enum {
     trace, default,
 };
+
+pub const FilterKind = enum {include, exclude};

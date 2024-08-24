@@ -1,0 +1,1 @@
+CREATE TYPE Status AS ENUM ('failed', 'success')

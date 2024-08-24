@@ -8,26 +8,17 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 source: core.Event.Payload.TopicBody,
-output_base_path: core.FilePath,
-output_path: core.FilePath,
-is_new: bool,
-on_handle: *const fn (builder: *CodeBuilder) anyerror!void,
+output_root: std.fs.Dir,
+output_name: core.FilePath,
+on_handle: CodeBuilder.OnBuild,
 
 pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, output_dir_path: core.FilePath) !*Self {
-    const output_base_path = try std.fs.cwd().realpathAlloc(allocator, output_dir_path);
-    const output_path = try allocator.dupe(u8, trimExtension(source.header.name));
-
-    var dir = try std.fs.cwd().openDir(output_base_path, .{});
-    defer dir.close();
-    const is_new = if (dir.statFile(output_path)) |_| false else |_| true;
-
     const self = try allocator.create(Self);
     self.* = .{
         .allocator = allocator,
         .source = try source.clone(allocator),
-        .output_base_path = output_base_path,
-        .output_path = output_path,
-        .is_new = is_new,
+        .output_root = try std.fs.cwd().openDir(output_dir_path, .{}),
+        .output_name = try allocator.dupe(u8, trimExtension(source.header.name)),
         .on_handle = if (source.header.category == .source) CodeBuilder.SourceGenerator.build else CodeBuilder.UserTypeGenerator.build,
     };
 
@@ -35,9 +26,10 @@ pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, 
 }
 
 pub fn deinit(self: *Self) void {
+    self.output_root.close();
+
     self.source.deinit();
-    self.allocator.free(self.output_base_path);
-    self.allocator.free(self.output_path);
+    self.allocator.free(self.output_name);
     self.allocator.destroy(self);
 }
 
@@ -46,7 +38,7 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     // _ = socket;
     try sendLog(self.allocator, socket, .trace, "Begin generate from `{s}`", .{self.source.header.name});
 
-    var builder = try CodeBuilder.init(self.allocator, self.output_base_path, self.output_path);
+    var builder = try CodeBuilder.init(self.allocator);
     defer builder.deinit();
 
     var walker = try CodeBuilder.Parser.beginParse(self.allocator, self.source.bodies);
@@ -60,30 +52,18 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
         var writer = try core.CborStream.Writer.init(self.allocator);
         defer writer.deinit();
         
-        if (builder.buildWith(self.on_handle)) {
-            _ = try writer.writeString(self.source.header.path);
-            _ = try writer.writeString(self.output_path);
-            _ = try writer.writeString("Successful");
-            _ = try writer.writeEnum(ResultStatus, if (self.is_new) .new_file else .update_file);
+        if (self.on_handle(builder, self.output_root, self.output_name)) |status| {
+            try self.writeLogPayload(&writer, self.output_name, "Successful", status);
         }
         else |err| switch (err) {
             error.QueryFileGenerationFailed => {
-                _ = try writer.writeString(self.source.header.path);
-                _ = try writer.writeString(self.output_path);
-                _ = try writer.writeString("Failed SQL file");
-                _ = try writer.writeEnum(ResultStatus, .generate_failed);
+                try self.writeLogPayload(&writer, self.output_name, "Failed SQL file", .generate_failed);
             },
             error.TypeFileGenerationFailed => {
-                _ = try writer.writeString(self.source.header.path);
-                _ = try writer.writeString(self.output_path);
-                _ = try writer.writeString("Failed Typescript file");
-                _ = try writer.writeEnum(ResultStatus, .generate_failed);
+                try self.writeLogPayload(&writer, self.output_name, "Failed Typescript file", .generate_failed);
             },
             else => {
-                _ = try writer.writeString(self.source.header.path);
-                _ = try writer.writeString(self.output_path);
-                _ = try writer.writeString("Unexpected error during generating stage");
-                _ = try writer.writeEnum(ResultStatus, .generate_failed);
+                try self.writeLogPayload(&writer, self.output_name, "Unexpected error during generating stage", .generate_failed);
             },
         }
 
@@ -98,6 +78,24 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
 
     try core.sendEvent(self.allocator, socket, "task", event);
 }
+
+fn writeLogPayload(self: *Self, writer: *core.CborStream.Writer, name: core.Symbol, message: core.Symbol, status: ResultStatus) !void {
+    const output_path = path: {
+        if (self.source.header.category == .schema) {
+            break:path try std.fmt.allocPrint(self.allocator, CodeBuilder.UserTypeGenerator.log_fmt, .{name});
+        }
+        else {
+            break:path try std.fmt.allocPrint(self.allocator, CodeBuilder.SourceGenerator.log_fmt, .{name});
+        }
+    };
+    defer self.allocator.free(output_path);
+
+    _ = try writer.writeString(self.source.header.path);
+    _ = try writer.writeString(output_path);
+    _ = try writer.writeString(message);
+    _ = try writer.writeEnum(ResultStatus, status);
+}
+
 
 const TargetFields = std.enums.EnumFieldStruct(std.meta.FieldEnum(CodeBuilder.Target), bool, false);
 
@@ -169,8 +167,4 @@ fn trimExtension(name: core.Symbol) core.Symbol {
     }
 }
 
-pub const ResultStatus = enum {
-    new_file,
-    update_file,
-    generate_failed,
-};
+pub const ResultStatus = CodeBuilder.ResultStatus;

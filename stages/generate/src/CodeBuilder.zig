@@ -14,26 +14,15 @@ const ToArrayFn = "export const toArray = (parameter: Parameter) => Object.value
 const IdentifierFormatter = @import("./IdentifierFormatter.zig");
 
 allocator: std.mem.Allocator,
-output_dir: std.fs.Dir,
 entries: ResultEntryMap,
 user_type_names: std.BufSet,
 anon_user_types: std.StringHashMap(UserTypeDef),
 
-pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !*Self {
-    const dir = dir: {
-        var parent_dir = try std.fs.cwd().makeOpenPath(prefix_dir_path, .{});
-        defer parent_dir.close();
-
-        const path = try toPascalCasePath(allocator, dest_dir_path);
-        defer allocator.free(path);
-        break :dir try parent_dir.makeOpenPath(path, .{});
-    };
-
+pub fn init(allocator: std.mem.Allocator) !*Self {
     const self = try allocator.create(Self);
 
     self.* = .{
         .allocator = allocator,
-        .output_dir = dir,
         .entries = ResultEntryMap{},
         .user_type_names = std.BufSet.init(allocator),
         .anon_user_types = std.StringHashMap(UserTypeDef).init(allocator),
@@ -54,8 +43,6 @@ fn toPascalCasePath(allocator: std.mem.Allocator, file_path: FilePath) !FilePath
 }
 
 pub fn deinit(self: *Self) void {
-    self.output_dir.close();
-
     inline for (std.meta.tags(std.meta.FieldEnum(Target))) |tag| {
         if (self.entries.get(tag)) |v| {
             self.allocator.free(v);
@@ -268,9 +255,7 @@ fn writeQuery(output_dir: std.fs.Dir, query: Symbol) !void {
     try file.writeAll(query);
 }
 
-fn writeTypescriptTypes(output_dir: std.fs.Dir, imports: ImportSetting, type_defs: []const ?Symbol) !void {
-    var file = try output_dir.createFile("types.ts", .{});
-    defer file.close();
+fn writeTypescriptTypes(file: std.fs.File, imports: ImportSetting, type_defs: []const ?Symbol) !void {
     var writer = file.writer();
 
     for (imports.type_names) |name| {
@@ -301,9 +286,13 @@ fn writeImport(writer: anytype, type_name: Symbol, prefix: ?Symbol) !void {
     try writer.writeByte('\n');
 }
 
-pub fn buildWith(self: *Self, handler: *const fn (builder: *CodeBuilder) anyerror!void) !void {
-    try handler(self);
-}
+pub const OnBuild = *const fn (builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus;
+
+pub const ResultStatus = enum {
+    new_file,
+    update_file,
+    generate_failed,
+};
 
 const ImportSetting = struct {
     type_names:[]const Symbol,
@@ -339,17 +328,27 @@ pub fn createImportSetting(self: *Self, allocator: std.mem.Allocator, prefix: ?S
 }
 
 pub const SourceGenerator = struct {
-    pub fn build(builder: *CodeBuilder) anyerror!void {
+    pub const log_fmt: Symbol = "{s}/*";
+
+    pub fn build(builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus {
+        const is_new = if (root_dir.statFile(name)) |_| false else |_| true;
+
+        var output_dir = try root_dir.makeOpenPath(name, .{});
+        defer output_dir.close();
+
         if (builder.entries.get(.query)) |query| {
-            writeQuery(builder.output_dir, query) catch {
+            writeQuery(output_dir, query) catch {
                 return error.QueryFileGenerationFailed;
             };
         }
         types: {
-            const imports = try builder.createImportSetting(builder.allocator, "user-types");
+            var file = try output_dir.createFile("types.ts", .{});
+            defer file.close();
+
+            const imports = try builder.createImportSetting(builder.allocator, UserTypeGenerator.output_root);
             defer imports.deinit(builder.allocator);
 
-            writeTypescriptTypes(builder.output_dir, imports, &.{
+            writeTypescriptTypes(file, imports, &.{
                 builder.entries.get(.parameter), 
                 builder.entries.get(.parameter_order), 
                 builder.entries.get(.result_set)
@@ -359,20 +358,35 @@ pub const SourceGenerator = struct {
             };
             break:types;
         }
+
+        return if (is_new) .new_file else .update_file;
     }
 };
 
 pub const UserTypeGenerator = struct {
-    pub fn build(builder: *CodeBuilder) anyerror!void {
-        var out_dir = try builder.output_dir.makeOpenPath("user-types", .{});
+    pub const output_root: Symbol = "user-types";
+    pub const log_fmt: Symbol = output_root ++ "/{s}";
+
+    pub fn build(builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus {
+        var out_dir = try root_dir.makeOpenPath(output_root, .{});
         defer out_dir.close();
 
         const imports = try builder.createImportSetting(builder.allocator, null);
         defer imports.deinit(builder.allocator);
 
-        writeTypescriptTypes(out_dir, imports, &.{builder.entries.get(.user_type)}) catch {
+        const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{name});
+        defer builder.allocator.free(file_name);
+
+        const is_new = if (out_dir.statFile(file_name)) |_| false else |_| true;
+
+        var file = try out_dir.createFile(file_name, .{});
+        defer file.close();
+
+        writeTypescriptTypes(file, imports, &.{builder.entries.get(.user_type)}) catch {
             return error.TypeFileGenerationFailed;
         };
+
+        return if (is_new) .new_file else .update_file;
     }
 };
 
@@ -1131,7 +1145,7 @@ test "apply bound user type name#1" {
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try std.testing.expectEqual(0, builder.user_type_names.count());
@@ -1152,7 +1166,7 @@ test "apply bound user type name#2" {
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try std.testing.expectEqual(0, builder.user_type_names.count());
@@ -1190,7 +1204,7 @@ test "apply anonymous user type" {
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try std.testing.expectEqual(0, builder.anon_user_types.count());
@@ -1210,7 +1224,7 @@ fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_t
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try builder.applyPlaceholder(parameters, user_type_names, anon_user_types);
@@ -1459,7 +1473,7 @@ test "generate parameter order" {
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try builder.applyPlaceholderOrder(orders);
@@ -1478,7 +1492,7 @@ fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try builder.applyResultSets(parameters, user_type_names, anon_user_types);
@@ -1671,7 +1685,7 @@ fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol) !void {
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     try builder.applyUserType(enum_type);
@@ -1754,17 +1768,15 @@ test "Output build result#1" {
 
     var output_dir = std.testing.tmpDir(.{});
     defer output_dir.cleanup();
-    const parent_path = try output_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     builder.entries.put(.query, try allocator.dupe(u8, "select $1::id, $2::name from foo where value = $3::value"));
     builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, value:string|null}"));
     builder.entries.put(.parameter_order, try allocator.dupe(u8,"export const O: (keyof P)[] = ['id', 'name', 'vis', 'status']"));
     builder.entries.put(.result_set, try allocator.dupe(u8, "export type R = { id:number, name:string|null }"));
-    try builder.buildWith(SourceGenerator.build);
+    _ = try SourceGenerator.build(builder, output_dir.dir, "Foo");
 
     query: {
         var file = try output_dir.dir.openFile("Foo/query.sql", .{.mode = .read_only});
@@ -1834,10 +1846,8 @@ test "Output build result#2 (with predefined user type)" {
 
     var output_dir = std.testing.tmpDir(.{});
     defer output_dir.cleanup();
-    const parent_path = try output_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, vis:Visibility|null, status: Status|null}"));
@@ -1846,7 +1856,7 @@ test "Output build result#2 (with predefined user type)" {
     try builder.user_type_names.insert("Visibility");
     try builder.user_type_names.insert("Status");
 
-    try builder.buildWith(SourceGenerator.build);
+    _ = try SourceGenerator.build(builder, output_dir.dir, "Foo");
 
     placeholder: {
         var file = try output_dir.dir.openFile("Foo/types.ts", .{});
@@ -1925,18 +1935,16 @@ test "Output build enum user type" {
 
     var output_dir = std.testing.tmpDir(.{});
     defer output_dir.cleanup();
-    const parent_path = try output_dir.dir.realpathAlloc(allocator, ".");
-    defer allocator.free(parent_path);
 
-    var builder = try Self.init(allocator, parent_path, "foo");
+    var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
     builder.entries.put(.user_type, try allocator.dupe(u8, "export type Visibility = 'hide' | 'visible'"));
 
-    try builder.buildWith(UserTypeGenerator.build);
+    _ = try UserTypeGenerator.build(builder, output_dir.dir, "Foo");
 
     user_type: {
-        var file = try output_dir.dir.openFile("Foo/user-types/types.ts", .{});
+        var file = try output_dir.dir.openFile("user-types/Foo.ts", .{});
         defer file.close();
 
         const meta = try file.metadata();

@@ -120,6 +120,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                         traceLog.debug("Request quit for Watching stage", .{});
                         try self.connection.dispatcher.reply(item.socket, .quit);
                         try self.connection.dispatcher.state.receiveTerminate();
+
+                        if (source_cache.isEmpty()) {
+                            try self.connection.dispatcher.post(.finish_source_path);
+                        }
                     }
                     else {
                         try self.connection.dispatcher.reply(item.socket, .ack);
@@ -165,6 +169,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .finish_topic_body => {
                     // request quit for Extract stage
                     try self.connection.dispatcher.reply(item.socket, .quit);
+
+                    if ((self.connection.dispatcher.state.level.terminating) and source_cache.isEmpty()) {
+                        try self.connection.dispatcher.post(.finish_topic_body);
+                    }
                 },
                 .ready_generate => {
                     if (source_cache.ready_queue.dequeue()) |source| {

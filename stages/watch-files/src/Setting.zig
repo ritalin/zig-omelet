@@ -20,7 +20,7 @@ pub const SourceDir = struct {
     dir_path: core.FilePath, 
 };
 
-const FilterKind = enum {include, exclude};
+const FilterKind = core.FilterKind;
 pub const FilterDir = struct {
     kind: FilterKind,
     dir_path: core.FilePath, 
@@ -58,7 +58,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
-    // .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
+    .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
     .{@tagName(.include_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
@@ -68,7 +68,7 @@ const ArgId = enum {
     subscribe_channel,
     log_level,
     source_dir,
-    // schema_dir,
+    schema_dir,
     include_filter,
     watch,
     standalone,
@@ -78,8 +78,8 @@ const ArgId = enum {
         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
-        // .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
-        .{.id = .include_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
+        .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
+        .{.id = .include_filter, .names = .{.long = "include-filter"}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
@@ -114,9 +114,9 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .source_dir => {
                 if (arg.value) |v| try builder.addSourceDir(.source, v);
             },
-            // .schema_dir => {
-            //     if (arg.value) |v| try builder.addSourceDir(.schema, v);
-            // },
+            .schema_dir => {
+                if (arg.value) |v| try builder.addSourceDir(.schema, v);
+            },
             .include_filter => {
                 if (arg.value) |v| try builder.addFilterDir(.include, v);
             },
@@ -204,25 +204,23 @@ const Builder = struct {
         var filter_builder = PathMatcher.Builder.init(allocator);
         defer filter_builder.deinit();
 
-        for (sources.items) |src| {
-        //     if (src.category == .schema) {
-                for (self.filters.items) |filter| {
-                    const path = try std.fs.path.join(allocator, &.{src.dir_path, filter.path});
-                    defer allocator.free(path);
+        // for (sources.items) |src| {
+        for (self.filters.items) |filter| {
+            // const path = try std.fs.path.join(allocator, &.{src.dir_path, filter.path});
+            // defer allocator.free(path);
 
-                    if (std.fs.accessAbsolute(path, .{})) {
-                        const path_u = try toUnicodeString(allocator, path);
-                        defer allocator.free(path_u);
+            // if (std.fs.accessAbsolute(path, .{})) {
+            const filter_u = try toUnicodeString(allocator, filter.path);
+            defer allocator.free(filter_u);
 
-                        try filter_builder.addFilterDir(.include, path_u);
-                    }
-                    else |err| switch (err) {
-                        error.FileNotFound => {},
-                        else => return err,
-                    }
-                }
-        //     }
+            try filter_builder.addFilterDir(filter.kind, filter_u);
+            // }
+            // else |err| switch (err) {
+            //     error.FileNotFound => {},
+            //     else => return err,
+            // }
         }
+        // }
 
         return .{
             .arena = arena,

@@ -139,19 +139,20 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
     defer self.allocator.free(file_path_abs);
 
-    // if (category == .schema) {
-        const path_u = try toUnicodeString(self.allocator, file_path_abs);
-        defer self.allocator.free(path_u);
+    const path_u = try toUnicodeString(self.allocator, file_path_abs);
+    defer self.allocator.free(path_u);
 
-        const filter_result = filter.match(path_u);
-        if (filter_result == null) return;
+    const filter_result = filter.match(path_u);
+    if (filter_result == null) return;
 
-        if (filter_result) |kinds| {
-            if (! kinds.contains(.include)) {
-                return;
-            }
+    if (filter_result) |kinds| {
+        if (kinds.contains(.exclude)) {
+            return;
         }
-    // }
+        if (! kinds.contains(.include)) {
+            return;
+        }
+    }
 
     try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});
 

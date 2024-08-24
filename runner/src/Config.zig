@@ -295,10 +295,18 @@ const Binder = struct {
         }
         fn bindFilter(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
             if (setting.filter_set.len > 0) {
-                const decl = comptime findDecl(ArgId, decls, .source_filter);
-                for (setting.filter_set) |path| {
-                    try args.append("--" ++ decl.names.long.?);
-                    try args.append(path);
+                const decl_include = comptime findDecl(ArgId, decls, .include_filter);
+                const decl_exclude = comptime findDecl(ArgId, decls, .exclude_filter);
+                
+                for (setting.filter_set) |filter| {
+                    if (filter.kind == .include) {
+                        try args.append("--" ++ decl_include.names.long.?);
+                        try args.append(filter.path);
+                    }
+                    else if (filter.kind == .exclude) {
+                        try args.append("--" ++ decl_exclude.names.long.?);
+                        try args.append(filter.path);
+                    }
                 }
             }
             return .success;

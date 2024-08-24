@@ -14,7 +14,8 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.source_dir_path), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
     .{@tagName(.output_dir_path), .{.desc = "Output folder", .value = "PATH", .required = true}},  
     .{@tagName(.schema_dir_path), .{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
-    .{@tagName(.schema_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.include_filter), .{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.exclude_filter), .{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
 });
 
 const GeneralSetting = @import("./commands/GeneralSetting.zig");

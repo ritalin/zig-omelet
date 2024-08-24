@@ -5,10 +5,13 @@ const core = @import("core");
 const log = core.Logger.SystemDirect(@import("build_options").app_context);
 const help = @import("../help.zig");
 
-source_dir_set: []core.FilePath,
-schema_dir_set: []core.FilePath,
-filter_set: []core.FilePath,
-output_dir_path: core.FilePath,
+const FilePath = core.FilePath;
+const FilterKind = core.FilterKind;
+
+source_dir_set: []FilePath,
+schema_dir_set: []FilePath,
+filter_set: []PathFilter,
+output_dir_path: FilePath,
 watch: bool,
 
 const Self = @This();
@@ -37,7 +40,12 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
             switch (arg.param.id) {
                 .source_dir_path => try builder.source_dir_set.append(arg.value),
                 .schema_dir_path => try builder.schema_dir_set.append(arg.value),
-                .source_filter => try builder.filter_set.append(arg.value),
+                .include_filter => {
+                    if (arg.value) |v| try builder.filter_set.append(.{.kind = .include , .path = v});
+                },
+                .exclude_filter => {
+                    if (arg.value) |v| try builder.filter_set.append(.{.kind = .exclude , .path = v});
+                },
                 .output_dir_path => builder.output_dir_path = arg.value,
                 .watch => builder.watch = true,
             }
@@ -49,14 +57,16 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         source_dir_path,
         schema_dir_path,
-        source_filter,
+        include_filter,
+        exclude_filter,
         output_dir_path,
         watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .source_dir_path, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
             .{.id = .schema_dir_path, .names = .{.long = "schema-dir"}, .takes_value = .one},
-            .{.id = .source_filter, .names = .{.long = "schema-include-filter"}, .takes_value = .many},
+            .{.id = .include_filter, .names = .{.long = "include-filter"}, .takes_value = .many},
+            .{.id = .exclude_filter, .names = .{.long = "exclude-filter"}, .takes_value = .many},
             .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
             .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
@@ -66,18 +76,23 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     };
 }
 
+const PathFilter = struct {
+    kind: FilterKind,
+    path: FilePath,
+};
+
 const Builder = struct {
-    source_dir_set: std.ArrayList(?core.FilePath),
-    schema_dir_set: std.ArrayList(?core.FilePath),
-    filter_set: std.ArrayList(?core.FilePath),
-    output_dir_path: ?core.FilePath = null,
+    source_dir_set: std.ArrayList(?FilePath),
+    schema_dir_set: std.ArrayList(?FilePath),
+    filter_set: std.ArrayList(PathFilter),
+    output_dir_path: ?FilePath = null,
     watch: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
-            .source_dir_set = std.ArrayList(?core.FilePath).init(allocator),
-            .schema_dir_set = std.ArrayList(?core.FilePath).init(allocator),
-            .filter_set = std.ArrayList(?core.FilePath).init(allocator),
+            .source_dir_set = std.ArrayList(?FilePath).init(allocator),
+            .schema_dir_set = std.ArrayList(?FilePath).init(allocator),
+            .filter_set = std.ArrayList(PathFilter).init(allocator),
        };
     }
 
@@ -90,7 +105,7 @@ const Builder = struct {
     pub fn build(self: Builder, allocator: std.mem.Allocator) !Self {
         var base_dir = std.fs.cwd();
 
-        var sources = std.ArrayList(core.FilePath).init(allocator);
+        var sources = std.ArrayList(FilePath).init(allocator);
         defer sources.deinit();
         for (self.source_dir_set.items) |path_| {
             if (path_) |path| {
@@ -103,7 +118,7 @@ const Builder = struct {
             }
         }
 
-        var schemas = try std.ArrayList(core.FilePath).initCapacity(allocator, self.schema_dir_set.items.len);
+        var schemas = try std.ArrayList(FilePath).initCapacity(allocator, self.schema_dir_set.items.len);
         defer schemas.deinit();
         for (self.schema_dir_set.items) |path_| {
             if (path_) |path| {
@@ -121,12 +136,10 @@ const Builder = struct {
             return error.SettingLoadFailed;
         }
 
-        var filters = try std.ArrayList(core.FilePath).initCapacity(allocator, self.filter_set.items.len);
+        var filters = try std.ArrayList(PathFilter).initCapacity(allocator, self.filter_set.items.len);
         defer filters.deinit();
         for (self.filter_set.items) |filter| {
-            if (filter) |x| {
-                try filters.append(try allocator.dupe(u8, x));
-            }
+            try filters.append(.{.kind = filter.kind, .path = try allocator.dupe(u8, filter.path)});
         }
 
         const output_dir_path = path: {

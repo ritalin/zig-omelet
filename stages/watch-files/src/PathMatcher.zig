@@ -16,6 +16,10 @@ pub fn PathMatcher(comptime TChar: type) type {
             self.tree.deinit();
         }
 
+        pub fn ready(self: Self) bool {
+            return self.tree.hasFilter();
+        }
+
         pub fn match(self: Self, path: FilePath) ?FilterKinds {
             return self.tree.match(path);
         }
@@ -214,6 +218,10 @@ pub fn PathMatcher(comptime TChar: type) type {
                     }
                 }
             }
+
+            pub inline fn hasFilter(self: PatriciaAhoCorasick) bool {
+                return self.root.children.count() >= 0;
+            } 
 
             pub fn match(self: PatriciaAhoCorasick, text: FilePath) ?FilterKinds {
                 if (self.root.children.count() == 0) {

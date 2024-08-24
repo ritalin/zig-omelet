@@ -59,7 +59,8 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
     .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
-    .{@tagName(.include_filter), .{.desc = "Filter passing schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.include_filter), .{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.exclude_filter), .{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
 });
 
@@ -70,6 +71,7 @@ const ArgId = enum {
     source_dir,
     schema_dir,
     include_filter,
+    exclude_filter,
     watch,
     standalone,
 
@@ -80,6 +82,7 @@ const ArgId = enum {
         .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
         .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
         .{.id = .include_filter, .names = .{.long = "include-filter"}, .takes_value = .many},
+        .{.id = .exclude_filter, .names = .{.long = "exclude-filter"}, .takes_value = .many},
         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
@@ -119,6 +122,9 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             },
             .include_filter => {
                 if (arg.value) |v| try builder.addFilterDir(.include, v);
+            },
+            .exclude_filter => {
+                if (arg.value) |v| try builder.addFilterDir(.exclude, v);
             },
             .watch => builder.watch = true,
             .standalone => builder.standalone = true,

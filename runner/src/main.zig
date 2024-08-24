@@ -43,6 +43,7 @@ pub fn main() !void {
             .path = exe_prefix ++ "-" ++ "watch-files",
             .extra_args = &.{
                 @tagName(.source_dir_set), 
+                @tagName(.schema_dir_set),
                 @tagName(.filter_set), 
                 @tagName(.watch)
             },

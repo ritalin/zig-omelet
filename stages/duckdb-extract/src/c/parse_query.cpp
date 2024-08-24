@@ -63,9 +63,7 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
     return std::move(binder->Bind(*stmt));
 }
 
-static auto encodePlaceholder(std::vector<ParamEntry>&& entries) -> std::vector<char> {
-    std::ranges::sort(entries, {}, &ParamEntry::sort_order);
-
+static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> std::vector<char> {
     CborEncoder encoder;
 
     encoder.addArrayHeader(entries.size());
@@ -80,6 +78,18 @@ static auto encodePlaceholder(std::vector<ParamEntry>&& entries) -> std::vector<
         else {
             encoder.addNull();
         }
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
+static auto encodePlaceholderOrder(std::vector<ParamEntry>& entries) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(entries.size());
+
+    for (auto& entry: entries) {
+        encoder.addString(entry.name);
     }
 
     return std::move(encoder.rawBuffer());
@@ -169,12 +179,15 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 
             auto zmq_channel = this->messageChannel("worker.extract");
 
+            std::ranges::sort(param_type_result.params, {}, &ParamEntry::sort_order);
+
             std::unordered_map<std::string, std::vector<char>> topic_bodies({
                 {topic_query, std::vector<char>(q.cbegin(), q.cend())},
-                {topic_placeholder, encodePlaceholder(std::move(param_type_result.params))},
+                {topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))},
+                {topic_placeholder, encodePlaceholder(param_type_result.params)},
+                {topic_placeholder_order, encodePlaceholderOrder(param_type_result.params)},
                 {topic_select_list, encodeSelectList(std::move(column_type_result.columns))},
-                {bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
-                {anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))}
+                {topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
             });
             zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
         }

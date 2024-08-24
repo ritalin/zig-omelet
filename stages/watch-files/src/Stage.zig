@@ -142,18 +142,12 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
     const path_u = try toUnicodeString(self.allocator, file_path_abs);
     defer self.allocator.free(path_u);
 
-    if (filter.ready()) {
-        // apply filter
-        const filter_result = filter.match(path_u);
 
-        if (filter_result) |kinds| {
-            if (kinds.contains(.exclude)) {
-                return;
-            }
-            if (! kinds.contains(.include)) {
-                return;
-            }
-        }
+    if (filter.matchByExclude(path_u).exclude) {
+        return;
+    }
+    if (! filter.matchByInclude(path_u).include) {
+        return;
     }
 
     try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});

@@ -5,23 +5,26 @@ pub fn PathMatcher(comptime TChar: type) type {
 
     return struct {
         pub const FilterKind = enum {include, exclude};
-        pub const FilterKinds = std.enums.EnumSet(FilterKind);
+        pub const FilterKinds = std.enums.EnumFieldStruct(FilterKind, bool, false);
+        pub const FilterKindSet = std.enums.EnumSet(FilterKind);
 
-        tree: PatriciaAhoCorasick,
+        include_tree: PatriciaAhoCorasick,
+        exclude_tree: PatriciaAhoCorasick,
 
         const FilePath = []const TChar;
         const Self = @This();
 
         pub fn deinit(self: *Self) void {
-            self.tree.deinit();
+            self.include_tree.deinit();
+            self.exclude_tree.deinit();
         }
 
-        pub fn ready(self: Self) bool {
-            return self.tree.hasFilter();
+        pub fn matchByInclude(self: Self, path: FilePath) FilterKinds {
+            return self.include_tree.match(path) orelse .{.include = true};
         }
 
-        pub fn match(self: Self, path: FilePath) ?FilterKinds {
-            return self.tree.match(path);
+        pub fn matchByExclude(self: Self, path: FilePath) FilterKinds {
+            return self.exclude_tree.match(path) orelse .{};
         }
 
         pub const Builder = struct {
@@ -49,14 +52,23 @@ pub fn PathMatcher(comptime TChar: type) type {
             }
 
             pub fn build(self: *Builder) !Self {
-                var tree = try PatriciaAhoCorasick.init(self.allocator);
+                var include_tree = try PatriciaAhoCorasick.init(self.allocator);
+                var exclude_tree = try PatriciaAhoCorasick.init(self.allocator);
 
                 for (self.filter_dirs.items) |filter| {
-                    try tree.addPattern(filter.kind, filter.path);
+                    switch (filter.kind) {
+                        .include => try include_tree.addPattern(filter.kind, filter.path),
+                        .exclude => try exclude_tree.addPattern(filter.kind, filter.path),
+                    }
                 }
-                try tree.build();
 
-                return .{.tree = tree};
+                try include_tree.build();
+                try exclude_tree.build();
+
+                return .{
+                    .include_tree = include_tree,
+                    .exclude_tree = exclude_tree
+                };
             }
         };
 
@@ -64,7 +76,7 @@ pub fn PathMatcher(comptime TChar: type) type {
             id: usize,
             children: std.AutoHashMap(TChar, *PatriciaNode),
             fail: ?*PatriciaNode = null,
-            kinds: FilterKinds,
+            kinds: FilterKindSet,
             prefix: []TChar,
             is_pattern_end: bool = true,
 
@@ -77,7 +89,7 @@ pub fn PathMatcher(comptime TChar: type) type {
                 self.* = .{
                     .id = id,
                     .children = std.AutoHashMap(TChar, *PatriciaNode).init(allocator),
-                    .kinds = FilterKinds.initEmpty(),
+                    .kinds = FilterKindSet.initEmpty(),
                     .prefix = &[0]TChar{},
                 };
 
@@ -224,9 +236,7 @@ pub fn PathMatcher(comptime TChar: type) type {
             } 
 
             pub fn match(self: PatriciaAhoCorasick, text: FilePath) ?FilterKinds {
-                if (self.root.children.count() == 0) {
-                    return FilterKinds.init(.{.include = true});
-                }
+                if (self.root.children.count() == 0) return null;
 
                 var current = self.root;
                 var i: usize = 0;
@@ -236,7 +246,10 @@ pub fn PathMatcher(comptime TChar: type) type {
                         if (std.mem.startsWith(TChar, text[i..], child.prefix)) {
                             i += child.prefix.len;
                             if (child.is_pattern_end) {
-                                return child.kinds;
+                                return .{
+                                    .include = child.kinds.contains(.include),
+                                    .exclude = child.kinds.contains(.exclude),
+                                };
                             }
                             current = child;
                             continue;
@@ -252,7 +265,7 @@ pub fn PathMatcher(comptime TChar: type) type {
 
                 }
 
-                return null;
+                return .{};
             }
 
             fn dumpInternal(allocator: std.mem.Allocator, node: *PatriciaNode, depth: usize) !void {
@@ -322,12 +335,20 @@ test "Filter#1 (ASCII only)" {
         "/home/user/fonts/file3.ta",
         "/home/user/fonts/font.tt"
     };
-    const expects = &[_]?AsciiMatcher.FilterKinds {
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
-        AsciiMatcher.FilterKinds.initMany(&.{.exclude}),
-        null,
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
+
+    const include_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = true, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = true, .exclude = false},
     };
+    const exclude_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = true},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+    };
+
 
     const allocator = std.testing.allocator;
     var builder = AsciiMatcher.Builder.init(allocator);
@@ -342,9 +363,16 @@ test "Filter#1 (ASCII only)" {
     // try matcher.tree.dump();
 
     for (file_paths, 0..) |path, i| {
-        const result = matcher.match(path);
-
-        try std.testing.expectEqualDeep(expects[i], result);
+        filter: {
+            const result = matcher.matchByInclude(path);
+            try std.testing.expectEqualDeep(include_expects[i], result);
+            break:filter;
+        }
+        filter: {
+            const result = matcher.matchByExclude(path);
+            try std.testing.expectEqualDeep(exclude_expects[i], result);
+            break:filter;
+        }
     }
 }
 
@@ -368,11 +396,18 @@ test "Filter#2 (日本語)" {
     defer {
         for (file_paths) |path| { allocator.free(path); }
     }
-    const expects = &[_]?AsciiMatcher.FilterKinds {
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
-        null,
-        null,
-        AsciiMatcher.FilterKinds.initMany(&.{.exclude}),
+
+    const include_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = true, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+    };
+    const exclude_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = true},
     };
 
     var builder = AsciiMatcher.Builder.init(allocator);
@@ -387,9 +422,16 @@ test "Filter#2 (日本語)" {
     // try matcher.tree.dump();
 
     for (file_paths, 0..) |path, i| {
-        const result = matcher.match(path);
-
-        try std.testing.expectEqualDeep(expects[i], result);
+        filter: {
+            const result = matcher.matchByInclude(path);
+            try std.testing.expectEqualDeep(include_expects[i], result);
+            break:filter;
+        }
+        filter: {
+            const result = matcher.matchByExclude(path);
+            try std.testing.expectEqualDeep(exclude_expects[i], result);
+            break:filter;
+        }
     }
 }
 
@@ -403,11 +445,17 @@ test "Filter#3 (no filter)" {
         "/home/user/fonts/file3.ta",
         "/home/user/fonts/font.tt"
     };
-    const expects = &[_]?AsciiMatcher.FilterKinds {
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
-        AsciiMatcher.FilterKinds.initMany(&.{.include}),
+    const include_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = true, .exclude = false},
+        .{.include = true, .exclude = false},
+        .{.include = true, .exclude = false},
+        .{.include = true, .exclude = false},
+    };
+    const exclude_expects = &[_]?AsciiMatcher.FilterKinds {
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
+        .{.include = false, .exclude = false},
     };
 
     const allocator = std.testing.allocator;
@@ -423,9 +471,16 @@ test "Filter#3 (no filter)" {
     // try matcher.tree.dump();
 
     for (file_paths, 0..) |path, i| {
-        const result = matcher.match(path);
-
-        try std.testing.expectEqualDeep(expects[i], result);
+        filter: {
+            const result = matcher.matchByInclude(path);
+            try std.testing.expectEqualDeep(include_expects[i], result);
+            break:filter;
+        }
+        filter: {
+            const result = matcher.matchByExclude(path);
+            try std.testing.expectEqualDeep(exclude_expects[i], result);
+            break:filter;
+        }
     }
 }
 

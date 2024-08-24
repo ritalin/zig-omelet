@@ -16,8 +16,10 @@ const IdentifierFormatter = @import("./IdentifierFormatter.zig");
 allocator: std.mem.Allocator,
 output_dir: std.fs.Dir,
 entries: ResultEntryMap,
+user_type_names: std.BufSet,
+anon_user_types: std.StringHashMap(UserTypeDef),
 
-pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !Self {
+pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_dir_path: FilePath) !*Self {
     const dir = dir: {
         var parent_dir = try std.fs.cwd().makeOpenPath(prefix_dir_path, .{});
         defer parent_dir.close();
@@ -27,11 +29,17 @@ pub fn init(allocator: std.mem.Allocator, prefix_dir_path: core.FilePath, dest_d
         break :dir try parent_dir.makeOpenPath(path, .{});
     };
 
-    return .{
+    const self = try allocator.create(Self);
+
+    self.* = .{
         .allocator = allocator,
         .output_dir = dir,
         .entries = ResultEntryMap{},
+        .user_type_names = std.BufSet.init(allocator),
+        .anon_user_types = std.StringHashMap(UserTypeDef).init(allocator),
     };
+
+    return self;
 }
 
 fn toPascalCasePath(allocator: std.mem.Allocator, file_path: FilePath) !FilePath {
@@ -53,49 +61,129 @@ pub fn deinit(self: *Self) void {
             self.allocator.free(v);
         }
     }
+    self.user_type_names.deinit();
+    self.anon_user_types.deinit();
+
+    self.allocator.destroy(self);
 }
 
 pub fn applyQuery(self: *Self, query: Symbol) !void {
     self.entries.put(.query, try self.allocator.dupe(u8, query));
 }
 
-pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair) !void {
+fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
+    try writer.writeByte('\'');
+    try writer.writeAll(text);
+    try writer.writeByte('\'');
+}
+
+fn buildUserTypeMemberInternal(writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void {
+    if (user_type.fields.len == 0) return;
+
+    if (user_type.header.kind == .@"enum") {
+        try writeLiteral(writer, user_type.fields[0].field_name);
+        if (user_type.fields.len == 1) return;
+
+        for (user_type.fields[1..]) |field| {
+            try writer.writeAll(" | ");
+            try writeLiteral(writer, field.field_name);
+        }
+    }
+    _ = opt;
+}
+
+fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol {
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    var writer = buf.writer();
+
+    try buildUserTypeMemberInternal(&writer, user_type, .{.anon = true});
+
+    return buf.toOwnedSlice();
+}
+
+fn buildTypeMember(allocator: std.mem.Allocator, field_type: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !Symbol {
+    return ts_type: {
+        if (user_type_names.contains(field_type)) {
+            // predefined user type
+            break:ts_type field_type;
+        }
+        else if (anon_user_types.get(field_type)) |anon_type| {
+            // anonymous user type
+            break:ts_type try buildAnonymousTypeMember(allocator, anon_type);
+        }
+        else {
+            // builtin type
+            const key = try std.ascii.allocUpperString(allocator, field_type);
+            break:ts_type TypeMappingRules.get(key) orelse {
+                return error.UnsupportedDbType;
+            };
+        }
+    };
+}
+
+pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
-
+    
     var buf = std.ArrayList(u8).init(self.allocator);
     defer buf.deinit();
     var writer = buf.writer();
 
-    const INDENT_LEVEL = 2;
+    const INDENT_LEVEL = 0;
     const temp_allocator = arena.allocator();
 
-    try writer.writeAll((" " ** INDENT_LEVEL) ++ "export type Parameter = {\n");
+    try writer.writeAll(("  " ** INDENT_LEVEL) ++ "export type Parameter = {\n");
 
     // `  1: number | null`,
     for (parameters) |p| {
-        const field = try IdentifierFormatter.format(temp_allocator, p.field_name, .camel_case);
-        const key = key: {
-            if (p.field_type) |t| {
-                break :key try std.ascii.allocUpperString(temp_allocator, t);
+        const field = name: {
+            if (try isLiteral(temp_allocator, p.field_name)) {
+                break:name try IdentifierFormatter.format(temp_allocator, p.field_name, .camel_case);
             }
             else {
-                break :key "ANY";
+                break:name try std.fmt.allocPrint(temp_allocator, "\"{s}\"", .{p.field_name});
             }
         };
-
-        const ts_type = TypeMappingRules.get(key) orelse {
-            return error.UnsupportedDbType;
+        const ts_type = ts_type: {
+            if (p.field_type) |t| {
+                break:ts_type try buildTypeMember(temp_allocator, t, user_type_names, anon_user_types);
+            }
+            else {
+                break:ts_type "any";
+            }
         };
-        try writer.print((" " ** (INDENT_LEVEL * 2)) ++ "{s}: {s} | null,\n", .{field, ts_type});
+        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s} | null,\n", .{field, ts_type});
     }
 
-    try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
+    try writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
     
     self.entries.put(.parameter, try buf.toOwnedSlice());
 }
 
-pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
+pub fn applyPlaceholderOrder(self: *Self, orders: []const Symbol) !void {
+    var buf = std.ArrayList(u8).init(self.allocator);
+    defer buf.deinit();
+    var writer = buf.writer();
+    
+    try writer.writeAll("export const ParameterOrder: (keyof Parameter)[] = ");
+    try writer.writeByte('[');
+
+    if (orders.len > 0) {
+        try writeLiteral(&writer, orders[0]);
+    }
+    if (orders.len > 1) {
+        for (orders[1..]) |order| {
+            try writer.writeAll(", ");
+            try writeLiteral(&writer, order);
+        }
+    }
+    try writer.writeByte(']');
+
+    self.entries.put(.parameter_order, try buf.toOwnedSlice());
+}
+
+pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
     if (result_set.len == 0) return;
 
     var arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -105,14 +193,13 @@ pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
     defer buf.deinit();
     var writer = buf.writer();
     
-    const INDENT_LEVEL = 2;
+    const INDENT_LEVEL = 0;
     const temp_allocator = arena.allocator();
 
     try writer.writeAll((" " ** INDENT_LEVEL) ++ "export type ResultSet = {\n");
 
     // a: number | null
     for (result_set) |c| {
-        // TODO: supports camelCase
         const field = name: {
             if (try isLiteral(temp_allocator, c.field_name)) {
                 break:name try IdentifierFormatter.format(temp_allocator, c.field_name, .camel_case);
@@ -121,18 +208,14 @@ pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn) !void {
                 break:name try std.fmt.allocPrint(temp_allocator, "\"{s}\"", .{c.field_name});
             }
         };
+        const ts_type = try buildTypeMember(temp_allocator, c.field_type, user_type_names, anon_user_types);
 
-        const key = try std.ascii.allocUpperString(temp_allocator, c.field_type);
-
-        const ts_type = TypeMappingRules.get(key) orelse {
-            return error.UnsupportedDbType;
-        };
-        try writer.print((" " ** (INDENT_LEVEL*2)) ++ "{s}: {s}{s},\n", .{
+        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s}{s},\n", .{
             field, ts_type,
             if (c.nullable) " | null" else ""
         });
     }
-    try writer.writeAll((" " ** INDENT_LEVEL) ++ "}");
+    try writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
     
     self.entries.put(.result_set, try buf.toOwnedSlice());
 }
@@ -143,12 +226,6 @@ fn isLiteral(allocator: std.mem.Allocator, symbol: Symbol) !bool {
     return tz.next().loc.end == symbol.len;
 }
 
-fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
-    try writer.writeByte('\'');
-    try writer.writeAll(text);
-    try writer.writeByte('\'');
-}
-
 pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
@@ -157,22 +234,30 @@ pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
     defer buf.deinit();
     var writer = buf.writer();
     
-    const INDENT_LEVEL = 2;
+    const INDENT_LEVEL = 0;
 
-    if (user_type.header.kind == .@"enum") {
-        try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{
-            try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
-        });
+    try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{
+        try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
+    });
 
-        try writeLiteral(&writer, user_type.fields[0].field_name);
+    try buildUserTypeMemberInternal(&writer, user_type, .{});
 
-        var i: usize = 1;
-        while (i < user_type.fields.len): (i += 1) {
-            try writer.writeAll(" | ");
-            try writeLiteral(&writer, user_type.fields[i].field_name);
-        }
+    self.entries.put(.user_type, try buf.toOwnedSlice());
+}
 
-        self.entries.put(.user_type, try buf.toOwnedSlice());
+pub fn applyBoundUserType(self: *Self, user_type_names: []const Symbol) !void {
+    try self.user_type_names.hash_map.ensureTotalCapacity(@intCast(user_type_names.len));
+
+    for (user_type_names) |name| {
+        try self.user_type_names.insert(name);
+    }
+}
+
+pub fn applyAnonymousUserType(self: *Self, anon_user_types: []const UserTypeDef) !void {
+    try self.anon_user_types.ensureTotalCapacity(@intCast(anon_user_types.len));
+
+    for (anon_user_types) |user_type| {
+        try self.anon_user_types.put(user_type.header.name, user_type);
     }
 }
 
@@ -183,24 +268,74 @@ fn writeQuery(output_dir: std.fs.Dir, query: Symbol) !void {
     try file.writeAll(query);
 }
 
-fn writeTypescriptTypes(output_dir: std.fs.Dir, type_defs: []const ?Symbol) !void {
+fn writeTypescriptTypes(output_dir: std.fs.Dir, imports: ImportSetting, type_defs: []const ?Symbol) !void {
     var file = try output_dir.createFile("types.ts", .{});
     defer file.close();
     var writer = file.writer();
 
-    try writer.print("export namespace {s} {{\n", .{Namespace});
+    for (imports.type_names) |name| {
+        try writeImport(&writer, name, imports.prefix);
+    }
 
-    for (type_defs) |t_| {
+    if (imports.type_names.len > 0) try writer.writeByte('\n');
+
+    for (type_defs, 0..) |t_, i| {
+        if (i > 0) try writer.writeByte('\n');
+
         if (t_) |type_def| {
             try writer.print("{s}\n", .{type_def});
         }
     }
+}
 
-    try writer.writeAll("}");
+fn writeImport(writer: anytype, type_name: Symbol, prefix: ?Symbol) !void {
+    try writer.print("import {{ {s} }} from ", .{type_name});
+    try writer.writeByte('\'');
+
+    if (prefix) |p| {
+        try writer.print("{s}/", .{p});
+    }
+
+    try writer.writeAll(type_name);
+    try writer.writeByte('\'');
+    try writer.writeByte('\n');
 }
 
 pub fn buildWith(self: *Self, handler: *const fn (builder: *CodeBuilder) anyerror!void) !void {
     try handler(self);
+}
+
+const ImportSetting = struct {
+    type_names:[]const Symbol,
+    prefix: ?Symbol,
+
+    pub fn deinit(self: ImportSetting, allocator: std.mem.Allocator) void {
+        allocator.free(self.type_names);
+    }
+};
+
+pub fn createImportSetting(self: *Self, allocator: std.mem.Allocator, prefix: ?Symbol) !ImportSetting {
+    var names = try allocator.alloc(Symbol, self.user_type_names.count());
+
+    var iter = self.user_type_names.iterator();
+    var i: usize = 0;
+
+    while(iter.next()) |name| :(i += 1) {
+        names[i] = name.*;
+    }
+
+    std.mem.sort(Symbol, names, .{}, 
+        struct {
+            pub fn lessThan(_: @TypeOf(.{}), lhs: Symbol, rhs: Symbol) bool {
+                return std.mem.order(u8, lhs, rhs) == .lt;
+            }
+        }.lessThan
+    );
+
+    return .{
+        .type_names = names,
+        .prefix = prefix,
+    };
 }
 
 pub const SourceGenerator = struct {
@@ -211,7 +346,15 @@ pub const SourceGenerator = struct {
             };
         }
         types: {
-            writeTypescriptTypes(builder.output_dir, &.{builder.entries.get(.parameter), builder.entries.get(.result_set)}) catch {
+            const imports = try builder.createImportSetting(builder.allocator, "user-types");
+            defer imports.deinit(builder.allocator);
+
+            writeTypescriptTypes(builder.output_dir, imports, &.{
+                builder.entries.get(.parameter), 
+                builder.entries.get(.parameter_order), 
+                builder.entries.get(.result_set)
+            }) 
+            catch {
                 return error.TypeFileGenerationFailed;
             };
             break:types;
@@ -224,7 +367,10 @@ pub const UserTypeGenerator = struct {
         var out_dir = try builder.output_dir.makeOpenPath("user-types", .{});
         defer out_dir.close();
 
-        writeTypescriptTypes(out_dir, &.{builder.entries.get(.user_type)}) catch {
+        const imports = try builder.createImportSetting(builder.allocator, null);
+        defer imports.deinit(builder.allocator);
+
+        writeTypescriptTypes(out_dir, imports, &.{builder.entries.get(.user_type)}) catch {
             return error.TypeFileGenerationFailed;
         };
     }
@@ -233,8 +379,11 @@ pub const UserTypeGenerator = struct {
 pub const Target = union(enum) {
     query: Symbol,
     parameter: []const FieldTypePair,
+    parameter_order: []const Symbol,
     result_set: []const ResultSetColumn,
     user_type: UserTypeDef,
+    bound_user_type: []const Symbol,
+    anon_user_type: []const UserTypeDef,
 };
 
 pub const FieldTypePair = struct {
@@ -250,11 +399,17 @@ pub const ResultSetColumn = struct {
 
 pub const UserTypeDef = struct {
     header: Header,
-    fields: []const FieldTypePair,
+    fields: []const Member,
 
+    pub const Kind = enum {@"enum"};
     pub const Header = struct {
-        kind: enum {@"enum"},
+        kind: Kind,
         name: Symbol,
+    };
+
+    pub const Member = struct {
+        field_name: Symbol,
+        field_type: ?UserTypeDef = null,
     };
 };
 
@@ -286,6 +441,12 @@ pub const Parser = struct {
         return result;
     }
 
+    fn parsePlaceholderOrder(allocator: std.mem.Allocator, content: Symbol) ![]const Symbol {
+        var reader = core.CborStream.Reader.init(content);
+
+        return reader.readSlice(allocator, Symbol); 
+    }
+
     fn parseResultSet(allocator: std.mem.Allocator, content: Symbol) ![]const ResultSetColumn {
         var reader = core.CborStream.Reader.init(content);
 
@@ -304,25 +465,55 @@ pub const Parser = struct {
         return result_set;
     }
 
-    fn parseUserTypeDefinition(allocator: std.mem.Allocator, content: Symbol) !UserTypeDef {
-        var reader = core.CborStream.Reader.init(content);
+    fn parseUserTypeDefinitionInternal(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, user_type: *UserTypeDef) !void {
+        const HeaderType = struct {Symbol, Symbol};
 
-        const header = try reader.readTuple(core.StructView(UserTypeDef.Header));
-        const values = try reader.readSlice(allocator, core.StructView(FieldTypePair));
+        const v = try reader.readTuple(core.StructView(HeaderType));
+        const header: UserTypeDef.Header = .{ .kind = std.meta.stringToEnum(UserTypeDef.Kind, v[0]).?, .name = v[1] };
 
-        var fields = try allocator.alloc(FieldTypePair, values.len);
+        const filed_len = try reader.readSliceHeader();
+        var fields = try allocator.alloc(UserTypeDef.Member, filed_len);
 
-        for (values, 0..) |v, i| {
-            fields[i] = .{
-                .field_name = v[0],
-                .field_type = v[1],
-            };
+        for (0..filed_len) |i| {
+            const tuple_len = try reader.readSliceHeader();
+            std.debug.assert(tuple_len == 2);
+
+            fields[i].field_name = try reader.readString();
+            fields[i].field_type = try reader.readNull(UserTypeDef); // TODO.{.kind = .name = "" },
         }
 
-        return .{
-            .header = .{ .kind = header[0], .name = header[1] },
+        user_type.* = .{
+            .header = header,
             .fields = fields,
         };
+    }
+
+    fn parseUserTypeDefinition(allocator: std.mem.Allocator, content: Symbol) !UserTypeDef {
+        var reader = core.CborStream.Reader.init(content);
+        var user_type: UserTypeDef = undefined;
+
+        try parseUserTypeDefinitionInternal(allocator, &reader, &user_type);
+
+        return user_type;
+    }
+
+    fn parseBoundUserDef(allocator: std.mem.Allocator, content: Symbol) ![]const Symbol {
+        var reader = core.CborStream.Reader.init(content);
+
+        return reader.readSlice(allocator, Symbol);
+    }
+
+    fn parseAnonymousUserTypeDef(allocator: std.mem.Allocator, content: Symbol) ![]const UserTypeDef {
+        var reader = core.CborStream.Reader.init(content);
+        
+        const values_len = try reader.readSliceHeader();
+        var values = try allocator.alloc(UserTypeDef, values_len);
+
+        for (0..values_len) |i| {
+            try parseUserTypeDefinitionInternal(allocator, &reader, &values[i]);
+        }
+
+        return values;
     }
 
     pub const ResultWalker = struct {
@@ -337,7 +528,10 @@ pub const Parser = struct {
         }
 
         const TargetKindMap = std.StaticStringMap(std.meta.FieldEnum(Target)).initComptime(.{ 
-            .{ "query", .query }, .{ "placeholder", .parameter }, .{ "select-list", .result_set },
+            .{ "query", .query }, 
+            .{ "placeholder", .parameter }, .{ "placeholder-order", .parameter_order }, 
+            .{ "select-list", .result_set },
+            .{ "bound-user-type", .bound_user_type }, .{ "anon-user-type", .anon_user_type },
             .{ "user-type", .user_type },
         });
 
@@ -354,12 +548,21 @@ pub const Parser = struct {
                     .parameter => {
                         return .{ .parameter = try Parser.parsePlaceholder(self.arena.allocator(), body.content) };
                     },
+                    .parameter_order => {
+                        return .{ .parameter_order = try Parser.parsePlaceholderOrder(self.arena.allocator(), body.content) };
+                    },
                     .result_set => {
                         return .{ .result_set = try Parser.parseResultSet(self.arena.allocator(), body.content) };
                     },
                     .user_type => {
                         return .{ .user_type = try Parser.parseUserTypeDefinition(self.arena.allocator(), body.content) };
-                    }
+                    },
+                    .bound_user_type => {
+                        return .{ .bound_user_type = try Parser.parseBoundUserDef(self.arena.allocator(), body.content) };
+                    },
+                    .anon_user_type => {
+                        return .{ .anon_user_type = try Parser.parseAnonymousUserTypeDef(self.arena.allocator(), body.content) };
+                    },
                 }
             }
 
@@ -367,39 +570,6 @@ pub const Parser = struct {
         }
     };
 };
-
-test "parse query" {
-    const allocator = std.testing.allocator;
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
-    
-    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
-        .topic = "query",
-        .content = "select $1, $2 from foo where kind = $3",
-    }};
-
-    var iter: Parser.ResultWalker = .{
-        .arena = arena,
-        .source_bodies = source_bodies,
-        .index = 0,
-    };
-    defer iter.deinit();
-
-    assert: {
-        const walk_result = try iter.walk();
-        try std.testing.expect(walk_result != null);
-
-        const result = walk_result.?;
-        try std.testing.expectEqual(.query, std.meta.activeTag(result));
-        try std.testing.expectEqualStrings(source_bodies[0].content, result.query);
-        break :assert;
-    }
-    assert: {
-        const walk_result = try iter.walk();
-        try std.testing.expect(walk_result == null);
-        break :assert;
-    }
-}
 
 const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
     // BIGINT 	INT8, LONG 	signed eight-byte integer
@@ -474,6 +644,39 @@ const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
     // Other
     .{"ANY", "any"},
 });
+
+test "parse query" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "query",
+        .content = "select $1, $2 from foo where kind = $3",
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.query, std.meta.activeTag(result));
+        try std.testing.expectEqualStrings(source_bodies[0].content, result.query);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
 
 fn placeholderToCbor(allocator: std.mem.Allocator, items: []const FieldTypePair) !core.Symbol {
     var writer = try core.CborStream.Writer.init(allocator);
@@ -551,6 +754,46 @@ test "parse parameter#2 (with any type)" {
         const result = walk_result.?;
         try std.testing.expectEqual(.parameter, std.meta.activeTag(result));
         try std.testing.expectEqualDeep(expect, result.parameter);
+        break :assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break :assert;
+    }
+}
+
+test "parse parameter order" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expect: []const Symbol = &.{"id", "name", "kind"};
+    
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeSlice(Symbol, expect);
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "placeholder-order",
+        .content = writer.buffer.items,
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.parameter_order, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expect, result.parameter_order);
         break :assert;
     }
     assert: {
@@ -689,10 +932,7 @@ test "parse result set with aliasless field name" {
     }
 }
 
-fn userTypeToCbor(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol {
-    var writer = try core.CborStream.Writer.init(allocator);
-    defer writer.deinit();
-
+fn userTypeToCborInternal(writer: *core.CborStream.Writer, user_type: UserTypeDef) !void {
     header: {
         _ = try writer.writeSliceHeader(2);
         _ = try writer.writeString(@tagName(user_type.header.kind));
@@ -703,10 +943,25 @@ fn userTypeToCbor(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol 
         _ = try writer.writeSliceHeader(user_type.fields.len);
 
         for (user_type.fields) |c| {
-            _ = try writer.writeTuple(core.StructView(FieldTypePair), .{c.field_name, c.field_type});
+            _ = try writer.writeSliceHeader(2);
+            _ = try writer.writeString(c.field_name);
+
+            if (c.field_type) |ft| {
+                try userTypeToCborInternal(writer, ft);
+            }
+            else {
+                _ = try writer.writeNull();
+            }
         }
         break:bodies;
     }
+}
+
+fn userTypeToCbor(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol {
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    try userTypeToCborInternal(&writer, user_type);
 
     return writer.buffer.toOwnedSlice();
 }
@@ -754,7 +1009,200 @@ test "parse enum user type" {
     }
 }
 
-fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol) !void {
+test "parse bound enum user type" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    
+    const expects: []const Symbol = &.{"Visibility", "Status"};
+    
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeSlice(Symbol, expects);
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "bound-user-type",
+        .content = writer.buffer.items,
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.bound_user_type, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expects, result.bound_user_type);
+        break:assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break:assert;
+    }
+}
+
+fn anonymousTypeToCbor(allocator: std.mem.Allocator, user_types: []const UserTypeDef) !Symbol {
+    var writer = try core.CborStream.Writer.init(allocator);
+    defer writer.deinit();
+
+    _ = try writer.writeSliceHeader(user_types.len);
+
+    for (user_types) |user_type| {
+        try userTypeToCborInternal(&writer, user_type);
+    }
+
+    return writer.buffer.toOwnedSlice();
+}
+
+test "parse anonymous user type (enum)" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expects: []const UserTypeDef = &.{
+        .{
+            .header = .{ .kind = .@"enum", .name = "Visibility" },
+            .fields = &.{
+                .{.field_name = "hide", .field_type = null}, 
+                .{.field_name = "visible", .field_type = null}, 
+            },
+        },
+        .{
+            .header = .{ .kind = .@"enum", .name = "Status" },
+            .fields = &.{
+                .{.field_name = "succes", .field_type = null}, 
+                .{.field_name = "failed", .field_type = null}, 
+            },
+        },
+    };
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "anon-user-type",
+        .content = try anonymousTypeToCbor(arena.allocator(), expects),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+    
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.anon_user_type, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expects, result.anon_user_type);
+        break:assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break:assert;
+    }
+}
+
+test "parse anonymous user type (enum + primitive list)" {
+    // TODO
+}
+
+test "parse anonymous user type (enum + enum list)" {
+    // TODO
+}
+
+test "apply bound user type name#1" {
+    const allocator = std.testing.allocator;
+
+    const expects: []const Symbol = &.{};
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    try std.testing.expectEqual(0, builder.user_type_names.count());
+
+    try builder.applyBoundUserType(expects);
+
+    try std.testing.expectEqual(0, builder.user_type_names.count());
+}
+
+test "apply bound user type name#2" {
+    const allocator = std.testing.allocator;
+
+    const expects: []const Symbol = &.{"Visibility", "Status"};
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    try std.testing.expectEqual(0, builder.user_type_names.count());
+
+    try builder.applyBoundUserType(expects);
+
+    try std.testing.expectEqual(2, builder.user_type_names.count());
+    try std.testing.expect(builder.user_type_names.contains("Visibility"));
+    try std.testing.expect(builder.user_type_names.contains("Status"));
+}
+
+test "apply anonymous user type" {
+    const allocator = std.testing.allocator;
+
+    const expects: []const UserTypeDef = &.{
+        .{
+            .header = .{ .kind = .@"enum", .name = "Visibility" },
+            .fields = &.{
+                .{ .field_name = "hide", .field_type = null },
+                .{ .field_name = "visible", .field_type = null },
+            }
+        },
+        .{
+            .header = .{ .kind = .@"enum", .name = "Status" },
+            .fields = &.{
+                .{ .field_name = "failed", .field_type = null },
+                .{ .field_name = "success", .field_type = null },
+            }
+        },
+    };
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    try std.testing.expectEqual(0, builder.anon_user_types.count());
+
+    try builder.applyAnonymousUserType(expects);
+
+    try std.testing.expectEqual(expects.len, builder.anon_user_types.count());
+    try std.testing.expectEqualDeep(expects[0], builder.anon_user_types.get("Visibility").?);
+    try std.testing.expectEqualDeep(expects[1], builder.anon_user_types.get("Status").?);
+}
+
+fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
     const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
@@ -765,7 +1213,7 @@ fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol) !void 
     var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
-    try builder.applyPlaceholder(parameters);
+    try builder.applyPlaceholder(parameters, user_type_names, anon_user_types);
 
     const apply_result = builder.entries.get(.parameter);
     try std.testing.expect(apply_result != null);
@@ -781,13 +1229,19 @@ test "generate name parameter code#1" {
         .{.field_name = "name", .field_type = "VARCHAR"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    id: number | null,
-        \\    name: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  id: number | null,
+        \\  name: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#2 (upper case field)" {
@@ -796,13 +1250,19 @@ test "generate name parameter code#2 (upper case field)" {
         .{.field_name = "NAME", .field_type = "VARCHAR"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    id: number | null,
-        \\    name: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  id: number | null,
+        \\  name: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#3 (lower-case)" {
@@ -811,13 +1271,19 @@ test "generate name parameter code#3 (lower-case)" {
         .{.field_name = "name", .field_type = "varchar"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    id: number | null,
-        \\    name: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  id: number | null,
+        \\  name: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#4 (with any type)" {
@@ -826,13 +1292,19 @@ test "generate name parameter code#4 (with any type)" {
         .{.field_name = "name", .field_type = null},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    id: any | null,
-        \\    name: any | null,
-        \\  }
+        \\export type Parameter = {
+        \\  id: any | null,
+        \\  name: any | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (with snake_case)" {
@@ -841,13 +1313,19 @@ test "generate name parameter code#5 (with snake_case)" {
         .{.field_name = "user_name", .field_type = "text"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    userId: number | null,
-        \\    userName: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  userId: number | null,
+        \\  userName: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (with PascalCase)" {
@@ -856,13 +1334,40 @@ test "generate name parameter code#5 (with PascalCase)" {
         .{.field_name = "UserName", .field_type = "text"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    userId: number | null,
-        \\    userName: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  userId: number | null,
+        \\  userName: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
+}
+
+test "generate name parameter code#5 (without alias)" {
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "UserId", .field_type = "int"},
+        .{.field_name = "CAST(name AS VARCHAR)", .field_type = "text"},
+    };
+    const expect = 
+        \\export type Parameter = {
+        \\  userId: number | null,
+        \\  "CAST(name AS VARCHAR)": string | null,
+        \\}
+    ;
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate positional parameter code" {
@@ -871,13 +1376,19 @@ test "generate positional parameter code" {
         .{.field_name = "2", .field_type = "text"},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    1: number | null,
-        \\    2: string | null,
-        \\  }
+        \\export type Parameter = {
+        \\  1: number | null,
+        \\  2: string | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate positional parameter code with any type" {
@@ -886,27 +1397,91 @@ test "generate positional parameter code with any type" {
         .{.field_name = "2", .field_type = null},
     };
     const expect = 
-        \\  export type Parameter = {
-        \\    1: any | null,
-        \\    2: any | null,
-        \\  }
+        \\export type Parameter = {
+        \\  1: any | null,
+        \\  2: any | null,
+        \\}
     ;
 
-    try runApplyPlaceholder(parameters, expect);
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
-fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol) !void {
+test "generate positional parameter code with enum user type" {
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "vis1", .field_type = "Visibility"},
+        .{.field_name = "vis2", .field_type = "Param::Enum#1"},
+    };
+    const expect = 
+        \\export type Parameter = {
+        \\  vis1: Visibility | null,
+        \\  vis2: 'hide' | 'visible' | null,
+        \\}
+    ;
+
+    var user_type_names = map: {
+        var map = std.BufSet.init(std.testing.allocator);
+
+        try map.insert("Visibility");
+        try map.insert("Status");
+        break:map map;
+    };
+    defer user_type_names.deinit();
+
+    var anon_user_types = map: {
+        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+
+        try map.put("Param::Enum#1", .{  
+            .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
+            .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
+        });
+        break:map map;
+    };
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
+}
+
+test "generate parameter order" {
     const allocator = std.testing.allocator;
+
+    const orders: []const Symbol = &.{"id", "name", "kind"};
+    const expect = "export const ParameterOrder: (keyof Parameter)[] = ['id', 'name', 'kind']";
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
+
     const parent_path = try dir.dir.realpathAlloc(allocator, ".");
     defer allocator.free(parent_path);
 
     var builder = try Self.init(allocator, parent_path, "foo");
     defer builder.deinit();
 
-    try builder.applyResultSets(parameters);
+    try builder.applyPlaceholderOrder(orders);
+
+    const apply_result = builder.entries.get(.parameter_order);
+    try std.testing.expect(apply_result != null);
+    try std.testing.expectEqualStrings(expect, apply_result.?);
+}
+
+fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
+    const allocator = std.testing.allocator;
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    try builder.applyResultSets(parameters, user_type_names, anon_user_types);
 
     const apply_result = builder.entries.get(.result_set);
     try std.testing.expect(apply_result != null);
@@ -920,13 +1495,20 @@ test "generate select list#1 (lowercase field)" {
         .{.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
     const expect = 
-        \\  export type ResultSet = {
-        \\    id: number,
-        \\    kind: number,
-        \\    value: string,
-        \\  }
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  kind: number,
+        \\  value: string,
+        \\}
     ;
-    try runApplyResultSets(result_set, expect);
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#2 (PascalCase field)" {
@@ -936,13 +1518,20 @@ test "generate select list#2 (PascalCase field)" {
         .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
     };
     const expect = 
-        \\  export type ResultSet = {
-        \\    userId: number,
-        \\    profileKind: number,
-        \\    remarks: string,
-        \\  }
+        \\export type ResultSet = {
+        \\  userId: number,
+        \\  profileKind: number,
+        \\  remarks: string,
+        \\}
     ;
-    try runApplyResultSets(result_set, expect);
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#3 (lower snake_case field)" {
@@ -952,13 +1541,20 @@ test "generate select list#3 (lower snake_case field)" {
         .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
     };
     const expect = 
-        \\  export type ResultSet = {
-        \\    userId: number,
-        \\    profileKind: number,
-        \\    remarks: string,
-        \\  }
+        \\export type ResultSet = {
+        \\  userId: number,
+        \\  profileKind: number,
+        \\  remarks: string,
+        \\}
     ;
-    try runApplyResultSets(result_set, expect);
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#4 (upper snake_case field)" {
@@ -968,13 +1564,20 @@ test "generate select list#4 (upper snake_case field)" {
         .{.field_name = "REMARKS", .field_type = "VARCHAR", .nullable = false},
     };
     const expect = 
-        \\  export type ResultSet = {
-        \\    userId: number,
-        \\    profileKind: number,
-        \\    remarks: string,
-        \\  }
+        \\export type ResultSet = {
+        \\  userId: number,
+        \\  profileKind: number,
+        \\  remarks: string,
+        \\}
     ;
-    try runApplyResultSets(result_set, expect);
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#5 (nullable field)" {
@@ -984,17 +1587,80 @@ test "generate select list#5 (nullable field)" {
         .{.field_name = "value", .field_type = "VARCHAR", .nullable = true},
     };
     const expect = 
-        \\  export type ResultSet = {
-        \\    id: number,
-        \\    kind: number | null,
-        \\    value: string | null,
-        \\  }
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  kind: number | null,
+        \\  value: string | null,
+        \\}
     ;
-    try runApplyResultSets(result_set, expect);
+
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#6 (field without alias)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .field_type = "INTEGER", .nullable = true},
+        .{.field_name = "CAST($val AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},
+    };
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  kind: number | null,
+        \\  "CAST($val AS VARCHAR)": string | null,
+        \\}
+    ;
 
+    var user_type_names = std.BufSet.init(std.testing.allocator);
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
+}
+
+test "generate select list#7 (with enum user type)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "vis1", .field_type = "Param::Enum#1", .nullable = true},
+        .{.field_name = "vis2", .field_type = "Visibility", .nullable = false},
+    };
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  vis1: 'hide' | 'visible' | null,
+        \\  vis2: Visibility,
+        \\}
+    ;
+
+    var user_type_names = map: {
+        var map = std.BufSet.init(std.testing.allocator);
+
+        try map.insert("Visibility");
+        try map.insert("Status");
+        break:map map;
+    };
+    defer user_type_names.deinit();
+
+    var anon_user_types = map: {
+        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+
+        try map.put("Param::Enum#1", .{  
+            .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
+            .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
+        });
+        break:map map;
+    };
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol) !void {
@@ -1026,7 +1692,7 @@ test "generate enum user type#1 (PascalCase type name)" {
         },
     };
     const expect = 
-        \\  export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = 'hide' | 'visible'
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1043,7 +1709,7 @@ test "generate enum user type#2 (lowercase type name)" {
         },
     };
     const expect = 
-        \\  export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = 'hide' | 'visible'
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1060,7 +1726,7 @@ test "generate enum user type#3 (UPPER CASE type name)" {
         },
     };
     const expect = 
-        \\  export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = 'hide' | 'visible'
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1077,13 +1743,13 @@ test "generate enum user type#3 (snake_case type name)" {
         },
     };
     const expect = 
-        \\  export type UserProfileKind = 'admin' | 'general'
+        \\export type UserProfileKind = 'admin' | 'general'
     ;
 
     try runApplyUserType(enum_type, expect);
 }
 
-test "Output build result" {
+test "Output build result#1" {
     const allocator = std.testing.allocator;
 
     var output_dir = std.testing.tmpDir(.{});
@@ -1096,7 +1762,8 @@ test "Output build result" {
 
     builder.entries.put(.query, try allocator.dupe(u8, "select $1::id, $2::name from foo where value = $3::value"));
     builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, value:string|null}"));
-
+    builder.entries.put(.parameter_order, try allocator.dupe(u8,"export const O: (keyof P)[] = ['id', 'name', 'vis', 'status']"));
+    builder.entries.put(.result_set, try allocator.dupe(u8, "export type R = { id:number, name:string|null }"));
     try builder.buildWith(SourceGenerator.build);
 
     query: {
@@ -1109,21 +1776,147 @@ test "Output build result" {
 
         try std.testing.expectEqualStrings(builder.entries.get(.query).?, content);
 
-        break :query;
+        break:query;
     }
     placeholder: {
         var file = try output_dir.dir.openFile("Foo/types.ts", .{});
         defer file.close();
+        var reader = file.reader();
 
         const meta = try file.metadata();
-        const content = try file.readToEndAlloc(allocator, meta.size());
-        defer allocator.free(content);
+        const file_size = meta.size();
 
-        try std.testing.expect(
-            std.mem.containsAtLeast(u8, content, 1, builder.entries.get(.parameter).?)
-        );
+        expect_placeholder: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.parameter).?, line.?);
+            break:expect_placeholder;
+        }
+        expect_blank: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("", line.?);
+            break:expect_blank;
+        }
+        expect_placeholder_order: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.parameter_order).?, line.?);
+            break:expect_placeholder_order;
+        }
+        expect_blank: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("", line.?);
+            break:expect_blank;
+        }
+        expect_result_set: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.result_set).?, line.?);
+            break:expect_result_set;
+        }
+        expect_eof: {
+            try std.testing.expectError(error.EndOfStream, reader.readByte());
+            break:expect_eof;
+        }
+        break:placeholder;
+    }
+}
 
-        break :placeholder;
+test "Output build result#2 (with predefined user type)" {
+    const allocator = std.testing.allocator;
+
+    var output_dir = std.testing.tmpDir(.{});
+    defer output_dir.cleanup();
+    const parent_path = try output_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try Self.init(allocator, parent_path, "foo");
+    defer builder.deinit();
+
+    builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, vis:Visibility|null, status: Status|null}"));
+    builder.entries.put(.parameter_order, try allocator.dupe(u8,"export const O: (keyof P)[] = ['id', 'name', 'vis', 'status']"));
+    builder.entries.put(.result_set, try allocator.dupe(u8, "export type R = { id:number, name:string|null }"));
+    try builder.user_type_names.insert("Visibility");
+    try builder.user_type_names.insert("Status");
+
+    try builder.buildWith(SourceGenerator.build);
+
+    placeholder: {
+        var file = try output_dir.dir.openFile("Foo/types.ts", .{});
+        defer file.close();
+        var reader = file.reader();
+
+        const meta = try file.metadata();
+        const file_size = meta.size();
+
+        expect_import: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("import { Status } from 'user-types/Status'", line.?);
+            break:expect_import;
+        }
+        expect_import: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("import { Visibility } from 'user-types/Visibility'", line.?);
+            break:expect_import;
+        }
+        expect_blank: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("", line.?);
+            break:expect_blank;
+        }
+        expect_placeholder: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.parameter).?, line.?);
+            break:expect_placeholder;
+        }
+        expect_blank: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("", line.?);
+            break:expect_blank;
+        }
+        expect_placeholder_order: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.parameter_order).?, line.?);
+            break:expect_placeholder_order;
+        }
+        expect_blank: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings("", line.?);
+            break:expect_blank;
+        }
+        expect_result_set: {
+            const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
+            defer if (line) |x| allocator.free(x);
+            try std.testing.expect(line != null);
+            try std.testing.expectEqualStrings(builder.entries.get(.result_set).?, line.?);
+            break:expect_result_set;
+        }
+        expect_eof: {
+            try std.testing.expectError(error.EndOfStream, reader.readByte());
+            break:expect_eof;
+        }
+        break:placeholder;
     }
 }
 

@@ -52,20 +52,9 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     var walker = try CodeBuilder.Parser.beginParse(self.allocator, self.source.bodies);
     defer walker.deinit();
 
-    while (try walker.walk()) |target| switch (target) {
-        .query => |q| {
-            try builder.applyQuery(q);
-        },
-        .parameter => |placeholder| {
-            try builder.applyPlaceholder(placeholder);
-        },
-        .result_set => |field_types| {
-            try builder.applyResultSets(field_types);
-        },
-        .user_type => |definition| {
-            try builder.applyUserType(definition);
-        }
-    };
+    var passed_set: TargetFields = .{};
+
+    try parsePayload(&walker, &passed_set, builder);
 
     const payload = payload: {
         var writer = try core.CborStream.Writer.init(self.allocator);
@@ -108,6 +97,55 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     defer event.deinit();
 
     try core.sendEvent(self.allocator, socket, "task", event);
+}
+
+const TargetFields = std.enums.EnumFieldStruct(std.meta.FieldEnum(CodeBuilder.Target), bool, false);
+
+fn parsePayload(walker: *CodeBuilder.Parser.ResultWalker, passed_set: *TargetFields, builder: *CodeBuilder) !void {
+    while (try walker.walk()) |target| switch (target) {
+        .query => |q| {
+            try builder.applyQuery(q);
+            passed_set.query = true;
+        },
+        .parameter => |placeholder| {
+            if (!passed_set.bound_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+            if (!passed_set.anon_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+
+            try builder.applyPlaceholder(placeholder, builder.user_type_names, builder.anon_user_types);
+            passed_set.parameter = true;
+        },
+        .parameter_order => |orders| {
+            try builder.applyPlaceholderOrder(orders);
+            passed_set.parameter_order = true;
+        },
+        .result_set => |field_types| {
+            if (!passed_set.bound_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+            if (!passed_set.anon_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+
+            try builder.applyResultSets(field_types, builder.user_type_names, builder.anon_user_types);
+            passed_set.result_set = true;
+        },
+        .user_type => |definition| {
+            try builder.applyUserType(definition);
+            passed_set.user_type = true;
+        },
+        .bound_user_type => |names| {
+            try builder.applyBoundUserType(names);
+            passed_set.bound_user_type = true;
+        },
+        .anon_user_type => |definitions| {
+            try builder.applyAnonymousUserType(definitions);
+            passed_set.anon_user_type = true;
+        },
+    };
 }
 
 fn sendLog(allocator: std.mem.Allocator, socket: *zmq.ZSocket, log_level: core.LogLevel, comptime fmt: []const u8, args: anytype) !void {

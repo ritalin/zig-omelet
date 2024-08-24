@@ -40,7 +40,10 @@ auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_nam
 
 static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     switch (kind) {
-    case UserTypeKind::Enum: return std::to_string('enum');
+    case UserTypeKind::Enum: 
+        return std::string("enum");
+    default:
+        return std::string("unknown");
     }
 }
 

@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) !void {
     const dep_core = b.dependency("lib_core", .{ .zmq_prefix = zmq_prefix });
 
     const app_context = "runner";
-    const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context});
+    const exe_name = exe_prefix;
     
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "app_context", app_context);

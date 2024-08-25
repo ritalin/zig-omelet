@@ -160,7 +160,7 @@ fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.Stri
         });
     }
     else {
-        try self.logger.log(.info, "{s} of `{s}/*` {s}", .{
+        try self.logger.log(.info, "{s} of `{s}` {s}", .{
             message,
             dest_name,
             if (status == .new_file) "✨" else "",

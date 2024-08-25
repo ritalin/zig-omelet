@@ -64,19 +64,30 @@ fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
     try writer.writeByte('\'');
 }
 
-fn buildUserTypeMemberInternal(writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void {
+fn buildUserTypeMemberInternal(allocator: std.mem.Allocator, writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void {
     if (user_type.fields.len == 0) return;
 
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    var member_writer = buf.writer();
+
     if (user_type.header.kind == .@"enum") {
-        try writeLiteral(writer, user_type.fields[0].field_name);
+        try writeLiteral(&member_writer, user_type.fields[0].field_name);
         if (user_type.fields.len == 1) return;
 
         for (user_type.fields[1..]) |field| {
-            try writer.writeAll(" | ");
-            try writeLiteral(writer, field.field_name);
+            try member_writer.writeAll(" | ");
+            try writeLiteral(&member_writer, field.field_name);
         }
     }
-    _ = opt;
+
+    if (opt.anon) {
+        try writer.writeAll(buf.items);
+    }
+    else {
+        const type_name = try IdentifierFormatter.format(allocator, user_type.header.name, .pascal_case);
+        try  writer.print("({s}) & {{_brand: '{s}'}}", .{buf.items, type_name});
+    }
 }
 
 fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol {
@@ -84,7 +95,7 @@ fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef
     defer buf.deinit();
     var writer = buf.writer();
 
-    try buildUserTypeMemberInternal(&writer, user_type, .{.anon = true});
+    try buildUserTypeMemberInternal(allocator, &writer, user_type, .{.anon = true});
 
     return buf.toOwnedSlice();
 }
@@ -227,7 +238,7 @@ pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
         try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
     });
 
-    try buildUserTypeMemberInternal(&writer, user_type, .{});
+    try buildUserTypeMemberInternal(arena.allocator(), &writer, user_type, .{});
 
     self.entries.put(.user_type, try buf.toOwnedSlice());
 }
@@ -346,7 +357,7 @@ pub const SourceGenerator = struct {
 
 pub const UserTypeGenerator = struct {
     pub const output_root: Symbol = "user-types";
-    pub const log_fmt: Symbol = output_root ++ "/{s}";
+    pub const log_fmt: Symbol = output_root ++ "/{s}.ts";
 
     pub fn build(builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus {
         var output_dir = try outputDir(root_dir);
@@ -1696,7 +1707,7 @@ test "generate enum user type#1 (PascalCase type name)" {
         },
     };
     const expect = 
-        \\export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1713,7 +1724,7 @@ test "generate enum user type#2 (lowercase type name)" {
         },
     };
     const expect = 
-        \\export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1730,7 +1741,7 @@ test "generate enum user type#3 (UPPER CASE type name)" {
         },
     };
     const expect = 
-        \\export type Visibility = 'hide' | 'visible'
+        \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1747,7 +1758,7 @@ test "generate enum user type#3 (snake_case type name)" {
         },
     };
     const expect = 
-        \\export type UserProfileKind = 'admin' | 'general'
+        \\export type UserProfileKind = ('admin' | 'general') & {_brand: 'UserProfileKind'}
     ;
 
     try runApplyUserType(enum_type, expect);
@@ -1929,7 +1940,7 @@ test "Output build enum user type" {
     var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
-    builder.entries.put(.user_type, try allocator.dupe(u8, "export type Visibility = 'hide' | 'visible'"));
+    builder.entries.put(.user_type, try allocator.dupe(u8, "export type Visibility = ('hide' | 'visible') & {_brand = 'Visibility'}"));
 
     _ = try UserTypeGenerator.build(builder, output_dir.dir, "Foo");
 

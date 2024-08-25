@@ -64,6 +64,17 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                         anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
                     }
                 }
+                else if (isArrayUserType(expr->return_type)) {
+                    auto user_type_name = userTypeName(expr->return_type);
+                    if (user_type_name != "") {
+                        type_name = user_type_name;
+                        user_type_names.push_back(user_type_name);
+                    }
+                    else {
+                        type_name = std::format("SelList::Array#{}", i+1);
+                        anon_types.push_back(pickArrayUserType(expr->return_type, type_name));
+                    }
+                }
                 else {
                     type_name = expr->return_type.ToString();
                 }
@@ -125,6 +136,40 @@ using namespace Catch::Matchers;
 using LogicalOperatorRef = duckdb::unique_ptr<duckdb::LogicalOperator>;
 using BoundTableRef = duckdb::unique_ptr<duckdb::BoundTableRef>;
 
+static auto expectAnonymousUserType(UserTypeEntry actual, UserTypeEntry expect, size_t i, size_t depth) -> void {
+    INFO(std::format("[{}] Anonymous type#{}", depth, i));
+    user_type_kind: {
+        UNSCOPED_INFO("user type kind");
+        CHECK(actual.kind == expect.kind);
+    }
+    user_type_name: {
+        UNSCOPED_INFO("user type name");
+        CHECK_THAT(actual.name, Equals(expect.name));
+    }
+    user_type_field_size: {
+        UNSCOPED_INFO("user type field size");
+        REQUIRE(actual.fields.size() == expect.fields.size());
+    }
+    user_type_fields: {
+        for (int j = 0; auto& field: actual.fields) {
+            INFO(std::format("type field#{} of Anonymous type#{}", j, i));
+            field_name: {
+                UNSCOPED_INFO("user type field name");
+                CHECK_THAT(field.field_name, Equals(expect.fields[j].field_name));
+            }
+            field_type: {
+                UNSCOPED_INFO("has user type field type");
+                REQUIRE((bool)field.field_type == (bool)expect.fields[j].field_type);
+
+                if (field.field_type) {
+                    expectAnonymousUserType(*field.field_type, *expect.fields[j].field_type, j, depth+1);
+                }
+            }
+            ++j;
+        }
+    }
+}
+
 static auto runBindStatement(
     const std::string sql, const std::vector<std::string>& schemas, 
     const std::vector<ColumnEntry>& expects, const std::vector<UserTypeEntry>& anon_types) -> void 
@@ -176,6 +221,16 @@ static auto runBindStatement(
                 UNSCOPED_INFO("nullable");
                 CHECK(entry.nullable == expects[i].nullable);
             }
+            ++i;
+        }
+    }
+    anonymous_type_size: {
+        UNSCOPED_INFO("Anonymous type size");
+        REQUIRE(column_result.anon_types.size() == anon_types.size());
+    }
+    anonymous_types: {
+        for (int i = 0; auto& anon: column_result.anon_types) {
+            expectAnonymousUserType(anon, anon_types[i], i, 0);
             ++i;
         }
     }
@@ -698,7 +753,7 @@ TEST_CASE("Select list only with placeholder of anonymous enum user type") {
     runBindStatement(sql, {schema_1}, expects, anon_types);
 }
 
-TEST_CASE("Select from enum user type") {
+TEST_CASE("Select from enum user type#1") {
     std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
     std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
     std::string sql("select vis, id from Control");
@@ -710,6 +765,91 @@ TEST_CASE("Select from enum user type") {
     std::vector<UserTypeEntry> anon_types{};
 
     runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+}
+
+TEST_CASE("Select from enum user type#2") {
+    std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
+    std::string schema_2("CREATE TYPE Visibility2 as Visibility");
+    std::string schema_3("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility2 not null)");
+    std::string sql("select vis, id from Control");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "vis", .field_type = "Visibility2", .nullable = false},
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+    };
+    std::vector<UserTypeEntry> anon_types{};
+
+    runBindStatement(sql, {schema_1, schema_2, schema_3}, expects, anon_types);
+}
+
+TEST_CASE("Select from alias type") {
+    std::string schema_1("CREATE TYPE Description AS VARCHAR");
+    std::string schema_2("CREATE TABLE Summary (id INTEGER primary key, desc_text Description, remarks VARCHAR)");
+    std::string sql("select desc_text::Description as desc_text, remarks from Summary");
+
+    std::vector<ColumnEntry> expects{
+        // {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "desc_text", .field_type = "Description", .nullable = true},
+        {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
+    };
+    std::vector<UserTypeEntry> anon_types{};
+
+    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+}
+
+TEST_CASE("Select from primitive list") {
+    std::string schema("CREATE TABLE Toto (id INTEGER primary key, numbers INTEGER[] not null)");
+    std::string sql("select id, numbers from Toto");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "numbers", .field_type = "SelList::Array#2", .nullable = false},
+    };
+    std::vector<UserTypeEntry> anon_types{
+        {.kind = UserTypeKind::Array, .name = "SelList::Array#2", .fields = {
+            UserTypeEntry::Member("Anon::Primitive#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}}))
+        }},
+    };
+
+    runBindStatement(sql, {schema}, expects, anon_types);
+}
+
+TEST_CASE("Select from predefined enum list") {
+    std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
+    std::string schema_2("CREATE TABLE Element (id INTEGER primary key, child_visibles Visibility[] not null)");
+    std::string sql("select child_visibles, id from Element");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+    };
+    std::vector<UserTypeEntry> anon_types{
+        {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
+            UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Visibility", .fields = {}}))
+        }},
+    };
+
+    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+}
+
+TEST_CASE("Select from anonymous enum list") {
+    SKIP("Anonymous enum list is bound as appropriate type !!!");
+    std::string schema("CREATE TABLE Element (id INTEGER primary key, child_visibles ENUM('hide', 'visible')[] not null)");
+    std::string sql("select child_visibles, id from Element");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+    };
+    std::vector<UserTypeEntry> anon_types{
+        {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
+            UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Anon::Enum#1", .fields = {
+                UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")
+            }}))
+        }},
+    };
+
+    runBindStatement(sql, {schema}, expects, anon_types);
 }
 
 #ifdef ENABLE_TEST

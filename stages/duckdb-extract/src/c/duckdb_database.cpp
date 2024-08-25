@@ -76,8 +76,8 @@ auto Database::retainUserTypeName(duckdb::Connection& conn) -> void {
         for (auto &schema: schemas) {
             schema.get().Scan(*conn.context, duckdb::CatalogType::TYPE_ENTRY, [&](duckdb::CatalogEntry &entry) { 
                 if (! entry.internal) {
-                    auto& type_entry = entry.Cast<duckdb::TypeCatalogEntry>(); 
-                    type_entry.user_type.GetAuxInfoShrPtr()->alias = type_entry.name;
+                    auto& type_entry = entry.Cast<duckdb::TypeCatalogEntry>();
+                    type_entry.user_type.SetAlias(type_entry.name);
                 }
             });
         };

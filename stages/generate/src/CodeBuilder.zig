@@ -255,15 +255,7 @@ fn writeQuery(output_dir: std.fs.Dir, query: Symbol) !void {
     try file.writeAll(query);
 }
 
-fn writeTypescriptTypes(file: std.fs.File, imports: ImportSetting, type_defs: []const ?Symbol) !void {
-    var writer = file.writer();
-
-    for (imports.type_names) |name| {
-        try writeImport(&writer, name, imports.prefix);
-    }
-
-    if (imports.type_names.len > 0) try writer.writeByte('\n');
-
+fn writeTypescriptTypes(writer: *std.fs.File.Writer, type_defs: []const ?Symbol) !void {
     for (type_defs, 0..) |t_, i| {
         if (i > 0) try writer.writeByte('\n');
 
@@ -273,39 +265,13 @@ fn writeTypescriptTypes(file: std.fs.File, imports: ImportSetting, type_defs: []
     }
 }
 
-fn writeImport(writer: anytype, type_name: Symbol, prefix: ?Symbol) !void {
-    try writer.print("import {{ {s} }} from ", .{type_name});
-    try writer.writeByte('\'');
+fn writeImports(self: Self, writer: *std.fs.File.Writer, user_type_dir: std.fs.Dir, base_dir_path: FilePath) !void {
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    const tmp_allocator = arena.allocator();
 
-    if (prefix) |p| {
-        try writer.print("{s}/", .{p});
-    }
-
-    try writer.writeAll(type_name);
-    try writer.writeByte('\'');
-    try writer.writeByte('\n');
-}
-
-pub const OnBuild = *const fn (builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus;
-
-pub const ResultStatus = enum {
-    new_file,
-    update_file,
-    generate_failed,
-};
-
-const ImportSetting = struct {
-    type_names:[]const Symbol,
-    prefix: ?Symbol,
-
-    pub fn deinit(self: ImportSetting, allocator: std.mem.Allocator) void {
-        allocator.free(self.type_names);
-    }
-};
-
-pub fn createImportSetting(self: *Self, allocator: std.mem.Allocator, prefix: ?Symbol) !ImportSetting {
-    var names = try allocator.alloc(Symbol, self.user_type_names.count());
-
+    var names = try tmp_allocator.alloc(Symbol, self.user_type_names.count());
+    
     var iter = self.user_type_names.iterator();
     var i: usize = 0;
 
@@ -321,11 +287,24 @@ pub fn createImportSetting(self: *Self, allocator: std.mem.Allocator, prefix: ?S
         }.lessThan
     );
 
-    return .{
-        .type_names = names,
-        .prefix = prefix,
-    };
+    const user_type_dir_path = try user_type_dir.realpathAlloc(tmp_allocator, ".");
+
+    for (names) |name| {
+        const import_path = try std.fs.path.join(tmp_allocator, &.{user_type_dir_path, name});
+        const import_path_rel = try std.fs.path.relative(tmp_allocator, base_dir_path, import_path);
+        try writer.print("import {{ {s} }} from '{s}'\n", .{name, import_path_rel});
+    }
+
+    if (names.len > 0) try writer.writeByte('\n');
 }
+
+pub const OnBuild = *const fn (builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus;
+
+pub const ResultStatus = enum {
+    new_file,
+    update_file,
+    generate_failed,
+};
 
 pub const SourceGenerator = struct {
     pub const log_fmt: Symbol = "{s}/*";
@@ -335,6 +314,8 @@ pub const SourceGenerator = struct {
 
         var output_dir = try root_dir.makeOpenPath(name, .{});
         defer output_dir.close();
+        const output_dir_path = try output_dir.realpathAlloc(builder.allocator, ".");
+        defer builder.allocator.free(output_dir_path);
 
         if (builder.entries.get(.query)) |query| {
             writeQuery(output_dir, query) catch {
@@ -344,15 +325,15 @@ pub const SourceGenerator = struct {
         types: {
             var file = try output_dir.createFile("types.ts", .{});
             defer file.close();
+            var writer = file.writer();
 
-            const imports = try builder.createImportSetting(builder.allocator, UserTypeGenerator.output_root);
-            defer imports.deinit(builder.allocator);
+            try builder.writeImports(&writer, try UserTypeGenerator.outputDir(root_dir), output_dir_path);
 
-            writeTypescriptTypes(file, imports, &.{
+            writeTypescriptTypes(&writer, &.{
                 builder.entries.get(.parameter), 
                 builder.entries.get(.parameter_order), 
                 builder.entries.get(.result_set)
-            }) 
+            })
             catch {
                 return error.TypeFileGenerationFailed;
             };
@@ -368,25 +349,34 @@ pub const UserTypeGenerator = struct {
     pub const log_fmt: Symbol = output_root ++ "/{s}";
 
     pub fn build(builder: *CodeBuilder, root_dir: std.fs.Dir, name: core.Symbol) anyerror!ResultStatus {
-        var out_dir = try root_dir.makeOpenPath(output_root, .{});
-        defer out_dir.close();
-
-        const imports = try builder.createImportSetting(builder.allocator, null);
-        defer imports.deinit(builder.allocator);
+        var output_dir = try outputDir(root_dir);
+        defer output_dir.close();
+        const output_dir_path = try output_dir.realpathAlloc(builder.allocator, ".");
+        defer builder.allocator.free(output_dir_path);
 
         const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{name});
         defer builder.allocator.free(file_name);
 
-        const is_new = if (out_dir.statFile(file_name)) |_| false else |_| true;
+        const is_new = if (output_dir.statFile(file_name)) |_| false else |_| true;
 
-        var file = try out_dir.createFile(file_name, .{});
+        var file = try output_dir.createFile(file_name, .{});
         defer file.close();
+        var writer = file.writer();
 
-        writeTypescriptTypes(file, imports, &.{builder.entries.get(.user_type)}) catch {
+        try builder.writeImports(&writer, output_dir, output_dir_path);
+
+        writeTypescriptTypes(&writer, &.{
+            builder.entries.get(.user_type)}
+        ) 
+        catch {
             return error.TypeFileGenerationFailed;
         };
 
         return if (is_new) .new_file else .update_file;
+    }
+
+    pub fn outputDir(root_dir: std.fs.Dir) !std.fs.Dir {
+        return root_dir.makeOpenPath(output_root, .{});
     }
 };
 
@@ -1870,14 +1860,14 @@ test "Output build result#2 (with predefined user type)" {
             const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
             defer if (line) |x| allocator.free(x);
             try std.testing.expect(line != null);
-            try std.testing.expectEqualStrings("import { Status } from 'user-types/Status'", line.?);
+            try std.testing.expectEqualStrings("import { Status } from '../user-types/Status'", line.?);
             break:expect_import;
         }
         expect_import: {
             const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
             defer if (line) |x| allocator.free(x);
             try std.testing.expect(line != null);
-            try std.testing.expectEqualStrings("import { Visibility } from 'user-types/Visibility'", line.?);
+            try std.testing.expectEqualStrings("import { Visibility } from '../user-types/Visibility'", line.?);
             break:expect_import;
         }
         expect_blank: {

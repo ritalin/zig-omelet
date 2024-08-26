@@ -32,7 +32,9 @@ auto isEnumUserType(const duckdb::LogicalType &ty) -> bool;
 auto pickEnumUserType(const duckdb::LogicalType &ty, const std::string& type_name) -> UserTypeEntry;
 
 auto isArrayUserType(const duckdb::LogicalType &ty) -> bool;
-auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name) -> UserTypeEntry;
+auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry;
+
+auto isAliasUserType(const duckdb::LogicalType &ty) -> bool;
 
 auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void;
 

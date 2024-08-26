@@ -72,7 +72,13 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                     }
                     else {
                         type_name = std::format("SelList::Array#{}", i+1);
-                        anon_types.push_back(pickArrayUserType(expr->return_type, type_name));
+                        anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names));
+                    }
+                }
+                else if (isAliasUserType(expr->return_type)) {
+                    type_name = userTypeName(expr->return_type);
+                    if (type_name != "") {
+                        user_type_names.push_back(type_name);
                     }
                 }
                 else {
@@ -127,6 +133,7 @@ auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, Statemen
 #include <utility>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "duckdb_database.hpp"
 
@@ -172,7 +179,9 @@ static auto expectAnonymousUserType(UserTypeEntry actual, UserTypeEntry expect, 
 
 static auto runBindStatement(
     const std::string sql, const std::vector<std::string>& schemas, 
-    const std::vector<ColumnEntry>& expects, const std::vector<UserTypeEntry>& anon_types) -> void 
+    const std::vector<ColumnEntry>& expects, 
+    const std::vector<std::string>& user_type_names,
+    const std::vector<UserTypeEntry>& anon_types) -> void 
 {
     auto db = Database();
     auto conn = db.connect();
@@ -224,8 +233,18 @@ static auto runBindStatement(
             ++i;
         }
     }
-    anonymous_type_size: {
-        UNSCOPED_INFO("Anonymous type size");
+    user_types_size: {
+        UNSCOPED_INFO("user types size");
+        REQUIRE(column_result.user_type_names.size() == user_type_names.size());
+    }
+    user_types: {
+        for (auto& expect_name: user_type_names) {
+            UNSCOPED_INFO(std::format("has user type name (`{}`)", expect_name));
+            CHECK_THAT(column_result.user_type_names, VectorContains(expect_name));
+        }
+    }
+    anonymous_types_size: {
+        UNSCOPED_INFO("Anonymous types size");
         REQUIRE(column_result.anon_types.size() == anon_types.size());
     }
     anonymous_types: {
@@ -240,21 +259,21 @@ TEST_CASE("Insert Statement") {
     std::string sql("insert into Foo values (42, 1, null, 'misc...')");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    runBindStatement(sql, {schema}, {}, {});
+    runBindStatement(sql, {schema}, {}, {}, {});
 }
 
 TEST_CASE("Update Statement") {
     std::string sql("update Foo set kind = 2, xys = 101 where id = 42");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    runBindStatement(sql, {schema}, {}, {});
+    runBindStatement(sql, {schema}, {}, {}, {});
 }
 
 TEST_CASE("Delete Statement") {
     std::string sql("delete from Foo where id = 42");
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
-    runBindStatement(sql, {schema}, {}, {});
+    runBindStatement(sql, {schema}, {}, {}, {});
 }
 
 TEST_CASE("Select list only#1") {
@@ -264,9 +283,10 @@ TEST_CASE("Select list only#1") {
         {.field_name = "b", .field_type = "BIGINT", .nullable = false},
         {.field_name = "c", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select constant list only#2 (without alias)") {
@@ -276,9 +296,10 @@ TEST_CASE("Select constant list only#2 (without alias)") {
         {.field_name = "98765432100", .field_type = "BIGINT", .nullable = false},
         {.field_name = "'abc'", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with null#1") {
@@ -288,9 +309,10 @@ TEST_CASE("Select list only with null#1") {
         {.field_name = "b", .field_type = "BIGINT", .nullable = false},
         {.field_name = "c", .field_type = "DATE", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with null#2") {
@@ -300,9 +322,10 @@ TEST_CASE("Select list only with null#2") {
         {.field_name = "b", .field_type = "BIGINT", .nullable = false},
         {.field_name = "c", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with null#3") {
@@ -312,9 +335,10 @@ TEST_CASE("Select list only with null#3") {
         {.field_name = "b", .field_type = "BOOLEAN", .nullable = false},
         {.field_name = "c", .field_type = "BOOLEAN", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with coalesce#1") {
@@ -322,9 +346,10 @@ TEST_CASE("Select list only with coalesce#1") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with coalesce#2") {
@@ -332,9 +357,10 @@ TEST_CASE("Select list only with coalesce#2") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with coalesce#3") {
@@ -342,9 +368,10 @@ TEST_CASE("Select list only with coalesce#3") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with unary op") {
@@ -352,9 +379,10 @@ TEST_CASE("Select list only with unary op") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with unary op with null") {
@@ -362,9 +390,10 @@ TEST_CASE("Select list only with unary op with null") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "INTEGER", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with scalar function call") {
@@ -372,9 +401,10 @@ TEST_CASE("Select list only with scalar function call") {
     std::vector<ColumnEntry> expects{
         {.field_name = "fn", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Parameter select list#1") {
@@ -384,9 +414,10 @@ TEST_CASE("Parameter select list#1") {
         {.field_name = "a", .field_type = "INTEGER", .nullable = true},
         {.field_name = "CAST($v AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {}, expects, anon_types);
+    runBindStatement(sql, {}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select case expr#1") {
@@ -398,9 +429,10 @@ TEST_CASE("Select case expr#1") {
     std::vector<ColumnEntry> expects{
         {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select case expr#2") {
@@ -412,9 +444,10 @@ TEST_CASE("Select case expr#2") {
     std::vector<ColumnEntry> expects{
         {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select case expr#3") {
@@ -426,9 +459,10 @@ TEST_CASE("Select case expr#3") {
     std::vector<ColumnEntry> expects{
         {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select case expr#3 (without else)") {
@@ -440,9 +474,10 @@ TEST_CASE("Select case expr#3 (without else)") {
     std::vector<ColumnEntry> expects{
         {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from table#1 (with star expr)") {
@@ -455,9 +490,10 @@ TEST_CASE("Select from table#1 (with star expr)") {
         {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
         {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from table#2 (projection)") {
@@ -468,9 +504,10 @@ TEST_CASE("Select from table#2 (projection)") {
         {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
         {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from table#3 (unordered column)") {
@@ -482,9 +519,10 @@ TEST_CASE("Select from table#3 (unordered column)") {
         {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#2") {
@@ -502,9 +540,10 @@ TEST_CASE("Select from joined table#2") {
         {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#3 (unordered columns)") {
@@ -522,9 +561,10 @@ TEST_CASE("Select from joined table#3 (unordered columns)") {
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
         {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#4 (with star expr)") {
@@ -545,9 +585,10 @@ TEST_CASE("Select from joined table#4 (with star expr)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#5 (with star expr partially)") {
@@ -565,9 +606,10 @@ TEST_CASE("Select from joined table#5 (with star expr partially)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#6 (with left join)") {
@@ -588,9 +630,10 @@ TEST_CASE("Select from joined table#6 (with left join)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#7 (with right join)") {
@@ -611,9 +654,10 @@ TEST_CASE("Select from joined table#7 (with right join)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#8 (with full outer join)") {
@@ -634,9 +678,10 @@ TEST_CASE("Select from joined table#8 (with full outer join)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#9 (with cross join)") {
@@ -657,9 +702,10 @@ TEST_CASE("Select from joined table#9 (with cross join)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from joined table#10 (with positional join)") {
@@ -680,9 +726,10 @@ TEST_CASE("Select from joined table#10 (with positional join)") {
         {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
         {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from scalar subquery") {
@@ -702,9 +749,10 @@ TEST_CASE("Select from scalar subquery") {
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
         {.field_name = "v", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from derived table#1") {
@@ -722,9 +770,10 @@ TEST_CASE("Select from derived table#1") {
         {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
         {.field_name = "CAST($1 AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},        
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1}, expects, anon_types);
+    runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with placeholder of enum user type") {
@@ -734,9 +783,10 @@ TEST_CASE("Select list only with placeholder of enum user type") {
     std::vector<ColumnEntry> expects{
         {.field_name = "vis", .field_type = "Visibility", .nullable = true},
     };
+    std::vector<std::string> user_type_names{"Visibility"};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select list only with placeholder of anonymous enum user type") {
@@ -746,11 +796,12 @@ TEST_CASE("Select list only with placeholder of anonymous enum user type") {
     std::vector<ColumnEntry> expects{
         {.field_name = "vis", .field_type = "SelList::Enum#1", .nullable = true},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{
         {.kind = UserTypeKind::Enum, .name = "SelList::Enum#1", .fields = {UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")}}
     }; 
 
-    runBindStatement(sql, {schema_1}, expects, anon_types);
+    runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from enum user type#1") {
@@ -762,9 +813,10 @@ TEST_CASE("Select from enum user type#1") {
         {.field_name = "vis", .field_type = "Visibility", .nullable = false},
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{"Visibility"};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from enum user type#2") {
@@ -777,9 +829,10 @@ TEST_CASE("Select from enum user type#2") {
         {.field_name = "vis", .field_type = "Visibility2", .nullable = false},
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{"Visibility2"};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2, schema_3}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2, schema_3}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from alias type") {
@@ -792,9 +845,10 @@ TEST_CASE("Select from alias type") {
         {.field_name = "desc_text", .field_type = "Description", .nullable = true},
         {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
     };
+    std::vector<std::string> user_type_names{"Description"};
     std::vector<UserTypeEntry> anon_types{};
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from primitive list") {
@@ -805,13 +859,14 @@ TEST_CASE("Select from primitive list") {
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
         {.field_name = "numbers", .field_type = "SelList::Array#2", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{
         {.kind = UserTypeKind::Array, .name = "SelList::Array#2", .fields = {
             UserTypeEntry::Member("Anon::Primitive#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}}))
         }},
     };
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from predefined enum list") {
@@ -823,13 +878,14 @@ TEST_CASE("Select from predefined enum list") {
         {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{"Visibility"};
     std::vector<UserTypeEntry> anon_types{
         {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
             UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Visibility", .fields = {}}))
         }},
     };
 
-    runBindStatement(sql, {schema_1, schema_2}, expects, anon_types);
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 TEST_CASE("Select from anonymous enum list") {
@@ -841,6 +897,7 @@ TEST_CASE("Select from anonymous enum list") {
         {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
         {.field_name = "id", .field_type = "INTEGER", .nullable = false},
     };
+    std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{
         {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
             UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Anon::Enum#1", .fields = {
@@ -849,7 +906,7 @@ TEST_CASE("Select from anonymous enum list") {
         }},
     };
 
-    runBindStatement(sql, {schema}, expects, anon_types);
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
 #ifdef ENABLE_TEST

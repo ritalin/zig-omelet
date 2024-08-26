@@ -21,6 +21,13 @@ auto isArrayUserType(const duckdb::LogicalType &ty) -> bool {
     );
 }
 
+auto isAliasUserType(const duckdb::LogicalType &ty) -> bool {
+    auto *ext_info = ty.AuxInfo();
+    if (!ext_info) return false;
+
+    return ext_info->type == duckdb::ExtraTypeInfoType::GENERIC_TYPE_INFO;
+}
+
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string {
     return ty.AuxInfo()->alias;
 }
@@ -46,13 +53,23 @@ auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_nam
     };
 }
 
-auto pickUserTypeMember(const duckdb::LogicalType &ty, size_t index) -> UserTypeEntry::Member {
+static auto pickUserTypeMember(const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, size_t index) -> UserTypeEntry::Member {
     if (isEnumUserType(ty)) {
         auto type_name = userTypeName(ty);
-        
+        user_type_names.push_back(type_name);
+
         return UserTypeEntry::Member(
             std::format("Anon::{}#{}", magic_enum::enum_name(UserTypeKind::Enum), index+1),
             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Enum, .name = type_name, .fields = {}})
+        );
+    }
+    if (isArrayUserType(ty)) {
+        auto member_name = std::format("Anon::{}#{}", magic_enum::enum_name(UserTypeKind::Array), index+1);
+        auto member_type = pickArrayUserType(ty, member_name, user_type_names);
+
+        return UserTypeEntry::Member(
+            member_name,
+            std::make_shared<UserTypeEntry>(std::move(member_type))
         );
     }
     else {
@@ -63,7 +80,7 @@ auto pickUserTypeMember(const duckdb::LogicalType &ty, size_t index) -> UserType
     }
 }
 
-auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name) -> UserTypeEntry {
+auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry {
     auto *ext_info = ty.AuxInfo();
 
     std::vector<UserTypeEntry::Member> fields;
@@ -71,11 +88,11 @@ auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_na
 
     if (ext_info->type == duckdb::ExtraTypeInfoType::LIST_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ListTypeInfo>();
-        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, 0));
+        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, user_type_names, 0));
     }
     else if (ext_info->type == duckdb::ExtraTypeInfoType::ARRAY_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ArrayTypeInfo>();
-        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, 0));
+        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, user_type_names, 0));
     }
 
 

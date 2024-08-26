@@ -210,23 +210,12 @@ const Builder = struct {
         var filter_builder = PathMatcher.Builder.init(allocator);
         defer filter_builder.deinit();
 
-        // for (sources.items) |src| {
         for (self.filters.items) |filter| {
-            // const path = try std.fs.path.join(allocator, &.{src.dir_path, filter.path});
-            // defer allocator.free(path);
-
-            // if (std.fs.accessAbsolute(path, .{})) {
             const filter_u = try toUnicodeString(allocator, filter.path);
             defer allocator.free(filter_u);
 
             try filter_builder.addFilterDir(filter.kind, filter_u);
-            // }
-            // else |err| switch (err) {
-            //     error.FileNotFound => {},
-            //     else => return err,
-            // }
         }
-        // }
 
         return .{
             .arena = arena,

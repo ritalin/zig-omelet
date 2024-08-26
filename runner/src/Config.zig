@@ -253,7 +253,7 @@ const Binder = struct {
         const ArgId = GenerateSetting.ArgId(.{});
         const decls = ArgId.Decls;
         fn bindSourceDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            const decl = comptime findDecl(ArgId, decls, .source_dir_path);
+            const decl = comptime findDecl(ArgId, decls, .source_dir);
 
             for (setting.source_dir_set) |path| {
                 try args.append("--" ++ decl.names.long.?);
@@ -270,7 +270,7 @@ const Binder = struct {
                 };
             }
 
-            const decl = comptime findDecl(ArgId, decls, .schema_dir_path);
+            const decl = comptime findDecl(ArgId, decls, .schema_dir);
             for (setting.schema_dir_set) |path| {
                 try args.append("--" ++ decl.names.long.?);
                 try args.append(path);
@@ -278,7 +278,7 @@ const Binder = struct {
             return .success;
         }
         fn bindOutputDir(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            const decl = comptime findDecl(ArgId, decls, .output_dir_path);
+            const decl = comptime findDecl(ArgId, decls, .output_dir);
             try args.append("--" ++ decl.names.long.?);
 
             try args.append(setting.output_dir_path);

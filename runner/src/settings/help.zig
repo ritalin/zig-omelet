@@ -9,11 +9,11 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.help), .{.desc = "Print command-specific usage", .value = "",}},
     // Commands
-    .{@tagName(.generate), .{.desc = "Generate query parameters", .value = "",}},
+    .{@tagName(.generate), .{.desc = "Generate query parameters/result-sets", .value = "",}},
     // Command/Generate
-    .{@tagName(.source_dir_path), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
-    .{@tagName(.output_dir_path), .{.desc = "Output folder", .value = "PATH", .required = true}},  
-    .{@tagName(.schema_dir_path), .{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
+    .{@tagName(.source_dir), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
+    .{@tagName(.output_dir), .{.desc = "Output folder", .value = "PATH", .required = true}},  
+    .{@tagName(.schema_dir), .{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
     .{@tagName(.include_filter), .{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.exclude_filter), .{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
 });

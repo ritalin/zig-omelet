@@ -38,15 +38,15 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 
         if (arg_) |arg| {
             switch (arg.param.id) {
-                .source_dir_path => try builder.source_dir_set.append(arg.value),
-                .schema_dir_path => try builder.schema_dir_set.append(arg.value),
+                .source_dir => try builder.source_dir_set.append(arg.value),
+                .schema_dir => try builder.schema_dir_set.append(arg.value),
                 .include_filter => {
                     if (arg.value) |v| try builder.filter_set.append(.{.kind = .include , .path = v});
                 },
                 .exclude_filter => {
                     if (arg.value) |v| try builder.filter_set.append(.{.kind = .exclude , .path = v});
                 },
-                .output_dir_path => builder.output_dir_path = arg.value,
+                .output_dir => builder.output_dir_path = arg.value,
                 .watch => builder.watch = true,
             }
         }
@@ -55,19 +55,19 @@ pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Iterator: type, iter: 
 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
-        source_dir_path,
-        schema_dir_path,
+        source_dir,
+        schema_dir,
         include_filter,
         exclude_filter,
-        output_dir_path,
+        output_dir,
         watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
-            .{.id = .source_dir_path, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
-            .{.id = .schema_dir_path, .names = .{.long = "schema-dir"}, .takes_value = .one},
+            .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
+            .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .one},
             .{.id = .include_filter, .names = .{.long = "include-filter"}, .takes_value = .many},
             .{.id = .exclude_filter, .names = .{.long = "exclude-filter"}, .takes_value = .many},
-            .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
+            .{.id = .output_dir, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
             .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
         };

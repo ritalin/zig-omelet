@@ -1,0 +1,1 @@
+CREATE TABLE Summary (id INTEGER primary key, desc_text Description, remarks VARCHAR)

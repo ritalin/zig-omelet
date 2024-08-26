@@ -1,0 +1,1 @@
+CREATE TYPE Description AS VARCHAR

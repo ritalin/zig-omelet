@@ -1,0 +1,1 @@
+CREATE TABLE Element (id INTEGER primary key, child_visibles Visibility[] not null)

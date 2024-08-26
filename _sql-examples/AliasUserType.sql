@@ -1,0 +1,1 @@
+select desc_text::Description as desc_text, remarks from Summary

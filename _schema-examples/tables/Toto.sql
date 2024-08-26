@@ -1,0 +1,1 @@
+CREATE TABLE Toto (id INTEGER primary key, numbers INTEGER[] not null)

@@ -64,23 +64,56 @@ fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
     try writer.writeByte('\'');
 }
 
-fn buildUserTypeMemberInternal(allocator: std.mem.Allocator, writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void {
-    if (user_type.fields.len == 0) return;
+fn buildUserTypeMemberRecursive(allocator: std.mem.Allocator, writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, user_type_names: std.BufSet) !void {
+    if (user_type_names.contains(user_type.header.name)) {
+        return writer.writeAll(user_type.header.name);
+    }
+
+    switch (user_type.header.kind) {
+        .@"enum" => {
+            if (user_type.fields.len == 0) return;
+            try writeLiteral(writer, user_type.fields[0].field_name);
+            if (user_type.fields.len == 1) return;
+
+            for (user_type.fields[1..]) |field| {
+                try writer.writeAll(" | ");
+                try writeLiteral(writer, field.field_name);
+            }
+        },
+        .array => {
+            std.debug.assert((user_type.fields.len == 1) and (user_type.fields[0].field_type != null));
+
+            try buildUserTypeMemberRecursive(allocator, writer, user_type.fields[0].field_type.?, user_type_names);
+            try writer.writeAll("[]");
+        },
+        .primitive => {
+            const key = try std.ascii.allocUpperString(allocator, user_type.header.name);
+            const ts_type = TypeMappingRules.get(key) orelse {
+                return error.UnsupportedDbType;
+            };
+            try writer.writeAll(ts_type);
+        },
+    }
+}
+
+fn buildUserTypeMemberInternal(
+    allocator: std.mem.Allocator, 
+    writer: *std.ArrayList(u8).Writer, 
+    user_type: UserTypeDef, 
+    user_type_names: std.BufSet, 
+    opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void 
+{
+    if (user_type.fields.len == 0) {
+        try writer.writeAll("undefined");
+        return;
+    }
 
     var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
     var member_writer = buf.writer();
 
-    if (user_type.header.kind == .@"enum") {
-        try writeLiteral(&member_writer, user_type.fields[0].field_name);
-        if (user_type.fields.len == 1) return;
-
-        for (user_type.fields[1..]) |field| {
-            try member_writer.writeAll(" | ");
-            try writeLiteral(&member_writer, field.field_name);
-        }
-    }
-
+    try buildUserTypeMemberRecursive(allocator, &member_writer, user_type, user_type_names);
+    
     if (opt.anon) {
         try writer.writeAll(buf.items);
     }
@@ -90,12 +123,12 @@ fn buildUserTypeMemberInternal(allocator: std.mem.Allocator, writer: *std.ArrayL
     }
 }
 
-fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef) !Symbol {
+fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef, user_type_names: std.BufSet) !Symbol {
     var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
     var writer = buf.writer();
 
-    try buildUserTypeMemberInternal(allocator, &writer, user_type, .{.anon = true});
+    try buildUserTypeMemberInternal(allocator, &writer, user_type, user_type_names, .{.anon = true});
 
     return buf.toOwnedSlice();
 }
@@ -108,7 +141,7 @@ fn buildTypeMember(allocator: std.mem.Allocator, field_type: Symbol, user_type_n
         }
         else if (anon_user_types.get(field_type)) |anon_type| {
             // anonymous user type
-            break:ts_type try buildAnonymousTypeMember(allocator, anon_type);
+            break:ts_type try buildAnonymousTypeMember(allocator, anon_type, user_type_names);
         }
         else {
             // builtin type
@@ -238,7 +271,7 @@ pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
         try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
     });
 
-    try buildUserTypeMemberInternal(arena.allocator(), &writer, user_type, .{});
+    try buildUserTypeMemberInternal(arena.allocator(), &writer, user_type, self.user_type_names, .{});
 
     self.entries.put(.user_type, try buf.toOwnedSlice());
 }
@@ -416,7 +449,7 @@ pub const UserTypeDef = struct {
     header: Header,
     fields: []const Member,
 
-    pub const Kind = enum {@"enum"};
+    pub const Kind = enum {@"enum", array, primitive};
     pub const Header = struct {
         kind: Kind,
         name: Symbol,
@@ -494,7 +527,16 @@ pub const Parser = struct {
             std.debug.assert(tuple_len == 2);
 
             fields[i].field_name = try reader.readString();
-            fields[i].field_type = try reader.readNull(UserTypeDef); // TODO.{.kind = .name = "" },
+            fields[i].field_type = field_type: {
+                if (!try reader.nextNull()) {
+                    var field_type: UserTypeDef = undefined;
+                    try parseUserTypeDefinitionInternal(allocator, reader, &field_type);
+                    break:field_type field_type;
+                }
+                else {
+                    break:field_type try reader.readNull(UserTypeDef);
+                }
+            };
         }
 
         user_type.* = .{
@@ -1077,7 +1119,7 @@ fn anonymousTypeToCbor(allocator: std.mem.Allocator, user_types: []const UserTyp
     return writer.buffer.toOwnedSlice();
 }
 
-test "parse anonymous user type (enum)" {
+test "parse anonymous user type#1 (enum)" {
     const allocator = std.testing.allocator;
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -1127,12 +1169,88 @@ test "parse anonymous user type (enum)" {
     }
 }
 
-test "parse anonymous user type (enum + primitive list)" {
-    // TODO
+test "parse anonymous user type#2 (primitive list)" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expects: []const UserTypeDef = &.{
+        .{
+            .header = .{ .kind = .array, .name = "SelList::Array#1" },
+            .fields = &.{
+                .{.field_name = "Anon::Primitive#1", .field_type = .{.header = .{.kind = .primitive, .name = "INTEGER"}, .fields = &.{}}}, 
+            },
+        },
+    };
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "anon-user-type",
+        .content = try anonymousTypeToCbor(arena.allocator(), expects),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+    
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.anon_user_type, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expects, result.anon_user_type);
+        break:assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break:assert;
+    }
 }
 
-test "parse anonymous user type (enum + enum list)" {
-    // TODO
+test "parse anonymous user type#3 (enum list)" {
+    const allocator = std.testing.allocator;
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    const expects: []const UserTypeDef = &.{
+        .{
+            .header = .{ .kind = .@"enum", .name = "SelList::Array#1" },
+            .fields = &.{
+                .{.field_name = "Anon::Enum#1", .field_type = .{.header = .{.kind = .@"enum", .name = "Visibility"}, .fields = &.{}}}, 
+            },
+        },
+    };
+
+    const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
+        .topic = "anon-user-type",
+        .content = try anonymousTypeToCbor(arena.allocator(), expects),
+    }};
+
+    var iter: Parser.ResultWalker = .{
+        .arena = arena,
+        .source_bodies = source_bodies,
+        .index = 0,
+    };
+    defer iter.deinit();
+    
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result != null);
+
+        const result = walk_result.?;
+        try std.testing.expectEqual(.anon_user_type, std.meta.activeTag(result));
+        try std.testing.expectEqualDeep(expects, result.anon_user_type);
+        break:assert;
+    }
+    assert: {
+        const walk_result = try iter.walk();
+        try std.testing.expect(walk_result == null);
+        break:assert;
+    }
 }
 
 test "apply bound user type name#1" {
@@ -1644,7 +1762,7 @@ test "generate select list#6 (field without alias)" {
 test "generate select list#7 (with enum user type)" {
     const result_set: []const ResultSetColumn = &.{
         .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "vis1", .field_type = "Param::Enum#1", .nullable = true},
+        .{.field_name = "vis1", .field_type = "SelList::Enum#1", .nullable = true},
         .{.field_name = "vis2", .field_type = "Visibility", .nullable = false},
     };
     const expect = 
@@ -1667,9 +1785,74 @@ test "generate select list#7 (with enum user type)" {
     var anon_user_types = map: {
         var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
 
-        try map.put("Param::Enum#1", .{  
-            .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
+        try map.put("SelList::Enum#1", .{  
+            .header = .{ .kind = .@"enum", .name = "SelList::Enum#1" },
             .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
+        });
+        break:map map;
+    };
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
+}
+
+test "generate select list#8 (primitive list)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "numbers", .field_type = "SelList::Array#2", .nullable = true},
+    };
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  numbers: number[] | null,
+        \\}
+    ;
+
+    var user_type_names = map: {
+        const map = std.BufSet.init(std.testing.allocator);
+        break:map map;
+    };
+    defer user_type_names.deinit();
+
+    var anon_user_types = map: {
+        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+
+        try map.put("SelList::Array#2", .{  
+            .header = .{ .kind = .array, .name = "Anon::Primitive#1" },
+            .fields = &.{ .{.field_name = "Anon::Primitive#1", .field_type = .{.header = .{.kind = .primitive, .name = "INTEGER"}, .fields = &.{} }} },
+        });
+        break:map map;
+    };
+    defer anon_user_types.deinit();
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
+}
+
+test "generate select list#8 (predefined rnum list)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "vis2", .field_type = "SelList::Array#2", .nullable = true},
+    };
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number,
+        \\  vis2: Visibility[] | null,
+        \\}
+    ;
+
+    var user_type_names = map: {
+        var map = std.BufSet.init(std.testing.allocator);
+        try map.insert("Visibility");
+        break:map map;
+    };
+    defer user_type_names.deinit();
+
+    var anon_user_types = map: {
+        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+
+        try map.put("SelList::Array#2", .{  
+            .header = .{ .kind = .array, .name = "Anon::Enum#1" },
+            .fields = &.{ .{.field_name = "Anon::Enum#1", .field_type = .{.header = .{.kind = .@"enum", .name = "Visibility"}, .fields = &.{} }} },
         });
         break:map map;
     };

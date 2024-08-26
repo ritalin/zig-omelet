@@ -36,7 +36,14 @@ auto CreateOperatorVisitor::VisitOperator(duckdb::unique_ptr<duckdb::LogicalOper
                 this->entry = pickEnumUserType(info.type, info.name);
             }
             else {
-                this->channel.warn(std::format("[TODO] Unsupported user defined type: {}", magic_enum::enum_name(info.type.id())));
+                // TODO not implemented
+                if (userTypeName(info.type) != "") {
+                    this->channel.info(std::format("[TODO] Alias for user type is not implemented: Type/{}.{}", info.schema, info.name));
+                }
+                std::vector<std::string> user_type_names{};
+
+                this->handled = true;
+                this->entry = pickAliasUserType(info.type, info.name, user_type_names);
             }
         }
         break;
@@ -94,17 +101,20 @@ auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
+#include "duckdb_database.hpp"
+
 using namespace worker;
 using namespace Catch::Matchers;
 
 static auto runResolveUserTypeInternal(const std::string& sql, const std::vector<std::string>& schemas) -> std::optional<UserTypeEntry> {
-    auto db = duckdb::DuckDB(nullptr);
-    auto conn = duckdb::Connection(db);
+    auto db = Database();
+    auto conn = db.connect();
 
     prepare_schema: {
         for (auto& schema: schemas) {
             conn.Query(schema);
         }
+        db.retainUserTypeName(conn);
     }
 
     auto stmts = conn.ExtractStatements(sql);
@@ -213,6 +223,15 @@ TEST_CASE("Extract enum type") {
         UserTypeEntry::Member("visible"),
     };
     runResolveUserType(sql, UserTypeKind::Enum, "Visibility", expects);
+}
+
+TEST_CASE("Extract alias type") {
+    std::string sql("CREATE TYPE Description AS VARCHAR");
+
+    std::vector<UserTypeEntry::Member> expects{
+        UserTypeEntry::Member("Anon::Primitive#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}}))
+    };
+    runResolveUserType(sql, UserTypeKind::Alias, "Description", expects);
 }
 
 #endif

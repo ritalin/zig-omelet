@@ -6,7 +6,7 @@
 
 namespace worker {
 
-enum class UserTypeKind {Enum, Array, Primitive};
+enum class UserTypeKind {Enum, Array, Primitive, Alias};
 
 struct UserTypeEntry;
 
@@ -35,6 +35,7 @@ auto isArrayUserType(const duckdb::LogicalType &ty) -> bool;
 auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry;
 
 auto isAliasUserType(const duckdb::LogicalType &ty) -> bool;
+auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry;
 
 auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void;
 

@@ -29,7 +29,7 @@ auto isAliasUserType(const duckdb::LogicalType &ty) -> bool {
 }
 
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string {
-    return ty.AuxInfo()->alias;
+    return ty.GetAlias();
 }
 
 auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_name) -> UserTypeEntry {
@@ -103,6 +103,17 @@ auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_na
     };
 }
 
+auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry {
+    std::vector<UserTypeEntry::Member> fields{
+        pickUserTypeMember(ty, user_type_names, 0)
+    };
+
+    return {
+        .kind = UserTypeKind::Alias,
+        .name = type_name,
+        .fields = std::move(fields),
+    };
+}
 
 static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     switch (kind) {
@@ -110,6 +121,8 @@ static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
         return std::string("enum");
     case UserTypeKind::Array: 
         return std::string("array");
+    case UserTypeKind::Alias: 
+        return std::string("alias");
     case UserTypeKind::Primitive: 
         return std::string("primitive");
     default:

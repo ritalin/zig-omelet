@@ -86,6 +86,11 @@ fn buildUserTypeMemberRecursive(allocator: std.mem.Allocator, writer: *std.Array
             try buildUserTypeMemberRecursive(allocator, writer, user_type.fields[0].field_type.?, user_type_names);
             try writer.writeAll("[]");
         },
+        .alias => {
+            std.debug.assert((user_type.fields.len == 1) and (user_type.fields[0].field_type != null));
+
+            try buildUserTypeMemberRecursive(allocator, writer, user_type.fields[0].field_type.?, user_type_names);
+        },
         .primitive => {
             const key = try std.ascii.allocUpperString(allocator, user_type.header.name);
             const ts_type = TypeMappingRules.get(key) orelse {
@@ -449,7 +454,7 @@ pub const UserTypeDef = struct {
     header: Header,
     fields: []const Member,
 
-    pub const Kind = enum {@"enum", array, primitive};
+    pub const Kind = enum {@"enum", array, alias, primitive};
     pub const Header = struct {
         kind: Kind,
         name: Symbol,
@@ -1945,6 +1950,22 @@ test "generate enum user type#3 (snake_case type name)" {
     ;
 
     try runApplyUserType(enum_type, expect);
+}
+
+test "generate alias user type#1 (primitive type)" {
+    const alias_type: UserTypeDef = .{
+        .header = .{
+            .kind = .alias, .name = "Description",
+        },
+        .fields = &.{
+            .{.field_name = "Anon::primitive#1", .field_type = .{.header = .{.kind = .primitive, .name = "VARCHAR"}, .fields = &.{}}}, 
+        }
+    };
+    const expect = 
+        \\export type Description = (string) & {_brand: 'Description'}
+    ;
+
+    try runApplyUserType(alias_type, expect);
 }
 
 test "Output build result#1" {

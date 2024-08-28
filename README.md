@@ -5,6 +5,8 @@ this tool has following fetues:
 * can extract named placeholder in SQL to convert into positional
 * can extract select list in SQL to convert result set type definition
 
+Currently, extracting is only from `duckdb`, code generationg is only `typescript`.
+
 ## Requirement
 
 * zig (https://ziglang.org) - 0.14.0 or latter
@@ -20,8 +22,15 @@ This product has tested on MacOS Ventura 13.6.7.
 zig build
 ```
 
-## Usage (Test fright)
+## Usage (Run using example query/schema)
 
 ```
-zig build test-run
+./zig-out/bin/omelet generate \
+    --source-dir=./_sql-examples
+    --schema-dir=./_schema-examples/user_types
+    --schema-dir=./_schema-examples/tables
+    --exclude-filter=tables
+    --output-dir=./_dump/ts
 ```
+
+Note that if the schema includes user-defined types, all of them must be specified before the table definitions.

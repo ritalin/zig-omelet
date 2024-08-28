@@ -403,7 +403,7 @@ pub const UserTypeGenerator = struct {
         const output_dir_path = try output_dir.realpathAlloc(builder.allocator, ".");
         defer builder.allocator.free(output_dir_path);
 
-        const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{name});
+        const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{std.fs.path.basename(name)});
         defer builder.allocator.free(file_name);
 
         const is_new = if (output_dir.statFile(file_name)) |_| false else |_| true;

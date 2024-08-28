@@ -84,7 +84,9 @@ pub const ZPolling = struct {
     fn pollWithTimeoutInternal(self: ZPolling, raw_items: []c.zmq_pollitem_t, timeout_ms: c_int, retry_left: usize) !Iterator {
         const result = c.zmq_poll(raw_items.ptr, @as(c_int, @intCast(raw_items.len)), timeout_ms);
         if (result == 0) {
-            return error.PollingTimeout;
+            if (timeout_ms > 0) {
+                return error.PollingTimeout;
+            }
         }
         else if (result < 0) {
             const err_no = c.zmq_errno();
@@ -108,6 +110,27 @@ pub const ZPolling = struct {
             .raw_items = raw_items,
             .index = 0,
         };
+    }
+
+    pub fn socketState(self: ZPolling, socket: *ZSocket) !ZPollEvents {
+        var iter = try self.pollWithTimeout(0);
+        defer iter.deinit();
+
+        for (iter.items, iter.raw_items) |item, raw| {
+            if (item.socket == socket) {
+                const events: ZPollEventSet = .{ .bits = .{ .mask = @intCast(raw.revents) } };
+                const accepts = events.intersectWith(item.events);
+
+                return .{
+                    .PollIn = accepts.contains(.PollIn),
+                    .PollOut = accepts.contains(.PollOut),
+                    .PollErr = accepts.contains(.PollErr),
+                    .PollPri = accepts.contains(.PollPri),
+                };
+            }
+        }
+
+        return .{};
     }
 
     pub const Item = struct {

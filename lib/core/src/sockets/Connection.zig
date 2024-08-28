@@ -104,20 +104,28 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
 
                 if (!dispatcher.receive_pending.hasMore()) {
                     if (dispatcher.send_queue.dequeue()) |entry| {
-                        if (dispatcher.state.level.done) {
-                            defer entry.deinit();
-                            continue;
+                        const socket_state = try dispatcher.polling.socketState(entry.socket);
+                        if (socket_state.PollIn) {
+                            try dispatcher.send_queue.prepend(entry);
+                            const x = 0;
+                            _ = x;
                         }
-
-                        Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
-                        try dispatcher.receive_pending.enqueue(entry);
-
-                        events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
-                            else => {
-                                Trace.debug("Unexpected error on sending: {}", .{err});
-                                return err;
+                        else {
+                            if (dispatcher.state.level.done) {
+                                defer entry.deinit();
+                                continue;
                             }
-                        };
+
+                            Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
+                            try dispatcher.receive_pending.enqueue(entry);
+
+                            events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
+                                else => {
+                                    Trace.debug("Unexpected error on sending: {}", .{err});
+                                    return err;
+                                }
+                            };
+                        }
                     }
                     else if (dispatcher.receive_queue.hasMore()) {
                         continue;

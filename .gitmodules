@@ -10,3 +10,6 @@
 [submodule "vendor/zig-clap"]
 	path = vendor/zig-clap
 	url = https://github.com/Hejsil/zig-clap.git
+[submodule "vendor/known-folders"]
+	path = vendor/known-folders
+	url = https://github.com/ziglibs/known-folders.git

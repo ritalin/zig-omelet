@@ -132,5 +132,3 @@ fn addTestAll(b: *std.Build) void {
         }
     }
 }
-
-const SettingInspection = @import("./build_support.zig").SettingInspection;

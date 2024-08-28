@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) !void {
             .exe_prefix = exe_prefix,
             .zmq_prefix = zmq_prefix,
         });
-        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "runner"}));
+        const exe_stage = dep.artifact(exe_prefix);
         b.installArtifact(exe_stage);
         break :stage exe_stage;
     };
@@ -81,51 +81,12 @@ pub fn build(b: *std.Build) !void {
         cmd.step.dependOn(b.getInstallStep());
         
         @import("stage_runner").applyRunnerChannel(cmd);
-        var inspection = try SettingInspection.inspectArgId(b.allocator, b.args);
-        
-        general_args: {
-            var iter = try inspection.iterate(b.allocator, .cmd_general);
-            defer iter.deinit(b.allocator);
-            while (iter.next()) |arg| { cmd.addArg(arg); }
-            break:general_args;
-        }
-        subcommand: {
-            if (inspection.subcommand_tag) |sc| {
-                cmd.addArg(inspection.subcommand().?);
 
-                var iter = try inspection.iterateFromSubcommand(b.allocator, sc);
-                defer iter.deinit(b.allocator);
-                while (iter.next()) |arg| { cmd.addArg(arg); }
+        if (b.args) |args| {
+            for (args) |arg| {
+                cmd.addArg(arg);
             }
-            else {
-                cmd.addArg("generate");
-            }
-            break:subcommand;
         }
-
-        const default_args: []const []const u8 = &.{
-            "--source-dir=./_schema-examples/user_types", 
-            "--source-dir=./_sql-examples",
-            "--schema-dir=./_schema-examples/user_types", 
-            "--schema-dir=./_schema-examples/tables",
-            "--output-dir=./_dump/ts",
-            // "--schema-include-filter=user_types",
-        };
-        for (default_args) |arg| {
-            if (!inspection.args.contains(arg)) { cmd.addArg(arg); }
-        }
-        // const default_args: []const []const u8 = &.{
-        //     "generate",
-            // "--source-dir=./_schema-examples/user_types", 
-            // "--source-dir=./_sql-examples",
-            // "--schema-dir=./_schema-examples/user_types", 
-            // "--schema-dir=./_schema-examples/tables",
-            // "--output-dir=./_dump/ts",
-        //     "--schema-include-filter=user_types",
-        // };
-        // for (default_args) |arg| {
-        //     cmd.addArg(arg);
-        // }
 
         const run_step = b.step("test-run", "Run the app as test frighting");
         run_step.dependOn(&cmd.step);

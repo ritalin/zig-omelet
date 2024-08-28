@@ -3,6 +3,7 @@
 #include <cctype>
 
 #include <duckdb.hpp>
+#include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/catalog/catalog_entry/type_catalog_entry.hpp>
 #include <duckdb/common/extra_type_info.hpp>
 
@@ -24,21 +25,89 @@ static auto extensionAccepted(const std:: string& ext) -> bool {
     return canonical_ext == ".sql";
 }
 
-static auto initSchemaInternal(duckdb::Connection& conn, const fs::path& schema_file_path) -> WorkerResultCode {
-    if (! extensionAccepted(schema_file_path.extension())) return no_error;
+using Dep = std::string;
+using PendingQueries = std::vector<std::string>;
+using PendingMap = std::unordered_map<Dep, PendingQueries>;
 
-    auto file = std::ifstream(schema_file_path);
-    auto content = std::string(
-        std::istreambuf_iterator<char>(file),
-        std::istreambuf_iterator<char>()
-    );
-
-    try {
-        conn.Query(content);
-        return no_error;
+static auto initSchemaInternal(duckdb::Connection& conn, const std::string& schema_sql, PendingMap& pending_map) -> void {
+    auto pending = conn.PendingQuery(schema_sql);
+    if (pending->HasError()) {
+        auto& err_ext = pending->GetErrorObject().ExtraInfo();
+        std::string key("name");
+        if (err_ext.contains(key)) {
+            pending_map[err_ext.at(key)].push_back(std::move(schema_sql));
+        }
+        return;
     }
-    catch (const duckdb::Exception& ex) {
-        return schema_load_failed;
+
+    pending->Execute();
+}
+
+static auto containsDepencendy(duckdb::Connection& conn, std::string rel_name) -> bool {
+    type_catalog: {
+        auto catalog = duckdb::Catalog::GetEntry<duckdb::TypeCatalogEntry>(*conn.context, "", "", rel_name, duckdb::OnEntryNotFound::RETURN_NULL);
+        if (catalog) return true;
+    }
+    table_catalog: {
+        auto catalog = duckdb::Catalog::GetEntry<duckdb::TableCatalogEntry>(*conn.context, "", "", rel_name, duckdb::OnEntryNotFound::RETURN_NULL);
+        if (catalog) return true;
+    }
+    return false;
+}
+
+static auto retryLoadSchema(duckdb::Connection& conn, PendingMap&& retry_map) -> void {
+    std::queue<std::string> queue;
+    size_t left_count = 0;
+
+    // initialize queue
+    for (const auto& [key, queries]: retry_map) {
+        queue.push(key);
+        // accumulate total count
+        left_count += queries.size();
+    }
+
+    while (true) {
+        std::queue<std::string> next_queue;
+        size_t unprocessed_count = 0;
+
+        while (!queue.empty()) {
+            std::string current = queue.front();
+            queue.pop();
+
+            if (containsDepencendy(conn, current)) {
+                std::vector<std::string> next_pendings;
+
+                for (const auto& sql : retry_map[current]) {
+                    auto pending_result = conn.PendingQuery(sql);
+                    if (pending_result->HasError()) {
+                        next_pendings.push_back(sql);
+                    }
+
+                    pending_result->Execute();
+                }
+
+                if (next_pendings.empty()) {
+                    // Successfull for queries of dependency key
+                    retry_map.erase(current);
+                    continue;
+                }
+                else {
+                    // partially successed
+                    retry_map[current] = std::move(next_pendings);
+                }
+            }
+
+            unprocessed_count += retry_map[current].size();
+            next_queue.push(current);
+        }
+
+        if (left_count == unprocessed_count) {
+            // avoid inifinity loop
+            break;
+        }
+        
+        queue = std::move(next_queue);
+        left_count = unprocessed_count;
     }
 }
 
@@ -55,18 +124,35 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
     if (! fs::exists(schema_dir, err)) {
         return schema_dir_not_found;
     }
+    auto dir = fs::recursive_directory_iterator(schema_dir);
+    PendingMap retry_map{};
+
+    WorkerResultCode result = no_error;
 
     auto conn = this->connect();
-    auto dir = fs::recursive_directory_iterator(schema_dir);
+    conn.BeginTransaction();
+    try {
+        for(auto& entry: dir) {
+            if (entry.is_regular_file()) {
+                if (! extensionAccepted(entry.path().extension())) continue;
 
-    for(auto& entry: dir) {
-        if (entry.is_regular_file()) {
-            auto err = initSchemaInternal(conn, entry.path());
-            if (err != no_error) return err;
+                auto file = std::ifstream(entry.path());
+                auto content = std::string(
+                    std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()
+                );
+                initSchemaInternal(conn, content, retry_map);
+            }
+        }
+        if (retry_map.size() > 0) {
+            retryLoadSchema(conn, std::move(retry_map));
         }
     }
+    catch (const duckdb::Exception& ex) {
+        result = invalid_sql;
+    }
+    conn.Commit();
 
-    return no_error;
+    return result;
 }
 
 auto Database::retainUserTypeName(duckdb::Connection& conn) -> void {
@@ -136,6 +222,9 @@ extern "C" {
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+
+#include <duckdb/common/constants.hpp>
+#include <iostream>
 
 using namespace Catch::Matchers;
 
@@ -244,6 +333,97 @@ TEST_CASE("Load schemas") {
             }
         }
     }
+}
+
+TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
+    std::string schema_1(R"#(CREATE TABLE V (vis B not null))#");
+    std::string schema_2(R"#(CREATE TYPE B AS ENUM ('hide', 'visible'))#");
+    std::string schema_3(R"#(
+        CREATE TABLE T2 (
+            id INTEGER PRIMARY KEY,
+            t3_id INTEGER,
+            t1_id INTEGER,
+            FOREIGN KEY (t3_id) REFERENCES T3 (id),
+            FOREIGN KEY (t1_id) REFERENCES T1 (id)
+        );
+    )#");
+
+    worker::Database db;
+    auto conn = db.connect();
+
+    worker::PendingMap retry_map{};
+
+    conn.BeginTransaction();
+
+    missing_query: {
+        worker::initSchemaInternal(conn, schema_1, retry_map);
+
+        UNSCOPED_INFO("Missing relation query");
+        REQUIRE(retry_map.size() == 1);
+        REQUIRE(retry_map.contains("B"));
+        REQUIRE(retry_map["B"].size() == 1);
+        REQUIRE_THAT(retry_map["B"][0], Equals(schema_1));
+    }
+    valid_query: {
+        worker::initSchemaInternal(conn, schema_2, retry_map);
+
+        UNSCOPED_INFO("Valid query");
+        REQUIRE(retry_map.size() == 1);
+        REQUIRE(retry_map.contains("B"));
+        REQUIRE(retry_map["B"].size() == 1);
+        REQUIRE_THAT(retry_map["B"][0], Equals(schema_1));
+    }
+    retry_query: {
+        worker::retryLoadSchema(conn, std::move(retry_map));
+
+        UNSCOPED_INFO("Retry query");
+        REQUIRE(worker::containsDepencendy(conn, "B"));
+    }
+    conn.Commit();
+}
+
+TEST_CASE("Load schemas#2 (dependent inconsistency of table)") {
+    std::string schema_1(R"#(
+        CREATE TABLE T2 (
+            id INTEGER PRIMARY KEY,
+            t1_id INTEGER,
+            FOREIGN KEY (t1_id) REFERENCES T1 (id)
+        );
+    )#");
+    std::string schema_2("CREATE TABLE t1 (id INTEGER PRIMARY KEY, j VARCHAR)");
+
+    worker::Database db;
+    auto conn = db.connect();
+
+    worker::PendingMap retry_map{};
+
+    conn.BeginTransaction();
+
+    missing_query: {
+        worker::initSchemaInternal(conn, schema_1, retry_map);
+
+        UNSCOPED_INFO("Missing relation query");
+        REQUIRE(retry_map.size() == 1);
+        REQUIRE(retry_map.contains("T1"));
+        REQUIRE(retry_map["T1"].size() == 1);
+        REQUIRE_THAT(retry_map["T1"][0], Equals(schema_1));
+    }
+    valid_query: {
+        worker::initSchemaInternal(conn, schema_2, retry_map);
+
+        UNSCOPED_INFO("Valid query");
+        REQUIRE(retry_map.size() == 1);
+        REQUIRE(retry_map.contains("T1"));
+        REQUIRE(retry_map["T1"].size() == 1);
+        REQUIRE_THAT(retry_map["T1"][0], Equals(schema_1));
+    }
+    retry_query: {
+        worker::retryLoadSchema(conn, std::move(retry_map));
+
+        UNSCOPED_INFO("Retry query");
+        REQUIRE(worker::containsDepencendy(conn, "T1"));
+    }
+    conn.Commit();
 }
 
 #endif

@@ -6,8 +6,6 @@ const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
 
 const help = @import("./help.zig");
 
-
-
 const Setting = @This();
 
 arena: *std.heap.ArenaAllocator,
@@ -39,7 +37,6 @@ pub fn loadFromArgs(allocator: std.mem.Allocator) !core.settings.LoadResult(Sett
     arena.* = std.heap.ArenaAllocator.init(allocator);
     errdefer allocator.destroy(arena);
     errdefer arena.deinit();
-
 
     const general_setting = 
         switch (try loadGeneralArgs(arena, @TypeOf(parser), &parser)) {

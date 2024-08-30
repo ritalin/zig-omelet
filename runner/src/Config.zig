@@ -17,12 +17,6 @@ const Setting = @import("./settings/Setting.zig");
 
 const GenerateSetting = @import("./settings/commands/Generate.zig");
 
-
-
-
-const findDecl = mappings.findDecl;
-const ConfigBindMap = mappings.BindMap;
-
 pub const StageCount = std.enums.EnumFieldStruct(core.configs.StageCategory, usize, 0);
 
 pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.settings.LoadResult(StageProcess, help.ArgHelpSetting) {
@@ -34,7 +28,7 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
                     catch |err| break:spawn err
                 ;
                 defer stages.deinit();
-                break:spawn stages.spawnAll(setting.general, setting.command.generate);
+                break:spawn stages.spawnAll(allocator, setting.general, setting.command.generate);
             },
         }
     };
@@ -42,9 +36,8 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
     if (result_) |result| {
         return result;
     }
-    else |err| {
-        _ = err;
-        return .{.help = .{.tags = &.{.cmd_general}, .subcommand = .general}};
+    else |_| {
+        return .{.help = .{.tags = &.{.cmd_general}, .command = null}};
     }
 }
 
@@ -120,53 +113,12 @@ pub fn StageSet(comptime SubcommandSetting: type, comptime SubcommandConfig: typ
                     .stage_generate => count.stage_generate += 1,
                 };
 
-            // WatchStage: {
-                // const stage = self.stage_watch;
                 _ = try initStageProcess(
                     managed_allocator, app_dir, @constCast(stage), 
                     general_setting, subcommand_setting,
                     &entries
                 );
-                    
-                // switch (result) {
-                //     .help => |help_setting| return .{ .help = help_setting },
-                //     .success => {},
-                // }
-
-                // break :WatchStage;
-            // }
             }
-
-            // ExtractStage: {
-            //     for (self.stage_extract) |stage| {
-            //         const result = initStageProcess(
-            //             managed_allocator, app_dir, stage, 
-            //             general_setting, generate_setting,
-            //             &entries
-            //         );
-                    
-            //         switch (try result) {
-            //             .help => |help_setting| return .{ .help = help_setting },
-            //             .success => {},
-            //         }
-            //     }
-            //     break :ExtractStage;
-            // }
-            // GenerateStage: {
-            //     for (self.stage_generate) |stage| {
-            //         const result = initStageProcess(
-            //             managed_allocator, app_dir, stage, 
-            //             general_setting, generate_setting,
-            //             &entries
-            //         );
-                    
-            //         switch (try result) {
-            //             .help => |help_setting| return .{ .help = help_setting },
-            //             .success => {},
-            //         }
-            //     }
-            //     break :GenerateStage;
-            // }
 
             for (entries.items) |*entry| {
                 _ = try entry.process.spawn();
@@ -213,21 +165,7 @@ pub fn StageSet(comptime SubcommandSetting: type, comptime SubcommandConfig: typ
                     }
                 }
                 
-
-                // // var iter = stage.extra_args.iterator();
-                // // while (iter.next()) |extra| {
-                // // const result = apply(setting.generate, extra, &args),
-                // // };
-
-                // // for (stage.extra_args) |extra| {
-                // //     const binder = GenerateConfigMap.get(extra);
-                // //     std.debug.assert(binder != null);
-                // //     switch (try binder.?(setting.command.generate, &args)) {
-                // //         .help => |help_setting| return .{ .help = help_setting },
-                // //         .success => {},
-                // //     }
-                // // }
-                break :subcommand;
+                break:subcommand;
             }
 
             const cli_args = try std.mem.join(allocator, " ", args.items);

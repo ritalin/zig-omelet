@@ -1,0 +1,38 @@
+.{
+    .stage_watch = .{
+        .@"omelet-watch-files" = .{
+            // default: launch from path same as runner
+            // path: launch from specified full/cwd-relative directory path
+            .location = .default,
+            .extra_args = .{
+                // default: supplied from CLI arg
+                // values: supplied from fixed value(s)
+                // enabled: flag arg
+                .source_dir = .default, 
+                .include_filter = .default, 
+                .exclude_filter = .default,
+                .watch = .default
+            },
+            // wheather launch stage automatic
+            .managed = true,
+        },
+    },
+    .stage_extract = .{
+        .@"omelet-duckdb-extract" = .{
+            .location = .default,
+            .extra_args = .{
+                .schema_dir = .default
+            },
+            .managed = true,
+        },
+    },
+    .stage_generate = .{
+        .@"omelet-ts-generate" = .{
+            .location = .default,
+            .extra_args = .{
+                .output_dir = .default
+            },
+            .managed = true,
+        },
+    },
+}

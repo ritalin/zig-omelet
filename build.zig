@@ -66,6 +66,15 @@ pub fn build(b: *std.Build) !void {
         b.installArtifact(exe_stage);
         break :stage exe_stage;
     };
+    install_config: {
+        b.installDirectory(.{
+            .source_dir = b.path("./runner/assets/configs"),
+            .install_dir = .prefix,
+            .install_subdir = "configs",
+            .include_extensions = &.{".zon"},
+        });
+        break:install_config;
+    }
 
     run_cmd: {
         const cmd = b.addRunArtifact(stage_runner);

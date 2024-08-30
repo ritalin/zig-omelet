@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core");
 
 const Symbol = core.Symbol;
@@ -106,15 +107,18 @@ pub fn StageLoader(comptime ArgId: type) type {
 
         fn loadStageInternal(allocator: std.mem.Allocator, ast: std.zig.Ast, tags: []const std.zig.Ast.Node.Tag, node: std.zig.Ast.full.StructInit, stage_name: Symbol, stage: *Stage(ArgId)) !void {
             var status = std.enums.EnumSet(std.meta.FieldEnum(Stage(ArgId))).initFull();
-            status.remove(.managed); // has default value
+            status.remove(.category);
 
             for (node.ast.fields) |field_index| {
                 const token_index = ast.firstToken(field_index) - 2;
                 const field_name = ast.tokenSlice(token_index);
                 const field = std.meta.stringToEnum(std.meta.FieldEnum(Stage(ArgId)), field_name) orelse {
-                    log.err("Unexpected field: {s} in configration file", .{field_name});
+                    if (! builtin.is_test) {
+                        log.err("Unexpected field: {s} in configration file", .{field_name});
+                    }
                     return error.InvalidConfigFieldKey;
                 };
+                if (!status.contains(field)) {}
                 defer status.remove(field);
 
                 switch (field) {
@@ -135,8 +139,9 @@ pub fn StageLoader(comptime ArgId: type) type {
                 }
             }
 
+            status.remove(.managed); // has default value
             if (status.count() > 0) {
-                // TODO ERROR,
+                return error.InvalidConfigFieldCount;
             }
         }
 
@@ -388,6 +393,25 @@ test "Invalid stage strategy#2 (optional stage)" {
     const allocator = arena.allocator();
 
     try std.testing.expectError(error.InvalidStageCount, TestLoader.load(allocator, source, strategies));
+}
+
+test "Invalid stage field count" {
+    const source: [:0]const u8 = 
+        \\.{
+        \\  .stage_generate = .{
+        \\      .@"some-stage" = .{
+        \\          .location = .default,
+        \\      }
+        \\  }
+        \\},
+    ;
+    const strategies = core.configs.StageStrategy.init(.{.stage_generate = .optional});
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    try std.testing.expectError(error.InvalidConfigFieldCount, TestLoader.load(allocator, source, strategies));
 }
 
 test "Invalid stage field#1" {

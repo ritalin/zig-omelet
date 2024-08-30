@@ -23,7 +23,7 @@ pub const CommandSetting = union(help.CommandArgId) {
             else => return err,
         };
 
-        var defaults_file = try core.configs.resolveFileCandidate(arena.allocator(), help.CommandArgId, id, path_candidates);
+        var defaults_file = try core.configs.resolveFileCandidate(arena.allocator(), @tagName(id), path_candidates);
         defer if (defaults_file) |*file| file.close();
 
         const Iterator = @typeInfo(@TypeOf(parser.iter)).Pointer.child;

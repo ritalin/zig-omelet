@@ -3,7 +3,7 @@ const zmq = @import("zmq");
 const core = @import("core");
 
 const Setting = @import("./settings/Setting.zig");
-const StageCount = @import("./Config.zig").StageCount;
+const StageCount = @import("./configs/Config.zig").StageCount;
 const app_context = @import("build_options").app_context;
 
 const Symbol = core.Symbol;

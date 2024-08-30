@@ -5,17 +5,17 @@ const known_folders = @import("known_folders");
 
 const log = core.Logger.TraceDirect(@import("build_options").app_context);
 
-const help = @import("./settings/help.zig");
+const help = @import("../settings/help.zig");
 
-const loader = @import("./configs/config_loader.zig");
-const mappings = @import("./configs/bind_mappings.zig");
-const GeneralConfig = @import("./configs/GeneralConfig.zig");
-const GenerateConfig = @import("./configs/GenerateConfig.zig");
+const loader = @import("./config_loader.zig");
+const mappings = @import("./bind_mappings.zig");
+const GeneralConfig = @import("./GeneralConfig.zig");
+const GenerateConfig = @import("./GenerateConfig.zig");
 const Stage = loader.Stage;
 
-const Setting = @import("./settings/Setting.zig");
+const Setting = @import("../settings/Setting.zig");
 
-const GenerateSetting = @import("./settings/commands/Generate.zig");
+const GenerateSetting = @import("../settings/commands/Generate.zig");
 
 pub const StageCount = std.enums.EnumFieldStruct(core.configs.StageCategory, usize, 0);
 

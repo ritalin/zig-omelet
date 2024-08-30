@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const Runner = @import("./Runner.zig");
 const Setting = @import("./settings/Setting.zig");
-const Config = @import("./Config.zig");
+const Config = @import("./configs/Config.zig");
 
 const log = core.Logger.TraceDirect(@import("build_options").app_context);
 const exe_prefix = @import("build_options").exe_prefix;

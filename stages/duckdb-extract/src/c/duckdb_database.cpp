@@ -124,23 +124,33 @@ auto Database::loadSchemaAll(const fs::path& schema_dir) -> WorkerResultCode {
     if (! fs::exists(schema_dir, err)) {
         return schema_dir_not_found;
     }
-    auto dir = fs::recursive_directory_iterator(schema_dir);
     PendingMap retry_map{};
-
     WorkerResultCode result = no_error;
 
     auto conn = this->connect();
     conn.BeginTransaction();
-    try {
-        for(auto& entry: dir) {
-            if (entry.is_regular_file()) {
-                if (! extensionAccepted(entry.path().extension())) continue;
 
-                auto file = std::ifstream(entry.path());
-                auto content = std::string(
-                    std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()
-                );
-                initSchemaInternal(conn, content, retry_map);
+    try {
+        if (fs::is_regular_file(schema_dir)) {
+            auto file = std::ifstream(schema_dir);
+            auto content = std::string(
+                std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()
+            );
+            initSchemaInternal(conn, content, retry_map);            
+        }
+        else {
+            auto dir = fs::recursive_directory_iterator(schema_dir);
+
+            for(auto& entry: dir) {
+                if (entry.is_regular_file()) {
+                    if (! extensionAccepted(entry.path().extension())) continue;
+
+                    auto file = std::ifstream(entry.path());
+                    auto content = std::string(
+                        std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()
+                    );
+                    initSchemaInternal(conn, content, retry_map);
+                }
             }
         }
         if (retry_map.size() > 0) {
@@ -331,6 +341,27 @@ TEST_CASE("Load schemas") {
                 CHECK_THAT(result->GetName(), Equals("z"));
                 CHECK_THAT(result->GetType().ToString(), Equals("INTEGER"));
             }
+        }
+    }
+}
+
+TEST_CASE("Load schema file#1 (single query)") {
+    worker::Database db;
+    auto err = db.loadSchemaAll(std::string("./_schema-examples/tables/Foo.sql"));
+
+    load_result_code: {
+        UNSCOPED_INFO("load result code");
+        CHECK(err == 0);
+    }
+    reated_schema_information: {
+        INFO("created schema information");
+        auto conn = db.connect();
+
+        rel_1: {
+            UNSCOPED_INFO("relation#1");
+            auto info = conn.TableInfo("Foo");
+            REQUIRE((bool)info == true);
+            REQUIRE(info->columns.size() == 4);
         }
     }
 }

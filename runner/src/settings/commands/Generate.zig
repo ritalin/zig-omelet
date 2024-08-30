@@ -192,8 +192,8 @@ pub const Builder = struct {
         defer schemas.deinit();
         for (self.schema_dir_set.items) |path_| {
             if (path_) |path| {
-                _ = base_dir.statFile(path) catch {
-                    log.warn("Cannot access source folder: {s}", .{path});
+                _ = base_dir.statFile(path) catch |err| {
+                    log.warn("Cannot access source folder/file: {s} ({s})", .{path, @errorName(err)});
                     return error.SettingLoadFailed;
                 };
 

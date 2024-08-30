@@ -30,17 +30,20 @@ using PendingQueries = std::vector<std::string>;
 using PendingMap = std::unordered_map<Dep, PendingQueries>;
 
 static auto initSchemaInternal(duckdb::Connection& conn, const std::string& schema_sql, PendingMap& pending_map) -> void {
-    auto pending = conn.PendingQuery(schema_sql);
-    if (pending->HasError()) {
-        auto& err_ext = pending->GetErrorObject().ExtraInfo();
-        std::string key("name");
-        if (err_ext.contains(key)) {
-            pending_map[err_ext.at(key)].push_back(std::move(schema_sql));
+    auto stmts = conn.ExtractStatements(schema_sql);
+    for (auto& stmt: stmts) {
+        auto pending = conn.PendingQuery(stmt->Copy());
+        if (pending->HasError()) {
+            auto& err_ext = pending->GetErrorObject().ExtraInfo();
+            std::string key("name");
+            if (err_ext.contains(key)) {
+                pending_map[err_ext.at(key)].push_back(std::move(stmt->ToString()));
+            }
+            return;
         }
-        return;
-    }
 
-    pending->Execute();
+        pending->Execute();
+    }
 }
 
 static auto containsDepencendy(duckdb::Connection& conn, std::string rel_name) -> bool {
@@ -366,8 +369,32 @@ TEST_CASE("Load schema file#1 (single query)") {
     }
 }
 
+TEST_CASE("Load schema file#2 (multi query)") {
+    worker::Database db;
+    auto err = db.loadSchemaAll(std::string("./_schema-examples/tables/many_tables.sql"));
+
+    load_result_code: {
+        UNSCOPED_INFO("load result code");
+        CHECK(err == 0);
+    }
+    reated_schema_information: {
+        INFO("created schema information");
+        auto conn = db.connect();
+
+        rel_1: {
+            auto info = conn.TableInfo("T1");
+            REQUIRE((bool)info == true);
+        }
+        rel_2: {
+            UNSCOPED_INFO("relation#2");
+            auto info = conn.TableInfo("T2");
+            REQUIRE((bool)info == true);
+        }
+    }
+}
+
 TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
-    std::string schema_1(R"#(CREATE TABLE V (vis B not null))#");
+    std::string schema_1(R"#(CREATE TABLE V(vis B NOT NULL))#");
     std::string schema_2(R"#(CREATE TYPE B AS ENUM ('hide', 'visible'))#");
     std::string schema_3(R"#(
         CREATE TABLE T2 (
@@ -378,6 +405,8 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
             FOREIGN KEY (t1_id) REFERENCES T1 (id)
         );
     )#");
+
+    std::string expect_err_schema(R"#(CREATE TABLE V(vis B NOT NULL);)#");
 
     worker::Database db;
     auto conn = db.connect();
@@ -393,7 +422,7 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
         REQUIRE(retry_map.size() == 1);
         REQUIRE(retry_map.contains("B"));
         REQUIRE(retry_map["B"].size() == 1);
-        REQUIRE_THAT(retry_map["B"][0], Equals(schema_1));
+        REQUIRE_THAT(retry_map["B"][0], Equals(expect_err_schema));
     }
     valid_query: {
         worker::initSchemaInternal(conn, schema_2, retry_map);
@@ -402,7 +431,7 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
         REQUIRE(retry_map.size() == 1);
         REQUIRE(retry_map.contains("B"));
         REQUIRE(retry_map["B"].size() == 1);
-        REQUIRE_THAT(retry_map["B"][0], Equals(schema_1));
+        REQUIRE_THAT(retry_map["B"][0], Equals(expect_err_schema));
     }
     retry_query: {
         worker::retryLoadSchema(conn, std::move(retry_map));
@@ -423,6 +452,8 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of table)") {
     )#");
     std::string schema_2("CREATE TABLE t1 (id INTEGER PRIMARY KEY, j VARCHAR)");
 
+    std::string expect_err_schema(R"#(CREATE TABLE T2(id INTEGER PRIMARY KEY, t1_id INTEGER, FOREIGN KEY (t1_id) REFERENCES T1(id));)#");
+
     worker::Database db;
     auto conn = db.connect();
 
@@ -437,7 +468,7 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of table)") {
         REQUIRE(retry_map.size() == 1);
         REQUIRE(retry_map.contains("T1"));
         REQUIRE(retry_map["T1"].size() == 1);
-        REQUIRE_THAT(retry_map["T1"][0], Equals(schema_1));
+        REQUIRE_THAT(retry_map["T1"][0], Equals(expect_err_schema));
     }
     valid_query: {
         worker::initSchemaInternal(conn, schema_2, retry_map);
@@ -446,7 +477,7 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of table)") {
         REQUIRE(retry_map.size() == 1);
         REQUIRE(retry_map.contains("T1"));
         REQUIRE(retry_map["T1"].size() == 1);
-        REQUIRE_THAT(retry_map["T1"][0], Equals(schema_1));
+        REQUIRE_THAT(retry_map["T1"][0], Equals(expect_err_schema));
     }
     retry_query: {
         worker::retryLoadSchema(conn, std::move(retry_map));

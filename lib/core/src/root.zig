@@ -20,6 +20,10 @@ pub const settings = struct {
     pub usingnamespace @import("./settings/help.zig");
     pub usingnamespace @import("./settings/supports.zig");
 };
+pub const configs = struct {
+    pub usingnamespace @import("./configs/types.zig");
+    pub usingnamespace @import("./configs/supports.zig");
+};
 
 test "All tests" {
     testing.refAllDecls(@This());

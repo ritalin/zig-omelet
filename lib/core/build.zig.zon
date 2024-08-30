@@ -45,6 +45,7 @@
         //},
         .zzmq = .{ .path = "../../vendor/zzmq" },
         .clap = .{ .path = "../../vendor/zig-clap"},
+        .known_folders = .{ .path = "../../vendor/known-folders" },
     },
 
     // Specifies the set of files and directories that are included in this package.

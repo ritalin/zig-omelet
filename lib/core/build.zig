@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
+    const dep_known_folders = b.dependency("known_folders", .{});
 
     const mod_context = "lib_core";
 
@@ -100,6 +101,7 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             mod.addImport("zmq", dep_zzmq.module("zzmq"));
             mod.addImport("clap", dep_clap.module("clap"));
+            mod.addImport("known_folders", dep_known_folders.module("known-folders"));
             mod.addImport("cbor", mod_cbor);
             break:import_modules;
         }

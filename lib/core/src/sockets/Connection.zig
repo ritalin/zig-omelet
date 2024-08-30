@@ -170,9 +170,13 @@ pub fn Server(comptime stage_name: types.Symbol) type {
 
         pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
             const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
+            errdefer send_socket.deinit();
             const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
+            errdefer reply_socket.deinit();
 
             const self = try allocator.create(Self);
+            errdefer self.deinit();
+
             self.* = .{
                 .allocator = allocator,
                 .send_socket = send_socket,
@@ -304,6 +308,8 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
             }
 
             const self = try allocator.create(Self);
+            errdefer self.deinit();
+            
             self.* = .{
                 .allocator = allocator,
                 .send_queue = EventQueue(Entry).init(allocator),

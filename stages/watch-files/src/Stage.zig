@@ -108,7 +108,8 @@ fn sendAllFiles(self: *Self, sources: []const Setting.SourceDir, filter: PathMat
     for (sources) |src| {
         const file_stat = try std.fs.cwd().statFile(src.dir_path);
         if (file_stat.kind == .file) {
-            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, src.dir_path, filter);
+            const name = std.fs.path.basename(src.dir_path);
+            try self.sendFile(src.category, std.fs.cwd(), src.dir_path, name, filter);
         }
         else if (file_stat.kind == .directory) {
             try self.sendFiledOfDir(src.category, src.dir_path, filter);
@@ -141,7 +142,6 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
 
     const path_u = try toUnicodeString(self.allocator, file_path_abs);
     defer self.allocator.free(path_u);
-
 
     if (filter.matchByExclude(path_u).exclude) {
         return;

@@ -112,9 +112,10 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(co
             },
             .finish_topic_body => {
                 try self.connection.dispatcher.approve();
+                try self.connection.dispatcher.state.receiveTerminate();
+
                 if (lookup.count() == 0) {
-                    if (!self.connection.dispatcher.state.level.terminating) {
-                        try self.connection.dispatcher.state.receiveTerminate();
+                    if (self.connection.dispatcher.state.level.terminating) {
                         try self.connection.dispatcher.post(.finish_generate);
                     }
                 }

@@ -7,10 +7,8 @@ const FilePath = core_types.FilePath;
 
 pub const ConfigFileCandidates = std.enums.EnumFieldStruct(enum {current_dir, home_dir, executable_dir}, ?FilePath, @as(?FilePath, null));
 
-pub fn resolveFileCandidate(allocator: std.mem.Allocator, comptime SubCommand: type, id: SubCommand, candidates: ConfigFileCandidates) !?std.fs.File {
-    std.debug.assert(comptime @typeInfo(SubCommand) == .Enum);
-
-    const file_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{@tagName(id)});
+pub fn resolveFileCandidate(allocator: std.mem.Allocator, command: Symbol, candidates: ConfigFileCandidates) !?std.fs.File {
+    const file_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{command});
     defer allocator.free(file_name);
     
     path: {
@@ -46,7 +44,7 @@ pub fn resolveFileCandidate(allocator: std.mem.Allocator, comptime SubCommand: t
             if (dir_) |*dir| {
                 defer dir.close();
 
-                const path = try std.fs.path.join(allocator, &.{dir_path, file_name});
+                const path = try std.fs.path.join(allocator, &.{"..", dir_path, file_name});
                 defer allocator.free(path);
 
                 return dir.openFile(path, .{}) catch |err| switch (err) {

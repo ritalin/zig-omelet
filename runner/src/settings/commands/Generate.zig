@@ -10,10 +10,11 @@ const DefaultArgs = @import("../default_args.zig").Defaults(ArgId(.{}));
 const FilePath = core.FilePath;
 const FilterKind = core.FilterKind;
 
-source_dir_set: []FilePath,
-schema_dir_set: []FilePath,
-filter_set: []PathFilter,
-output_dir_path: FilePath,
+source_dir: []FilePath,
+schema_dir: []FilePath,
+include_filter: []FilePath,
+exclude_filter: []FilePath,
+output_dir: FilePath,
 watch: bool,
 
 const Self = @This();
@@ -41,6 +42,12 @@ pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     };
 }
 
+pub const strategy = core.configs.StageStrategy.init(.{
+    .stage_watch = .one,
+    .stage_extract = .one,
+    .stage_generate = .many,
+});
+
 const PathFilter = struct {
     kind: FilterKind,
     path: FilePath,
@@ -63,7 +70,7 @@ pub const Builder = struct {
                 break:defaults try DefaultArgs.loadFromFile(allocator, &file);
             }
             else {
-                break:defaults try DefaultArgs.init(allocator);
+                break:defaults try DefaultArgs.init(allocator, DefaultArgs.Map.init(.{}));
             }
         };
 
@@ -125,41 +132,41 @@ pub const Builder = struct {
 
         while (iter.next()) |entry| {
             switch (entry.key) {
-                .source_dir => if (entry.value.tag() == .fixed) {
+                .source_dir => if (entry.value.tag() == .values) {
                     if (self.source_dir_set.items.len == 0) {
-                        for (entry.value.fixed) |value| {
+                        for (entry.value.values) |value| {
                             try self.source_dir_set.append(value);
                         }
                     }
                 },
-                .schema_dir => if (entry.value.tag() == .fixed) {
+                .schema_dir => if (entry.value.tag() == .values) {
                     if (self.schema_dir_set.items.len == 0) {
-                        for (entry.value.fixed) |value| {
+                        for (entry.value.values) |value| {
                             try self.schema_dir_set.append(value);
                         }
                     }
                 },
-                .include_filter => if (entry.value.tag() == .fixed) {
+                .include_filter => if (entry.value.tag() == .values) {
                     if (self.filter_set_counts.get(.include) == 0) {
-                        for (entry.value.fixed) |value| {
+                        for (entry.value.values) |value| {
                             try self.filter_set.append(.{.kind = .include, .path = value});
                         }
                     }
                 },
-                .exclude_filter => if (entry.value.tag() == .fixed) {
+                .exclude_filter => if (entry.value.tag() == .values) {
                     if (self.filter_set_counts.get(.exclude) == 0) {
-                        for (entry.value.fixed) |value| {
+                        for (entry.value.values) |value| {
                             try self.filter_set.append(.{.kind = .exclude, .path = value});
                         }
                     }
                 },
-                .output_dir => if (entry.value.tag() == .fixed) {
-                    if ((self.output_dir_path == null) and (entry.value.fixed.len > 0)) {
-                        self.output_dir_path = entry.value.fixed[0];
+                .output_dir => if (entry.value.tag() == .values) {
+                    if ((self.output_dir_path == null) and (entry.value.values.len > 0)) {
+                        self.output_dir_path = entry.value.values[0];
                     }
                 },
-                .watch => if (entry.value.tag() == .fixed) {
-                    self.watch = true;
+                .watch => if (entry.value.tag() == .enabled) {
+                    self.watch = entry.value.enabled;
                 },
             }
         }
@@ -199,10 +206,20 @@ pub const Builder = struct {
             return error.SettingLoadFailed;
         }
 
-        var filters = try std.ArrayList(PathFilter).initCapacity(self.allocator, self.filter_set.items.len);
-        defer filters.deinit();
+        var include_filters = try std.ArrayList(core.FilePath).initCapacity(self.allocator, self.filter_set.items.len);
+        defer include_filters.deinit();
+        var exclude_filters = try std.ArrayList(core.FilePath).initCapacity(self.allocator, self.filter_set.items.len);
+        defer exclude_filters.deinit();
+
         for (self.filter_set.items) |filter| {
-            try filters.append(.{.kind = filter.kind, .path = try self.allocator.dupe(u8, filter.path)});
+            switch (filter.kind) {
+                .include => {
+                    try include_filters.append(try self.allocator.dupe(u8, filter.path));
+                },
+                .exclude => {
+                    try exclude_filters.append(try self.allocator.dupe(u8, filter.path));
+                }
+            }
         }
 
         const output_dir_path = path: {
@@ -217,10 +234,11 @@ pub const Builder = struct {
         };
 
         return .{
-            .source_dir_set = try sources.toOwnedSlice(),
-            .schema_dir_set = try schemas.toOwnedSlice(),
-            .filter_set = try filters.toOwnedSlice(),
-            .output_dir_path = output_dir_path,
+            .source_dir = try sources.toOwnedSlice(),
+            .schema_dir = try schemas.toOwnedSlice(),
+            .include_filter = try include_filters.toOwnedSlice(),
+            .exclude_filter = try exclude_filters.toOwnedSlice(),
+            .output_dir = output_dir_path,
             .watch = self.watch,
         };
     }

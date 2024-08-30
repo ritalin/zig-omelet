@@ -1,31 +1,35 @@
 const std = @import("std");
 const core = @import("core");
 
+pub const DufaultArg = union (enum) {
+    default: void,
+    values: []const core.Symbol,
+    enabled: bool,
+
+    pub fn tag(self: DufaultArg) std.meta.FieldEnum(DufaultArg) {
+        return std.meta.activeTag(self);
+    }
+};
+
 pub fn Defaults(comptime ArgId: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
-        map: std.enums.EnumMap(ArgId, Arg),
+        map: Self.Map,
 
         const Self = @This();
-        const Map = std.enums.EnumMap(ArgId, Arg);
 
-        pub const Arg = union (enum) {
-            default: void,
-            fixed: []const core.Symbol,
+        pub const Map = std.enums.EnumMap(ArgId, Arg);
+        pub const Arg = DufaultArg;
 
-            pub fn tag(self: Arg) std.meta.FieldEnum(Arg) {
-                return std.meta.activeTag(self);
-            }
-        };
-        pub const Iterator = Map.Iterator;
+        pub const Iterator = Self.Map.Iterator;
 
-        pub fn init(allocator: std.mem.Allocator) !Self {
+        pub fn init(allocator: std.mem.Allocator, map: Self.Map) !Self {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
-
+            
             return .{
                 .arena = arena,
-                .map = Map.initFull(.default),
+                .map = map,
             };
         }
 
@@ -38,7 +42,7 @@ pub fn Defaults(comptime ArgId: type) type {
             return loadFromFileInternal(allocator, contents);
         }
 
-        pub fn loadFromFileInternal(allocator: std.mem.Allocator, contents: [:0]const u8) !Self {
+        fn loadFromFileInternal(allocator: std.mem.Allocator, contents: [:0]const u8) !Self {
             var ast = try std.zig.Ast.parse(allocator, contents, .zon);
             defer ast.deinit(allocator);
 
@@ -46,18 +50,25 @@ pub fn Defaults(comptime ArgId: type) type {
             var buf: [2]std.zig.Ast.Node.Index = undefined;
 
             if (ast.fullStructInit(&buf, node_datas[0].lhs)) |node| {
-                return loadFromZon(allocator, ast, node);
+                const arena = try allocator.create(std.heap.ArenaAllocator);
+                arena.* = std.heap.ArenaAllocator.init(allocator);
+                errdefer {
+                    arena.deinit();
+                    allocator.destroy(arena);
+                }
+
+                return .{
+                    .arena = arena,
+                    .map = try loadFromZon(arena.allocator(), ast, node),
+                };
             }
             else {
                 return error.InvalidDefaults;
             }
         }
 
-        pub fn loadFromZon(allocator: std.mem.Allocator, ast: std.zig.Ast, root: std.zig.Ast.full.StructInit) !Self {
-            var self = try init(allocator);
-            errdefer self.deinit();
-
-            const tmp_allocator = self.arena.allocator();
+        pub fn loadFromZon(allocator: std.mem.Allocator, ast: std.zig.Ast, root: std.zig.Ast.full.StructInit) !Self.Map {
+            var map = Self.Map{};
 
             const node_tags = ast.nodes.items(.tag);
             var buf: [2]std.zig.Ast.Node.Index = undefined;
@@ -82,11 +93,14 @@ pub fn Defaults(comptime ArgId: type) type {
 
                     if (tag == .default) return error.InvalidDefaultsPayload;
 
-                    if (isItemsEmpty(node_tags[arg_field_index])) {
-                        self.map.put(key, .{.fixed = &.{}});
+                    if (tag == .enabled) {
+                        map.put(key, .{.enabled = try loadFixedEnabled(allocator, ast, arg_field_index)});
+                    }
+                    else if (core.configs.isItemsEmpty(node_tags[arg_field_index])) {
+                        map.put(key, .{.values = &.{}});
                     }
                     else if (ast.fullArrayInit(&buf, arg_field_index)) |values_node| {
-                        self.map.put(key, .{.fixed = try loadFixedValues(tmp_allocator, ast, values_node, node_tags)});
+                        map.put(key, .{.values = try loadFixedValues(allocator, ast, values_node, node_tags)});
                     }
                 }
                 else if (node_tags[field_index] == .enum_literal) {
@@ -95,28 +109,15 @@ pub fn Defaults(comptime ArgId: type) type {
                     const tag = std.meta.stringToEnum(std.meta.FieldEnum(Arg), ident_name);
                     if (tag == null) return error.InvalidDefaultsEntryTag;
                     if (tag.? != .default) return error.InvalidDefaultsPayload;
+
+                    map.put(key, .default);
                 }
                 else {
                     return error.InvalidDefaults;
                 }
             }
 
-            return self;
-        }
-
-        fn isItemsEmpty(tag: std.zig.Ast.Node.Tag) bool {
-            const tags = std.enums.EnumSet(std.zig.Ast.Node.Tag).init(.{
-                .struct_init_one = true,
-                .struct_init_one_comma = true,
-                .struct_init_dot_two = true,
-                .struct_init_dot_two_comma = true,
-                .struct_init_dot = true,
-                .struct_init_dot_comma = true,
-                .struct_init = true,
-                .struct_init_comma = true,
-            });
-
-            return tags.contains(tag);
+            return map;
         }
 
         fn loadFixedValues(allocator: std.mem.Allocator, ast: std.zig.Ast, node: std.zig.Ast.full.ArrayInit, tags: []const std.zig.Ast.Node.Tag) ![]const core.Symbol {
@@ -129,6 +130,19 @@ pub fn Defaults(comptime ArgId: type) type {
             }
 
             return values;
+        }
+
+        const StringToBoolMap = std.StaticStringMap(bool).initComptime(.{
+            .{"false", false},
+            .{"true", true},
+        });
+
+        fn loadFixedEnabled(allocator: std.mem.Allocator, ast: std.zig.Ast, node_index: std.zig.Ast.Node.Index) !bool {
+            const token_index = ast.firstToken(node_index);
+            const value = try std.ascii.allocLowerString(allocator, ast.tokenSlice(token_index));
+            defer allocator.free(value);
+
+            return StringToBoolMap.get(value) orelse return error.InvalidDefaultsValue;
         }
 
         pub fn deinit(self: Self) void {
@@ -156,7 +170,7 @@ test "All default tag (subcommand: generate)" {
         \\}
     ;
     const ArgId = @import("./commands/Generate.zig").ArgId(.{});
-    var expect = try Defaults(ArgId).init(allocator);
+    var expect = try Defaults(ArgId).init(allocator, Defaults(ArgId).Map.initFull(.default));
     defer expect.deinit();
 
     const defaults = try Defaults(ArgId).loadFromFileInternal(allocator, contents);
@@ -169,26 +183,24 @@ test "All fixed args (subcommand: generate)" {
     const allocator = std.testing.allocator;
     const contents: [:0]const u8 =
         \\.{
-        \\    .source_dir = .{.fixed = .{"queries"}},
-        \\    .schema_dir = .{.fixed = .{"./schemas"}},
-        \\    .include_filter = .{.fixed = .{"queries"}},
-        \\    .exclude_filter = .{.fixed = .{"./table", "./indexes"}},
-        \\    .output_dir = .{.fixed = .{"./output"}},
-        \\    .watch = .{.fixed = .{}}, 
+        \\    .source_dir = .{.values = .{"queries"}},
+        \\    .schema_dir = .{.values = .{"./schemas"}},
+        \\    .include_filter = .{.values = .{"queries"}},
+        \\    .exclude_filter = .{.values = .{"./table", "./indexes"}},
+        \\    .output_dir = .{.values = .{"./output"}},
+        \\    .watch = .{.enabled = true}, 
         \\}
     ;
     const ArgId = @import("./commands/Generate.zig").ArgId(.{});
-    var expect = try Defaults(ArgId).init(allocator);
+    var expect = try Defaults(ArgId).init(allocator, Defaults(ArgId).Map.init(.{
+        .source_dir = .{.values = &.{"queries"}},
+        .schema_dir = .{.values = &.{"./schemas"}},
+        .include_filter = .{.values = &.{"queries"}},
+        .exclude_filter = .{.values = &.{"./table", "./indexes"}},
+        .output_dir = .{.values = &.{"./output"}},
+        .watch = .{.enabled = true},
+    }));
     defer expect.deinit();
-
-    expect.map = Defaults(ArgId).Map.init(.{
-        .source_dir = .{.fixed = &.{"queries"}},
-        .schema_dir = .{.fixed = &.{"./schemas"}},
-        .include_filter = .{.fixed = &.{"queries"}},
-        .exclude_filter = .{.fixed = &.{"./table", "./indexes"}},
-        .output_dir = .{.fixed = &.{"./output"}},
-        .watch = .{.fixed = &.{}},
-    });
 
     const defaults = try Defaults(ArgId).loadFromFileInternal(allocator, contents);
     defer defaults.deinit();
@@ -241,7 +253,7 @@ test "Invalid default#5 (arg payload#1)" {
 test "Invalid default#6 (arg payload#2)" {
     const allocator = std.testing.allocator;
     const contents: [:0]const u8 = 
-        \\.{.output_dir = .fixed }
+        \\.{.output_dir = .values }
     ;
 
     const ArgId = @import("./commands/Generate.zig").ArgId(.{});
@@ -251,7 +263,7 @@ test "Invalid default#6 (arg payload#2)" {
 test "Invalid default#6 (arg value)" {
     const allocator = std.testing.allocator;
     const contents: [:0]const u8 = 
-        \\.{.output_dir = .{.fixed = .{12345} } }
+        \\.{.output_dir = .{.values = .{12345} } }
     ;
 
     const ArgId = @import("./commands/Generate.zig").ArgId(.{});

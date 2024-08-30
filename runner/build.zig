@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) !void {
     const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
-    const dep_known_folders = b.dependency("known_folders", .{});
 
     std.debug.print("**** runner/zmq_prefix {s}\n", .{zmq_prefix});
 
@@ -52,7 +51,6 @@ pub fn build(b: *std.Build) !void {
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
-            exe.root_module.addImport("known_folders", dep_known_folders.module("known-folders"));
             exe.root_module.addImport("core", dep_core.module("core"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
@@ -108,7 +106,6 @@ pub fn build(b: *std.Build) !void {
         import_modules: {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
-            exe_unit_tests.root_module.addImport("known_folders", dep_known_folders.module("known-folders"));
             exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
             exe_unit_tests.root_module.addOptions("build_options", build_options);
             break:import_modules;

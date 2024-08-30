@@ -32,42 +32,74 @@ pub fn main() !void {
     defer setting.deinit();
 
     core.Logger.filterWith(setting.general.log_level);
-    // core.Logger.filterWith(.trace);
 
     try core.makeIpcChannelRoot(setting.general.stage_endpoints);
     defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
     // TODO provide as configuration files
-    const config: Config = .{
-        .stage_watch = .{
-            .path = exe_prefix ++ "-" ++ "watch-files",
-            .extra_args = &.{
-                @tagName(.source_dir_set), 
-                @tagName(.schema_dir_set),
-                @tagName(.filter_set), 
-                @tagName(.watch)
-            },
-            .managed = true,
-        },
-        .stage_extract = &.{
-            .{
-                .path = exe_prefix ++ "-" ++ "duckdb-extract",
-                .extra_args = &.{@tagName(.schema_dir_set)},
-                .managed = true,
-            },
-        },
-        .stage_generate = &.{
-            .{
-                .path = exe_prefix ++ "-" ++ "ts-generate",
-                .extra_args = &.{@tagName(.output_dir_path)},
-                .managed = true,
-            },
-        },
+    const GenerateSetting = @import("./settings/commands/Generate.zig");
+    const GenerateConfig = @import("./configs/GenerateConfig.zig");
+    const MockConfig = Config.StageSet(GenerateSetting, GenerateConfig);
+
+    // var arena = std.heap.ArenaAllocator.init(allocator);
+    // defer arena.deinit();
+
+    // var config: MockConfig = .{
+    //     .arena = &arena,
+    //     .stages = &.{
+    //     // .stage_watch = 
+    //     .{
+    //         .category = .stage_watch,
+    //         .location = exe_prefix ++ "-" ++ "watch-files",
+    //         .extra_args = MockConfig.ExtraArgSet.init(.{
+    //             .source_dir = .default,
+    //             .schema_dir = .default,
+    //             .include_filter = .default,
+    //             .exclude_filter = .default,
+    //             .watch = .default,
+    //         }),
+    //         //     @tagName(.source_dir_set), 
+    //         //     @tagName(.schema_dir_set),
+    //         //     @tagName(.filter_set), 
+    //         //     @tagName(.watch)
+    //         // },
+    //         .managed = true,
+    //     },
+    //     // .stage_extract = &.{
+    //         .{
+    //             .category = .stage_extract,
+    //             .location = exe_prefix ++ "-" ++ "duckdb-extract",
+    //             .extra_args = MockConfig.ExtraArgSet.init(.{
+    //                 .schema_dir = .default,
+    //             }),
+    //             // .extra_args = &.{@tagName(.schema_dir_set)},
+    //             .managed = false,
+    //         },
+    //     // },
+    //     // .stage_generate = &.{
+    //         .{
+    //             .category = .stage_generate,
+    //             .location = exe_prefix ++ "-" ++ "ts-generate",
+    //             .extra_args = MockConfig.ExtraArgSet.init(.{
+    //                 .output_dir = .default,
+    //             }),
+    //             // .extra_args = &.{@tagName(.output_dir_path)},
+    //             .managed = true,
+    //         },
+    //     },
+    // };
+
+    var config = config: {
+        var file = try std.fs.cwd().openFile("/Users/tamurakazuhiko/work/test/ziglang/duckdb/sql-parser/runner/assets/configs/generate.zon", .{});
+        defer file.close();
+        break:config try MockConfig.createConfigFromFile(allocator, &file, setting.command.strategy());
     };
+    defer config.deinit();
 
     var runner = try Runner.init(allocator, setting);
-
-    var stages = switch (try config.spawnStages(allocator, setting.general, setting.command.generate) ) {
+    errdefer runner.deinit();
+    
+    var stages = switch (try config.spawnAll(allocator, setting.general, setting.command.generate) ) {
         .help => |help_setting| {
             try help_setting.help(std.io.getStdErr().writer());
             std.process.exit(3);
@@ -76,7 +108,7 @@ pub fn main() !void {
     };
     defer stages.deinit();
 
-    try runner.run(config.stageCount(), setting);
+    try runner.run(stages.stage_count, setting);
     runner.deinit();
     
     try stages.wait();

@@ -132,11 +132,6 @@ const Builder = struct {
             log.warn("Unresolved log level: {?s}", .{self.log_level});
             return err;
         };
-
-        if (self.schema_dir_set.items.len == 0) {
-            log.warn("Need to specify a `schema-dir` arg.\n\n", .{});
-            return error.SettingLoadFailed;
-        }
         
         var schemas = std.ArrayList(core.FilePath).init(allocator);
         defer schemas.deinit();

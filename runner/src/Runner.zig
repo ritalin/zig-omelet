@@ -19,8 +19,10 @@ connection: *core.sockets.Connection.Server(app_context),
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
+    errdefer ctx.deinit();
 
     var connection = try core.sockets.Connection.Server(app_context).init(allocator, &ctx);
+    errdefer connection.deinit();
     try connection.bind(setting.general.runner_endpoints);
 
     return .{

@@ -6,8 +6,7 @@ const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
 
 const help = @import("./help.zig");
 
-const GeneralSetting = @import("./commands/GeneralSetting.zig");
-const CommandSetting = @import("./commands/commands.zig").CommandSetting;
+
 
 const Setting = @This();
 
@@ -15,6 +14,8 @@ arena: *std.heap.ArenaAllocator,
 general: GeneralSetting,
 command: CommandSetting,
 
+pub const GeneralSetting = @import("./commands/GeneralSetting.zig");
+pub const CommandSetting = @import("./commands/commands.zig").CommandSetting;
 
 pub fn deinit(self: *Setting) void {
     self.arena.deinit();

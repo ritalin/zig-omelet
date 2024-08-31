@@ -3,6 +3,7 @@
 
 #include <duckdb.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
+#include <duckdb/planner/operator/logical_aggregate.hpp>
 #include <duckdb/planner/operator/logical_delim_get.hpp>
 #include <duckdb/planner/operator/logical_projection.hpp>
 #include <duckdb/planner/operator/logical_comparison_join.hpp>
@@ -68,6 +69,47 @@ auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
             .from_field = (!constraints[id]),
             .from_join = false
         };
+    }
+}
+
+auto JoinTypeVisitor::VisitOperatorGroupBy(duckdb::LogicalAggregate& op) -> void {
+    NullableLookup internal_join_types{};
+    JoinTypeVisitor visitor(internal_join_types, this->channel);
+
+    for (auto& c: op.children) {
+        visitor.VisitOperator(*c);
+    }
+
+    group_index: {
+        for (duckdb::idx_t c = 0; auto& expr: op.groups) {
+            NullableLookup::Column to_binding{
+                .table_index = op.group_index, 
+                .column_index = c, 
+            };
+
+            this->join_type_lookup[to_binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
+            ++c;
+        }
+    }
+    aggregate_index: {
+        for (duckdb::idx_t c = 0; auto& expr: op.expressions) {
+            NullableLookup::Column to_binding{
+                .table_index = op.aggregate_index, 
+                .column_index = c, 
+            };
+
+            this->join_type_lookup[to_binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
+            ++c;
+        }
+    }
+    groupings_index: {
+        for (duckdb::idx_t c = 0; c < op.grouping_functions.size(); ++c) {
+            NullableLookup::Column to_binding{
+                .table_index = op.groupings_index, 
+                .column_index = c, 
+            };
+            this->join_type_lookup[to_binding] = {.from_field = true, .from_join = false};
+        }
     }
 }
 
@@ -243,6 +285,8 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     case duckdb::LogicalOperatorType::LOGICAL_GET:
         this->VisitOperatorGet(op.Cast<duckdb::LogicalGet>());
         break;
+    case duckdb::LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+        this->VisitOperatorGroupBy(op.Cast<duckdb::LogicalAggregate>());
     case duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
     case duckdb::LogicalOperatorType::LOGICAL_DEPENDENT_JOIN:
         {
@@ -291,7 +335,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
 auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup {
     NullableLookup lookup;
 
-    if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
+    if (op->type == duckdb::LogicalOperatorType::LOGICAL_ORDER_BY) {
+        if (op->children.size() > 0) {
+            return resolveSelectListNullability(op->children[0], channel);
+        }
+    }
+    else if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
         lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), channel);
     }
 
@@ -960,6 +1009,61 @@ TEST_CASE("Inner join with subquery#2") {
     };
 
     runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
+}
+
+TEST_CASE("With order by query") {
+    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from Foo
+        join Bar on Foo.id = Bar.id
+        order by Foo.id, bar.id
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+    };
+
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With group by query#1") {
+    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select Bar.id, Foo.id, count(Foo.kind) as k, count(xys) as s from Foo
+        join Bar on Foo.id = Bar.id
+        group by Bar.id, Foo.id
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
+        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+    };
+
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With group by query#2") {
+    std::string schema("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
+    std::string sql("SELECT x, y, GROUPING(x, y), GROUPING(x), sum(z) FROM Point GROUP BY ROLLUP(x, y)");
+
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(1, 3), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(1, 4), .nullable = {.from_field = true, .from_join = false} },
+    };
+
+    runResolveSelectListNullability(sql, {schema}, expects);
 }
 
 #endif

@@ -46,7 +46,12 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     std::vector<std::string> user_type_names;
     std::vector<UserTypeEntry> anon_types;
 
-    if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
+    if (op->type == duckdb::LogicalOperatorType::LOGICAL_ORDER_BY) {
+        if (op->children.size() > 0) {
+            return resolveColumnTypeInternal(op->children[0], join_lookup);
+        }
+    }
+    else if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
         auto& op_projection = op->Cast<duckdb::LogicalProjection>();
         std::unordered_multiset<std::string> name_dupe{};
 

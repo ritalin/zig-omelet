@@ -35,6 +35,14 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
+auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundAggregateExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    bool nullable = true;
+    this->nullable_stack.push(nullable);
+
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
+}
+
+
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundOperatorExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     auto nullable = false;
 

@@ -14,22 +14,7 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
-    // const path = try std.fs.cwd().realpathAlloc(allocator, "./_schema-examples");
-    // // const path = try allocator.dupe(u8, "path/to");
-    // defer allocator.free(path);
-
-    // var db: c.DatabaseRef = undefined;
-    // _ = c.initDatabase(path.ptr, path.len, &db);
-    // defer c.deinitDatabase(db);
-
-    // const sql = "SELECT $1 || $2::text";
-
-    // var collector: c.CollectorRef = undefined;
-    // _ = c.initCollector(db, "1", 1, null, &collector);
-    // c.executeDescribe(collector, sql.ptr, sql.len);
-
     var setting = Setting.loadFromArgs(allocator) catch {
-        // std.debug.dumpStackTrace(@errorReturnTrace().?.*);
         try Setting.help(std.io.getStdErr().writer());
         std.process.exit(1);
     };

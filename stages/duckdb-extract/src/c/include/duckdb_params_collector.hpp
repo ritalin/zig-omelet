@@ -21,6 +21,7 @@ public:
     }
 public:
     auto walkSelectStatement(duckdb::SelectStatement& stmt) -> Result;
+    auto walkCTEStatement(duckdb::CommonTableExpressionMap& cte) -> Result;
 public:
     auto ofPosition(std::string old_name) -> std::string;
 private:

@@ -11,9 +11,6 @@ using PositionalParam = std::string;
 using NamedParam = std::string;
 using ParamNameLookup = std::unordered_map<PositionalParam, NamedParam>;
 
-// template<typename TKey>
-// using UserTypeLookup = std::unordered_map<TKey, std::string>;
-
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 
 enum class StatementParameterStyle {Positional, Named};
@@ -22,8 +19,6 @@ enum class StatementType {Invalid, Select};
 struct ParamCollectionResult {
     StatementType type;
     ParamNameLookup names;
-    // UserTypeLookup<PositionalParam> param_user_types;
-    // UserTypeLookup<duckdb::idx_t> sel_list_user_types;
 };
 struct ParamEntry {
     PositionalParam position;
@@ -31,6 +26,13 @@ struct ParamEntry {
     std::optional<std::string> type_name;
     size_t sort_order;
 };
+
+struct CteColumnEntry {
+    std::string name;
+    NullableLookup::Column binding;
+};
+using CteColumnBindings = std::unordered_map<duckdb::idx_t, std::vector<CteColumnEntry>>;
+using CteColumnBindingsRef = std::reference_wrapper<const CteColumnBindings>;
 
 struct ColumnEntry {
     std::string field_name;

@@ -14,29 +14,20 @@
 
 namespace worker {
 
-namespace column_name {
-    class Visitor: public duckdb::LogicalOperatorVisitor {
-    public:
-        static auto Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string;
-    protected:
-        auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
-            this->column_name = expr.value.ToSQLString();
-            return nullptr;
-        }
-    private:
-        std::string column_name;
-    };
+auto ColumnNameVisitor::VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    this->column_name = expr.value.ToSQLString();
+    return nullptr;
+}
 
-    auto Visitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string {
-        if (expr->alias != "") {
-            return expr->alias;
-        }
-
-        Visitor visitor;
-        visitor.VisitExpression(&expr);
-        
-        return std::move(visitor.column_name);
+auto ColumnNameVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string {
+    if (expr->alias != "") {
+        return expr->alias;
     }
+
+    ColumnNameVisitor visitor;
+    visitor.VisitExpression(&expr);
+    
+    return std::move(visitor.column_name);
 }
 
 auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const NullableLookup& join_lookup) -> ColumnResolveResult {
@@ -95,7 +86,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                     .table_index = op_projection.table_index, 
                     .column_index = i,
                 };
-                auto field_name = column_name::Visitor::Resolve(expr);
+                auto field_name = ColumnNameVisitor::Resolve(expr);
 
                 auto dupe_count = name_dupe.count(field_name);
                 name_dupe.insert(field_name);

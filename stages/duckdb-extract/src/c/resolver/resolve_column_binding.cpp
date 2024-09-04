@@ -498,21 +498,4 @@ TEST_CASE("ColumnBinding#10 (with scalar subquery)") {
     SKIP("Scalar subquery is optimized to cross product or left outer join...");
 }
 
-// TEST_CASE("ColumnBinding#12 materialized CTE") {
-//     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-//     std::string sql(R"#(
-//         with v as materialized (
-//             select id, xys, kind from Foo
-//         )
-//         select xys, id from v
-//     )#");
-
-//     std::vector<ColumnBindingPair> expects{
-//         {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
-//         {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false}},
-//     };
-   
-//     runCreateColumnBindingLookup(sql, {schema}, expects);
-// }
-
 #endif

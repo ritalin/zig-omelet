@@ -290,7 +290,7 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
-static auto VisitOperatorProjectionInternal(duckdb::LogicalProjection& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto VisitOperatorProjection(duckdb::LogicalProjection& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
     JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
 
@@ -308,16 +308,11 @@ static auto VisitOperatorProjectionInternal(duckdb::LogicalProjection& op, Nulla
     return std::move(results);
 }
 
-static auto VisitOperatorProjection(duckdb::LogicalProjection& op, CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
-    NullableLookup internal_join_types{};
-    return VisitOperatorProjectionInternal(op, internal_join_types, cte_columns, channel);
-}
-
 auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->cte_columns, this->channel);
+            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->parent_lookup, this->cte_columns, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -425,7 +420,7 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
             auto& op_proj = op->Cast<duckdb::LogicalProjection>();
-            lookup = VisitOperatorProjectionInternal(op_proj, internal_join_type, cte_columns, channel);
+            lookup = VisitOperatorProjection(op_proj, internal_join_type, cte_columns, channel);
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: 
@@ -1281,6 +1276,25 @@ TEST_CASE("With materialized CTE (nested)") {
     };
    
     runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With materialized CTE (ref from subquery)") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        with v as materialized (
+            select id, xys, kind from Foo
+        )
+        select xys, id from (
+            select * from v
+        )
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(15, 0), .nullable = {.from_field = true, .from_join = false}},
+        {.binding = duckdb::ColumnBinding(15, 1), .nullable = {.from_field = false, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema}, expects);
 }
 
 #endif

@@ -480,4 +480,107 @@ TEST_CASE("Resolve enum parameter#5 (predefined/where)") {
     runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
+TEST_CASE("Resolve not materialized CTE parameter") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        with ph as not materialized (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+}
+
+TEST_CASE("Resolve default CTE parameter") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        with ph as (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+}
+
+TEST_CASE("Resolve materialized CTE parameter") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        with ph as materialized (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+}
+
+TEST_CASE("Resolve materialized CTE (x2)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string schema_3("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
+    std::string sql(R"#(
+        with
+            v as materialized (
+                select Foo.id, Bar.id, xys, kind, a from Foo
+                join Bar on Foo.id = Bar.id
+                cross join (
+                    select $a::int as a
+                )
+            ),
+            v2 as materialized (
+                select $b::text as b, x from Point
+            )
+        select xys, id, b, x, a from v
+        cross join v2
+    )#");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema_1, schema_2, schema_3}, lookup, bound_types, user_type_names, anon_types);
+}
+
+TEST_CASE("Resolve materialized CTE (nested)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        with
+            v as materialized (
+                select Foo.id, Bar.id, xys, kind, a from Foo
+                join Bar on Foo.id = Bar.id
+                cross join (
+                    select $a::int as a
+                )
+            ),
+            v2 as materialized (
+                select id, id_1, $b::date from v
+            )
+        select id_1, id from v2
+    )#");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "DATE"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+}
+
 #endif

@@ -1,4 +1,4 @@
-
+#include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
 #include <duckdb/parser/expression/list.hpp>
 #include <duckdb/common/extra_type_info.hpp>
@@ -224,11 +224,16 @@ static auto walkStatementResultModifires(ParameterCollector& collector, duckdb::
     }
 }
 
-static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void {
-    switch (stmt.node->type) {
+static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duckdb::QueryNode>& node, uint32_t depth) -> void {
+    switch (node->type) {
     case duckdb::QueryNodeType::SELECT_NODE: 
         {
-            auto& select_node =  stmt.node->Cast<duckdb::SelectNode>();
+            auto& select_node =  node->Cast<duckdb::SelectNode>();
+
+            cte: {
+                collector.walkCTEStatement(node->cte_map);
+            }
+            
             for (duckdb::idx_t i = 0; auto& expr: select_node.select_list) {
                 walkSelectListItem(collector, expr, i, depth);
                 ++i;
@@ -254,14 +259,36 @@ static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::S
             walkStatementResultModifires(collector, select_node.modifiers, depth);
         }
         break;
+    case duckdb::QueryNodeType::CTE_NODE: 
+        {
+            auto& cte_node = node->Cast<duckdb::CTENode>();
+            walkQueryNode(collector, cte_node.query, 0);
+            walkQueryNode(collector, cte_node.child, 0);
+        }
+        break;
     default: 
-        collector.channel.warn(std::format("[TODO] Unsupported select node: {} (depth: {})", magic_enum::enum_name(stmt.node->type), depth));
+        collector.channel.warn(std::format("[TODO] Unsupported select node: {} (depth: {})", magic_enum::enum_name(node->type), depth));
         break;
     }
 }
 
+static auto walkSelectStatementInternal(ParameterCollector& collector, duckdb::SelectStatement& stmt, uint32_t depth) -> void {
+    walkQueryNode(collector, stmt.node, depth);
+}
+
 auto ParameterCollector::walkSelectStatement(duckdb::SelectStatement& stmt) -> ParameterCollector::Result {
     walkSelectStatementInternal(*this, stmt, 0);
+
+    return {
+        .type = StatementType::Select, 
+        .names = swapMapEntry(this->name_map), 
+    };
+}
+
+auto ParameterCollector::walkCTEStatement(duckdb::CommonTableExpressionMap& cte) -> ParameterCollector::Result {
+    for (auto& [key, value]: cte.map) {
+        walkSelectStatementInternal(*this, *(value->query), 0);
+    }
 
     return {
         .type = StatementType::Select, 
@@ -702,6 +729,131 @@ TEST_CASE("Named enum parameter (predefined/select-list)") {
 
     std::string expected("SELECT CAST($1 AS Visibility) AS vis");
     ParamNameLookup lookup{{"1","vis"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("CTE (with named parameter)") {
+    std::string sql(R"#(
+        with ph as (
+            select $a::int as a, $b::text as b
+        )
+        select b, a from ph
+    )#");
+    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Not materialized CTE (with named parameter)") {
+    std::string sql(R"#(
+        with ph as not materialized (
+            select $a::int as a, $b::text as b
+        )
+        select b, a from ph
+    )#");
+    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Not materialized CTE#2 (with named parameter)") {
+    std::string sql(R"#(
+        with ph as not materialized (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Default materialized CTE#2 (with named parameter)") {
+    std::string sql(R"#(
+        with ph as (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Materialized CTE#1 (with named parameter)") {
+    std::string sql(R"#(
+        with ph as materialized (
+            select $a::int as a, $b::text as b
+        )
+        select b, a from ph
+    )#");
+    std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Materialized CTE#2 (with named parameter)") {
+    std::string sql(R"#(
+        with ph as materialized (
+            select $a::int as a, $b::text as b, kind from Foo
+        )
+        select b, a from ph
+        where kind = $k
+    )#");
+    std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Materialized CTE#3 (CTEx2)") {
+    std::string sql(R"#(
+        with
+            v as materialized (
+                select Foo.id, $a::text as a from Foo
+                cross join (
+                    select $b::int as b
+                )
+            ),
+            v2 as materialized (
+                select $c::text as c
+            )
+        select id, b, c, a from v
+        cross join v2
+    )#");
+    std::string expected("WITH v AS MATERIALIZED (SELECT Foo.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT CAST($3 AS VARCHAR) AS c)SELECT id, b, c, a FROM v , v2");
+
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "c"}};
+   
+    runTest(sql, expected, lookup);
+}
+
+TEST_CASE("Materialized CTE (nested CTE)") {
+    std::string sql(R"#(
+        with
+            v as materialized (
+                select Bar.id, $a::text as a from Foo
+                cross join (
+                    select $b::int as b
+                )
+            ),
+            v2 as materialized (
+                select id, b, a from v
+            )
+        select a, b from v2
+    )#");
+   
+    std::string expected("WITH v AS MATERIALIZED (SELECT Bar.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT id, b, a FROM v)SELECT a, b FROM v2");
+
+    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
    
     runTest(sql, expected, lookup);
 }

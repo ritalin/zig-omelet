@@ -30,77 +30,88 @@ auto ColumnNameVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) ->
     return std::move(visitor.column_name);
 }
 
-auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const NullableLookup& join_lookup) -> ColumnResolveResult {
+auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const NullableLookup& join_lookup, ZmqChannel& channel) -> ColumnResolveResult {
     std::vector<ColumnEntry> columns;
     columns.reserve(op->expressions.size());
 
     std::vector<std::string> user_type_names;
     std::vector<UserTypeEntry> anon_types;
 
-    if (op->type == duckdb::LogicalOperatorType::LOGICAL_ORDER_BY) {
-        if (op->children.size() > 0) {
-            return resolveColumnTypeInternal(op->children[0], join_lookup);
+    switch (op->type) {
+    case duckdb::LogicalOperatorType::LOGICAL_ORDER_BY:
+        {
+            if (op->children.size() > 0) {
+                return resolveColumnTypeInternal(op->children[0], join_lookup, channel);
+            }
         }
-    }
-    else if (op->type == duckdb::LogicalOperatorType::LOGICAL_PROJECTION) {
-        auto& op_projection = op->Cast<duckdb::LogicalProjection>();
-        std::unordered_multiset<std::string> name_dupe{};
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: 
+        return resolveColumnTypeInternal(op->children[1], join_lookup, channel);
+    case duckdb::LogicalOperatorType::LOGICAL_PROJECTION: 
+        {
+            auto& op_projection = op->Cast<duckdb::LogicalProjection>();
+            std::unordered_multiset<std::string> name_dupe{};
 
-        for (size_t i = 0; auto& expr: op->expressions) {
-            std::string type_name;
-            anon_types: {
-                if (isEnumUserType(expr->return_type)) {
-                    auto user_type_name = userTypeName(expr->return_type);
-                    if (user_type_name != "") {
-                        type_name = user_type_name;
-                        user_type_names.push_back(user_type_name);
+            for (size_t i = 0; auto& expr: op->expressions) {
+                std::string type_name;
+                anon_types: {
+                    if (isEnumUserType(expr->return_type)) {
+                        auto user_type_name = userTypeName(expr->return_type);
+                        if (user_type_name != "") {
+                            type_name = user_type_name;
+                            user_type_names.push_back(user_type_name);
+                        }
+                        else {
+                            type_name = std::format("SelList::Enum#{}", i+1);
+                            anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
+                        }
+                    }
+                    else if (isArrayUserType(expr->return_type)) {
+                        auto user_type_name = userTypeName(expr->return_type);
+                        if (user_type_name != "") {
+                            type_name = user_type_name;
+                            user_type_names.push_back(user_type_name);
+                        }
+                        else {
+                            type_name = std::format("SelList::Array#{}", i+1);
+                            anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names));
+                        }
+                    }
+                    else if (isAliasUserType(expr->return_type)) {
+                        type_name = userTypeName(expr->return_type);
+                        if (type_name != "") {
+                            user_type_names.push_back(type_name);
+                        }
                     }
                     else {
-                        type_name = std::format("SelList::Enum#{}", i+1);
-                        anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
+                        type_name = expr->return_type.ToString();
                     }
                 }
-                else if (isArrayUserType(expr->return_type)) {
-                    auto user_type_name = userTypeName(expr->return_type);
-                    if (user_type_name != "") {
-                        type_name = user_type_name;
-                        user_type_names.push_back(user_type_name);
-                    }
-                    else {
-                        type_name = std::format("SelList::Array#{}", i+1);
-                        anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names));
-                    }
+                columns: {
+                    NullableLookup::Column binding{
+                        .table_index = op_projection.table_index, 
+                        .column_index = i,
+                    };
+                    auto field_name = ColumnNameVisitor::Resolve(expr);
+
+                    auto dupe_count = name_dupe.count(field_name);
+                    name_dupe.insert(field_name);
+
+                    auto entry = ColumnEntry{
+                        .field_name = dupe_count == 0 ? field_name : std::format("{}_{}", field_name, dupe_count),
+                        .field_type = type_name,
+                        .nullable = join_lookup[binding].shouldNulls(),
+                    };
+
+                    columns.emplace_back(std::move(entry));
                 }
-                else if (isAliasUserType(expr->return_type)) {
-                    type_name = userTypeName(expr->return_type);
-                    if (type_name != "") {
-                        user_type_names.push_back(type_name);
-                    }
-                }
-                else {
-                    type_name = expr->return_type.ToString();
-                }
+                ++i;
             }
-            columns: {
-                NullableLookup::Column binding{
-                    .table_index = op_projection.table_index, 
-                    .column_index = i,
-                };
-                auto field_name = ColumnNameVisitor::Resolve(expr);
-
-                auto dupe_count = name_dupe.count(field_name);
-                name_dupe.insert(field_name);
-
-                auto entry = ColumnEntry{
-                    .field_name = dupe_count == 0 ? field_name : std::format("{}_{}", field_name, dupe_count),
-                    .field_type = type_name,
-                    .nullable = join_lookup[binding].shouldNulls(),
-                };
-
-                columns.emplace_back(std::move(entry));
-            }
-            ++i;
         }
+        break;
+    default:
+        channel.warn(std::format("[TODO] Can not resolve column type: {}", magic_enum::enum_name(op->type)));
+        break;
     }
 
     return {
@@ -115,7 +126,7 @@ auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, Statemen
 
     auto join_types = resolveSelectListNullability(op, channel);
 
-    return resolveColumnTypeInternal(op, join_types);
+    return resolveColumnTypeInternal(op, join_types, channel);
 }
 
 }
@@ -521,6 +532,21 @@ TEST_CASE("Select from table#3 (unordered column)") {
     runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 
+TEST_CASE("Select from table#4 (with order by)") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql("select kind, xys, id from Foo order by kind, id");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+    };
+    std::vector<std::string> user_type_names{};
+    std::vector<UserTypeEntry> anon_types{};
+
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
+}
+
 TEST_CASE("Select from joined table#2") {
     std::string sql(R"#(
         select Foo.id, Foo.remarks, Bar.value
@@ -902,6 +928,25 @@ TEST_CASE("Select from anonymous enum list") {
         }},
     };
 
+    runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
+}
+
+TEST_CASE("Select from materialized CTE") {
+    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        with v as materialized (
+            select id, xys, kind from Foo
+        )
+        select xys, id from v
+    )#");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
+        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+    };
+    std::vector<std::string> user_type_names{};
+    std::vector<UserTypeEntry> anon_types{};
+   
     runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
 }
 

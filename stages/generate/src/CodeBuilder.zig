@@ -142,7 +142,7 @@ fn buildTypeMember(allocator: std.mem.Allocator, field_type: Symbol, user_type_n
     return ts_type: {
         if (user_type_names.contains(field_type)) {
             // predefined user type
-            break:ts_type field_type;
+            break:ts_type try IdentifierFormatter.format(allocator, field_type, .pascal_case);
         }
         else if (anon_user_types.get(field_type)) |anon_type| {
             // anonymous user type
@@ -197,6 +197,26 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair, user_typ
     self.entries.put(.parameter, try buf.toOwnedSlice());
 }
 
+fn writeOrderSymbol(allocator: std.mem.Allocator, writer: *std.ArrayList(u8).Writer, order: Symbol) !void {
+    var is_num = true;
+    for (order) |c| {
+        if (! std.ascii.isDigit(c)) {
+            is_num = false;
+            break;
+        }
+    }
+
+
+    if (is_num) {
+        try writer.writeAll(order);
+    }
+    else {
+        const name = try IdentifierFormatter.format(allocator, order, .camel_case);
+        defer allocator.free(name);
+        try writeLiteral(writer, name);
+    }
+}
+
 pub fn applyPlaceholderOrder(self: *Self, orders: []const Symbol) !void {
     var buf = std.ArrayList(u8).init(self.allocator);
     defer buf.deinit();
@@ -206,12 +226,12 @@ pub fn applyPlaceholderOrder(self: *Self, orders: []const Symbol) !void {
     try writer.writeByte('[');
 
     if (orders.len > 0) {
-        try writeLiteral(&writer, orders[0]);
+        try writeOrderSymbol(self.allocator, &writer, orders[0]);
     }
     if (orders.len > 1) {
         for (orders[1..]) |order| {
             try writer.writeAll(", ");
-            try writeLiteral(&writer, order);
+            try writeOrderSymbol(self.allocator, &writer, order);
         }
     }
     try writer.writeByte(']');
@@ -325,7 +345,7 @@ fn writeImports(self: Self, writer: *std.fs.File.Writer, user_type_dir: std.fs.D
     var i: usize = 0;
 
     while(iter.next()) |name| :(i += 1) {
-        names[i] = name.*;
+        names[i] = try IdentifierFormatter.format(tmp_allocator, name.*, .pascal_case);
     }
 
     std.mem.sort(Symbol, names, .{}, 
@@ -341,7 +361,7 @@ fn writeImports(self: Self, writer: *std.fs.File.Writer, user_type_dir: std.fs.D
     for (names) |name| {
         const import_path = try std.fs.path.join(tmp_allocator, &.{user_type_dir_path, name});
         const import_path_rel = try std.fs.path.relative(tmp_allocator, base_dir_path, import_path);
-        try writer.print("import {{ {s} }} from '{s}'\n", .{name, import_path_rel});
+        try writer.print("import {{ type {s} }} from '{s}'\n", .{name, import_path_rel});
     }
 
     if (names.len > 0) try writer.writeByte('\n');
@@ -403,7 +423,10 @@ pub const UserTypeGenerator = struct {
         const output_dir_path = try output_dir.realpathAlloc(builder.allocator, ".");
         defer builder.allocator.free(output_dir_path);
 
-        const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{std.fs.path.basename(name)});
+        const pascalcase_name = try IdentifierFormatter.format(builder.allocator, name, .pascal_case);
+        defer builder.allocator.free(pascalcase_name);
+
+        const file_name = try std.fmt.allocPrint(builder.allocator, "{s}.ts", .{std.fs.path.basename(pascalcase_name)});
         defer builder.allocator.free(file_name);
 
         const is_new = if (output_dir.statFile(file_name)) |_| false else |_| true;
@@ -1466,6 +1489,31 @@ test "generate name parameter code#5 (with snake_case)" {
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
+test "generate name parameter code#5 (with snake_case type)" {
+    const parameters: []const FieldTypePair = &.{
+        .{.field_name = "user_id", .field_type = "int"},
+        .{.field_name = "status", .field_type = "ui_status"},
+    };
+    const expect = 
+        \\export type Parameter = {
+        \\  userId: number | null,
+        \\  status: UiStatus | null,
+        \\}
+    ;
+
+    var user_type_names = map: {
+        var map = std.BufSet.init(std.testing.allocator);
+        try map.insert("ui_status");
+        break:map map;
+    };
+    defer user_type_names.deinit();
+
+    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
+    defer anon_user_types.deinit();
+
+    try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
+}
+
 test "generate name parameter code#5 (with PascalCase)" {
     const parameters: []const FieldTypePair = &.{
         .{.field_name = "UserId", .field_type = "int"},
@@ -1585,11 +1633,33 @@ test "generate positional parameter code with enum user type" {
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
-test "generate parameter order" {
+test "generate parameter order#1 (named parameter)" {
     const allocator = std.testing.allocator;
 
     const orders: []const Symbol = &.{"id", "name", "kind"};
     const expect = "export const ParameterOrder: (keyof Parameter)[] = ['id', 'name', 'kind']";
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const parent_path = try dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(parent_path);
+
+    var builder = try CodeBuilder.init(allocator);
+    defer builder.deinit();
+
+    try builder.applyPlaceholderOrder(orders);
+
+    const apply_result = builder.entries.get(.parameter_order);
+    try std.testing.expect(apply_result != null);
+    try std.testing.expectEqualStrings(expect, apply_result.?);
+}
+
+test "generate parameter order#2 (positional)" {
+    const allocator = std.testing.allocator;
+
+    const orders: []const Symbol = &.{"3", "1", "2"};
+    const expect = "export const ParameterOrder: (keyof Parameter)[] = [3, 1, 2]";
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
@@ -2055,11 +2125,11 @@ test "Output build result#2 (with predefined user type)" {
     var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
-    builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, vis:Visibility|null, status: Status|null}"));
+    builder.entries.put(.parameter, try allocator.dupe(u8,"export type P = { id:number|null, name:string|null, vis:Visibility|null, status: UIStatus|null}"));
     builder.entries.put(.parameter_order, try allocator.dupe(u8,"export const O: (keyof P)[] = ['id', 'name', 'vis', 'status']"));
     builder.entries.put(.result_set, try allocator.dupe(u8, "export type R = { id:number, name:string|null }"));
     try builder.user_type_names.insert("Visibility");
-    try builder.user_type_names.insert("Status");
+    try builder.user_type_names.insert("ui_status");
 
     _ = try SourceGenerator.build(builder, output_dir.dir, "Foo");
 
@@ -2075,7 +2145,7 @@ test "Output build result#2 (with predefined user type)" {
             const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
             defer if (line) |x| allocator.free(x);
             try std.testing.expect(line != null);
-            try std.testing.expectEqualStrings("import { Status } from '../user-types/Status'", line.?);
+            try std.testing.expectEqualStrings("import { UiStatus } from '../user-types/UiStatus'", line.?);
             break:expect_import;
         }
         expect_import: {

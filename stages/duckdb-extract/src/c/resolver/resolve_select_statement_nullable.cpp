@@ -1175,6 +1175,29 @@ TEST_CASE("With order by query") {
     runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
+TEST_CASE("With order by query#2") {
+    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string sql(R"#(
+        select * from (
+            select * from Foo
+            order by Foo.id
+        ) v
+        join Bar on v.id = Bar.id
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
+        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
+    };
+
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
 TEST_CASE("With group by query#1") {
     std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
     std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");

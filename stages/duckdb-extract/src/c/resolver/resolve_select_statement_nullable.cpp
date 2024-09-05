@@ -180,6 +180,12 @@ auto JoinTypeVisitor::VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duc
 }
 
 namespace binding {
+    static std::unordered_set<duckdb::JoinType> filter_joins{ 
+        duckdb::JoinType::SEMI,
+        duckdb::JoinType::ANTI,
+        duckdb::JoinType::MARK
+    };
+
     class ConditionBindingVisitor: public duckdb::LogicalOperatorVisitor {
     public:
         ConditionBindingVisitor(JoinTypeVisitor::ConditionRels& rels): condition_rels(rels) {}
@@ -213,12 +219,16 @@ namespace binding {
                         .column_index = i, 
                     };
                     this->condition_rels[from] = this->map_to[i];
-                    
                 }
+                return;
             }
-            else {
-                duckdb::LogicalOperatorVisitor::VisitOperator(op);
+            
+            if (op.type == duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
+                auto& op_join = op.Cast<duckdb::LogicalJoin>();
+                if (filter_joins.contains(op_join.join_type)) return;
             }
+            
+            duckdb::LogicalOperatorVisitor::VisitOperator(op);
         }
     private:
         JoinTypeVisitor::ConditionRels& condition_rels;
@@ -1110,6 +1120,35 @@ TEST_CASE("Inner join with subquery#2") {
         { .binding = duckdb::ColumnBinding(9, 5), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(9, 6), .nullable = {.from_field = false, .from_join = false} },
         { .binding = duckdb::ColumnBinding(9, 7), .nullable = {.from_field = false, .from_join = false} },
+    };
+
+    runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
+}
+
+TEST_CASE("With exists query (mark join)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+    std::string schema_3("CREATE TABLE Baz (id int primary key, order_date DATE not null)");
+    std::string sql(R"#(
+        with ph as (select $k::int as k)
+        select Bar.* from Bar
+        join lateral (
+            select * from Baz
+            cross join ph
+            where 
+                Baz.id = Bar.id
+                and exists (
+                    from Foo 
+                    where 
+                        Foo.id = Baz.id
+                        and kind = ph.k
+                )
+        ) v on true
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        { .binding = duckdb::ColumnBinding(22, 0), .nullable = {.from_field = false, .from_join = false} },
+        { .binding = duckdb::ColumnBinding(22, 1), .nullable = {.from_field = false, .from_join = false} },
     };
 
     runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);

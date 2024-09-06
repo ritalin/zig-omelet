@@ -259,6 +259,13 @@ static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duck
             walkStatementResultModifires(collector, select_node.modifiers, depth);
         }
         break;
+    case duckdb::QueryNodeType::SET_OPERATION_NODE:
+        {
+            auto& combin_node = node->Cast<duckdb::SetOperationNode>();
+            walkQueryNode(collector, combin_node.left, 0);
+            walkQueryNode(collector, combin_node.right, 0);
+        }
+        break;
     case duckdb::QueryNodeType::CTE_NODE: 
         {
             auto& cte_node = node->Cast<duckdb::CTENode>();
@@ -857,6 +864,37 @@ TEST_CASE("Materialized CTE (nested CTE)") {
    
     runTest(sql, expected, lookup);
 }
+
+// TEST_CASE("Recursive default CTE") {
+//     std::string sql(R"#(
+//         with recursive t(n) AS (
+//             VALUES ($min_value::int)
+//             UNION ALL
+//             SELECT n+1 FROM t WHERE n < $max_value::int
+//         )
+//         SELECT n FROM t
+//     )#");
+//     std::string expected("WITH RECURSIVE t(n) AS (");
+
+//     ParamNameLookup lookup{{"1","min_value"}, {"2", "max_value"}};
+   
+//     runTest(sql, expected, lookup);
+// }
+
+TEST_CASE("Set operator") {
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        union all
+        select id from Bar where id <= $n2
+    )#");
+
+    std::string expected("(SELECT id FROM Foo WHERE (id > $1)) UNION ALL (SELECT id FROM Bar WHERE (id <= $2))");
+
+    ParamNameLookup lookup{{"1","n1"}, {"2", "n2"}};
+   
+    runTest(sql, expected, lookup);
+}
+
 
 TEST_CASE("Named parameter ????") {
     // TODO: not implement

@@ -583,4 +583,21 @@ TEST_CASE("Resolve materialized CTE (nested)") {
     runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
 }
 
+TEST_CASE("Resolve combining operation") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        union all
+        select id from Bar where id <= $n2
+    )#");
+
+    ParamNameLookup lookup{{"1","n1"}, {"2", "n2"}};
+    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+    UserTypeExpects user_type_names{};
+    AnonTypeExpects anon_types{};
+   
+    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+}
+
 #endif

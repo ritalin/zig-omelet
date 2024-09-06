@@ -10,6 +10,7 @@
 #include <duckdb/planner/operator/logical_comparison_join.hpp>
 #include <duckdb/planner/operator/logical_any_join.hpp>
 #include <duckdb/planner/operator/logical_materialized_cte.hpp>
+#include <duckdb/planner/operator/logical_set_operation.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -391,6 +392,37 @@ static auto RebindTableIndex(duckdb::idx_t table_index, NullableLookup&& interna
     return std::move(lookup);
 }
 
+static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& internal_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup;
+
+static auto resolveSetOperation(duckdb::LogicalSetOperation& op, NullableLookup& internal_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup {
+    auto left_lookup = resolveSelectListNullabilityInternal(op.children[0], internal_join_type, cte_columns, channel);
+
+    if (op.type != duckdb::LogicalOperatorType::LOGICAL_UNION) {
+        return std::move(left_lookup);
+    }
+    else {
+        NullableLookup result{};
+
+        auto right_lookup = resolveSelectListNullabilityInternal(op.children[1], internal_join_type, cte_columns, channel);
+        auto right_table_index = right_lookup.begin()->first.table_index;
+
+        for (duckdb::idx_t c = 0; auto& [left_binding, left_nullable]: left_lookup) {
+            NullableLookup::Column right_binding{
+                .table_index = right_table_index, 
+                .column_index = left_binding.column_index,
+            };
+            auto& right_nullable = right_lookup[right_binding];
+
+            result[left_binding] = {
+                .from_field = left_nullable.from_field || right_nullable.from_field,
+                .from_join = left_nullable.from_join || right_nullable.from_join,
+            };
+        }
+
+        return std::move(result);
+    }
+}
+
 
 static auto UpdateCteColumns(const duckdb::idx_t table_index, std::vector<duckdb::unique_ptr<duckdb::Expression>>& exprs) -> std::vector<CteColumnEntry> {
     std::vector<CteColumnEntry> entries;
@@ -427,10 +459,16 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
             }
         }
         break;
+    case duckdb::LogicalOperatorType::LOGICAL_UNION:
+    case duckdb::LogicalOperatorType::LOGICAL_INTERSECT:
+    case duckdb::LogicalOperatorType::LOGICAL_EXCEPT:
+        {
+            lookup = resolveSetOperation(op->Cast<duckdb::LogicalSetOperation>(), internal_join_type, cte_columns, channel);
+        }
+        break;
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            auto& op_proj = op->Cast<duckdb::LogicalProjection>();
-            lookup = VisitOperatorProjection(op_proj, internal_join_type, cte_columns, channel);
+            lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), internal_join_type, cte_columns, channel);
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: 
@@ -1357,6 +1395,101 @@ TEST_CASE("With materialized CTE (ref from subquery)") {
     };
    
     runResolveSelectListNullability(sql, {schema}, expects);
+}
+
+TEST_CASE("With combining operation (union#1)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        union all
+        select id from Bar where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With combining operation (union#2)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        union all
+        select id from Foo where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1}, expects);
+}
+
+TEST_CASE("With combining operation (intersect#1)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        intersect all
+        select id from Bar where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With combining operation (intersect#2)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Bar where id > $n1
+        intersect all
+        select id from Foo where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With combining operation (except#1)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        except all
+        select id from Bar where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+}
+
+TEST_CASE("With combining operation (except#2)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Bar where id > $n1
+        except all
+        select id from Foo where id <= $n2
+    )#");
+
+    std::vector<ColumnBindingPair> expects{
+        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+    };
+   
+    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
 }
 
 #endif

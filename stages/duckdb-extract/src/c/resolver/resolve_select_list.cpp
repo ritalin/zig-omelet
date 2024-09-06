@@ -45,6 +45,11 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
             }
         }
         break;
+    case duckdb::LogicalOperatorType::LOGICAL_UNION:
+    case duckdb::LogicalOperatorType::LOGICAL_INTERSECT:
+    case duckdb::LogicalOperatorType::LOGICAL_EXCEPT:
+        // Set-operation Can determin with left-side only
+        return resolveColumnTypeInternal(op->children[0], join_lookup, channel);
     case duckdb::LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: 
         return resolveColumnTypeInternal(op->children[1], join_lookup, channel);
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION: 
@@ -948,6 +953,60 @@ TEST_CASE("Select from materialized CTE") {
     std::vector<UserTypeEntry> anon_types{};
    
     runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
+}
+
+TEST_CASE("Select from combining operation (union)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Foo where id > $n1
+        union all
+        select id from Bar where id <= $n2
+    )#");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+    };
+    std::vector<std::string> user_type_names{};
+    std::vector<UserTypeEntry> anon_types{};
+   
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
+}
+
+TEST_CASE("Select from combining operation (intersect)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Bar where id > $n1
+        intersect all
+        select id from Foo where id <= $n2
+    )#");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+    };
+    std::vector<std::string> user_type_names{};
+    std::vector<UserTypeEntry> anon_types{};
+   
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
+}
+
+TEST_CASE("Select from combining operation (except)") {
+    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+    std::string sql(R"#(
+        select id from Bar where id > $n1
+        except all
+        select id from Foo where id <= $n2
+    )#");
+
+    std::vector<ColumnEntry> expects{
+        {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+    };
+    std::vector<std::string> user_type_names{};
+    std::vector<UserTypeEntry> anon_types{};
+   
+    runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
 
 #ifdef ENABLE_TEST

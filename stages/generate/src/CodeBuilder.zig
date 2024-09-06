@@ -2145,14 +2145,14 @@ test "Output build result#2 (with predefined user type)" {
             const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
             defer if (line) |x| allocator.free(x);
             try std.testing.expect(line != null);
-            try std.testing.expectEqualStrings("import { UiStatus } from '../user-types/UiStatus'", line.?);
+            try std.testing.expectEqualStrings("import { type UiStatus } from '../user-types/UiStatus'", line.?);
             break:expect_import;
         }
         expect_import: {
             const line = try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', file_size);
             defer if (line) |x| allocator.free(x);
             try std.testing.expect(line != null);
-            try std.testing.expectEqualStrings("import { Visibility } from '../user-types/Visibility'", line.?);
+            try std.testing.expectEqualStrings("import { type Visibility } from '../user-types/Visibility'", line.?);
             break:expect_import;
         }
         expect_blank: {

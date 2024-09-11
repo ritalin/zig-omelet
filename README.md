@@ -10,7 +10,7 @@ Currently, extracting is only from `duckdb`, code generationg is only `typescrip
 ## Requirement
 
 * zig (https://ziglang.org) - 0.14.0 or latter
-* libduckdb (https://duckdb.org) - 0.10.1 or latter
+* libduckdb (https://duckdb.org) - 1.1.0 or latter
 * libzmq (https://zeromq.org) - 4.3.5 or latter
 * libcatch2 (https://github.com/catchorg/Catch2) 3.6.0 or latter
 
@@ -34,3 +34,7 @@ zig build
 ```
 
 Note that if the schema includes user-defined types, all of them must be specified before the table definitions.
+
+## Source/Schema file encoding
+
+Source/Schema file encoding is supported UTF8 only.

@@ -490,7 +490,7 @@ TEST_CASE("Named parameter in function args without alias") {
 
 TEST_CASE("Named parameter in function args without alias#2") {
     std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
-    std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM range(0, 360, 30) AS t(n))#");
+    std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM "range"(0, 360, 30) AS t(n))#");
     ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
    
     runTest(sql, expected, lookup);
@@ -522,7 +522,7 @@ TEST_CASE("Named parameter without alias in any clause") {
     std::string sql(R"#(
         select $v::int = any(select * from range(0, 42, $step::int))
     )#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM range(0, 42, CAST($step AS INTEGER))))")#");
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM "range"(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM ""range""(0, 42, CAST($step AS INTEGER))))")#");
     ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
    
     runTest(sql, expected, lookup);
@@ -530,7 +530,7 @@ TEST_CASE("Named parameter without alias in any clause") {
 
 TEST_CASE("Named parameter without alias in any clause#2") {
     std::string sql(R"#(select $v::int = any(range(0, 10, $step::int)))#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(range(0, 10, CAST($step AS INTEGER)))))")#");
+    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest("range"(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(""range""(0, 10, CAST($step AS INTEGER)))))")#");
     ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
    
     runTest(sql, expected, lookup);
@@ -538,7 +538,7 @@ TEST_CASE("Named parameter without alias in any clause#2") {
 
 TEST_CASE("Named parameter in table function args") {
     std::string sql("select id * 101 from range(0, 10, $step::int) t(id)");
-    std::string expected(R"#(SELECT (id * 101) FROM range(0, 10, CAST($1 AS INTEGER)) AS t(id))#");
+    std::string expected(R"#(SELECT (id * 101) FROM "range"(0, 10, CAST($1 AS INTEGER)) AS t(id))#");
     ParamNameLookup lookup{ {"1","step"} };
    
     runTest(sql, expected, lookup);
@@ -760,7 +760,7 @@ TEST_CASE("Not materialized CTE (with named parameter)") {
         )
         select b, a from ph
     )#");
-    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+    std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
     ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
    
     runTest(sql, expected, lookup);
@@ -774,7 +774,7 @@ TEST_CASE("Not materialized CTE#2 (with named parameter)") {
         select b, a from ph
         where kind = $k
     )#");
-    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+    std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
     ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
    
     runTest(sql, expected, lookup);

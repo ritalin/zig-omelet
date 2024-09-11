@@ -31,7 +31,7 @@ auto CreateOperatorVisitor::VisitOperator(duckdb::unique_ptr<duckdb::LogicalOper
         {
             auto& op_create = op->Cast<duckdb::LogicalCreate>();
             auto& info = op_create.info->Cast<duckdb::CreateTypeInfo>();
-            if (info.type.Contains(duckdb::LogicalTypeId::ENUM)) {
+            if (info.type.id() == duckdb::LogicalTypeId::ENUM) {
                 this->handled = true;
                 this->entry = pickEnumUserType(info.type, info.name);
             }

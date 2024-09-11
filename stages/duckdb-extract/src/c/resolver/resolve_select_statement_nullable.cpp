@@ -64,7 +64,7 @@ auto JoinTypeVisitor::VisitOperatorGet(const duckdb::LogicalGet& op) -> void {
 
     auto sz = constraints.size();
 
-    for (duckdb::idx_t i = 0; auto id: op.column_ids) {
+    for (duckdb::idx_t i = 0; auto id: op.GetColumnIds()) {
         const NullableLookup::Column col{
             .table_index = op.table_index, 
             .column_index = i++

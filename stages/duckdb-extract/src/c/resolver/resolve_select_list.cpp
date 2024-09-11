@@ -332,7 +332,7 @@ TEST_CASE("Select list only with null#2") {
     std::vector<ColumnEntry> expects{
         {.field_name = "a", .field_type = "INTEGER", .nullable = true},
         {.field_name = "b", .field_type = "BIGINT", .nullable = false},
-        {.field_name = "c", .field_type = "VARCHAR", .nullable = true},
+        {.field_name = "c", .field_type = R"#("NULL")#", .nullable = true},
     };
     std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};

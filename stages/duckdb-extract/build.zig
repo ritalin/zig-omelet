@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -239,9 +240,9 @@ fn createWorkerModule(
         mod.linkSystemLibrary("duckdb_fmt", .{});
         mod.linkSystemLibrary("duckdb_skiplistlib", .{});
 
-        mod.addIncludePath(b.path("../../vendor/duckdb/third_party/yyjson/include"));
-        mod.addIncludePath(b.path("../../vendor/duckdb/third_party/fmt/include"));
-        mod.addIncludePath(b.path("../../vendor/duckdb/extension/json/include"));
+        if (builtin.os.tag == .linux) {
+            mod.linkSystemLibrary("jemalloc_extension", .{});
+        }
         break:duckdb_native_config;
     }
     import_modules: {

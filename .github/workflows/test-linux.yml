@@ -40,6 +40,7 @@ jobs:
         run: |
           echo "path = ${{ steps.install-git.outputs.path }}"
           echo "versuion = ${{ steps.install-git.outputs.version }}"
+          echo "${{ steps.install-git.outputs.path }}/bin" >> $GITHUB_PATH
 
       - name: Checkout repository
         uses: actions/checkout@v3

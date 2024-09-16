@@ -20,8 +20,8 @@ jobs:
 
     container:
       image: ktzalias/omelet-actions-container:latest
-      options: |
-        --network host
+      # options: |
+      #   --network host
       # --privileged
       env:
         PKG_PREFIX: "/home/node"

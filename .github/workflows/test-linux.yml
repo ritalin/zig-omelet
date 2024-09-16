@@ -28,6 +28,13 @@ jobs:
         LD_LIBRARY_PATH: "/home/node/libsodium/lib:$LD_LIBRARY_PATH"
 
     steps:
+      - name: Install git
+        uses: jcwillox/install-tool-action@v1
+        with:
+          repo: "git/git"
+          download_url: "/archive/refs/tags/v{{version}}.tar.gz"
+          version: "2.46.0"
+
       - name: Checkout repository
         uses: actions/checkout@v3
         with:

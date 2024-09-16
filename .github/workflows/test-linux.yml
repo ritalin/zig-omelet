@@ -38,12 +38,15 @@ jobs:
 
       - name: Add PATH to git
         run: |
-          echo "path = ${{ steps.install-git.outputs.path }}"
-          echo "versuion = ${{ steps.install-git.outputs.version }}"
-          echo "${{ steps.install-git.outputs.path }}/bin" >> $GITHUB_PATH
+          export GIT_PATH="${{ steps.install-git.outputs.path }}"
+          GIT_VERSION="${{ steps.install-git.outputs.version }}"
+          FROM_NAME="$GIT_PATH/git-$GIT_VERSION"
+          ln -s $FROM_NAME git
+
+          echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
       - name: Check git version
         run: |
-          ls -ld /__t/git/git/2.46.0/x64/*
+          ls -ld $GIT_PATH/*
           # /__t/git/git/2.46.0/x64/bin/git --version
 
       - name: Checkout repository

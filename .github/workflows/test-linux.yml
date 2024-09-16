@@ -29,23 +29,9 @@ jobs:
 
     steps:
       - name: Install git
-        id: install-git
-        uses: jcwillox/install-tool-action@v1
-        with:
-          repo: "git/git"
-          download_url: "/archive/refs/tags/v{{version}}.tar.gz"
-          version: "2.46.0"
-
-      - name: Add PATH to git
         run: |
-          GIT_PATH="${{ steps.install-git.outputs.path }}"
-          GIT_VERSION="${{ steps.install-git.outputs.version }}"
-          FROM_NAME="$GIT_PATH/git-$GIT_VERSION"
-          ln -s $FROM_NAME $GIT_PATH/git
-
-          echo "path=$GIT_PATH"
-          echo "full=$FROM_NAME"
-          ls -ld $GIT_PATH/*
+          apt-get update
+          apt-get install -y git
 
           echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
       - name: Check git version

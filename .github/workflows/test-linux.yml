@@ -35,6 +35,11 @@ jobs:
           download_url: "/archive/refs/tags/v{{version}}.tar.gz"
           version: "2.46.0"
 
+      - name: Check git
+        run: |
+          which git
+          git --version
+
       - name: Checkout repository
         uses: actions/checkout@v3
         with:

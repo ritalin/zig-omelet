@@ -38,16 +38,19 @@ jobs:
 
       - name: Add PATH to git
         run: |
-          export GIT_PATH="${{ steps.install-git.outputs.path }}"
+          GIT_PATH="${{ steps.install-git.outputs.path }}"
           GIT_VERSION="${{ steps.install-git.outputs.version }}"
           FROM_NAME="$GIT_PATH/git-$GIT_VERSION"
-          ln -s $FROM_NAME git
+          ln -s $FROM_NAME $GIT_PATH/git
+
+          echo "path=$GIT_PATH"
+          echo "full=$FROM_NAME"
+          ls -ld $GIT_PATH/*
 
           echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
       - name: Check git version
         run: |
-          ls -ld $GIT_PATH/*
-          # /__t/git/git/2.46.0/x64/bin/git --version
+          git --version
 
       - name: Checkout repository
         uses: actions/checkout@v3

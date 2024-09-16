@@ -30,15 +30,14 @@ jobs:
     steps:
       - name: Install git
         uses: jcwillox/install-tool-action@v1
+        id: install-git
         with:
           repo: "git/git"
           download_url: "/archive/refs/tags/v{{version}}.tar.gz"
           version: "2.46.0"
 
       - name: Check git
-        run: |
-          which git
-          git --version
+        run: echo "Git installed at: ${{ steps.install-git.outputs.path }}"
 
       - name: Checkout repository
         uses: actions/checkout@v3

@@ -43,7 +43,8 @@ jobs:
           echo "${{ steps.install-git.outputs.path }}/bin" >> $GITHUB_PATH
       - name: Check git version
         run: |
-          git --version
+          ls -ld /__t/git/git/2.46.0/x64/bin/git
+          /__t/git/git/2.46.0/x64/bin/git --version
 
       - name: Checkout repository
         uses: actions/checkout@v3

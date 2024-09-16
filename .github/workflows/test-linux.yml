@@ -19,23 +19,19 @@ jobs:
       packages: write
 
     container:
-      image: duckdb-by-clang:latest
+      image: ktzalias/omelet-actions-container:latest
       options: |
         --network host
       # --privileged
+      env:
+        PKG_PREFIX: "/home/node"
+        LD_LIBRARY_PATH: "/home/node/libsodium/lib:$LD_LIBRARY_PATH"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           submodules: recursive
-
-      - name: Install build package
-        run: |
-          echo "> packages..."
-          # brew install catch2
-          # brew install duckdb
-          brew install zeromq
 
       - name: Install zig latest
         uses: mlugg/setup-zig@v1
@@ -44,6 +40,5 @@ jobs:
           
       - name: Run test
         run: |
-          BREW_HOME=/home/linuxbrew/.linuxbrew/opt
-          zig build test -D"duckdb_prefix=/home/linuxbrew/duckdb" -D"zmq_prefix=$BREW_HOME/zeromq" -D"catch2_prefix=/home/linuxbrew/catch2" --verbose
+          zig build test -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
           # zig build -D"duckdb_prefix=/home/linuxbrew/duckdb/_install" -D"zmq_prefix=$BREW_HOME/zeromq" -D"catch2_prefix=/home/linuxbrew/catch2" --verbose

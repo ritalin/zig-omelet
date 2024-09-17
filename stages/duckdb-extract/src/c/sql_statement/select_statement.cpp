@@ -368,183 +368,197 @@ auto runTest(
     }
 }
 
-TEST_CASE("Positional parameter") {
-    std::string sql("select $1 as a from Foo");
-    std::string expected("SELECT $1 AS a FROM Foo");
-    ParamNameLookup lookup{ {"1","1"} };
+TEST_CASE("SelectSQL::Positional parameter") {
+    SECTION("With alias") {
+        std::string sql("select $1 as a from Foo");
+        std::string expected("SELECT $1 AS a FROM Foo");
+        ParamNameLookup lookup{ {"1","1"} };
 
-    runTest(sql, expected, lookup);
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Without alias") {
+        std::string sql("select $1 from Foo where kind = $2");
+        std::string expected("SELECT $1 FROM Foo WHERE (kind = $2)");
+        ParamNameLookup lookup{ {"1","1"}, {"2","2"} };
+        
+        runTest(sql, expected, lookup);
+    }
+    SECTION("underdering") {
+        std::string sql("select $2 as a from Foo where kind = $1");
+        std::string expected("SELECT $2 AS a FROM Foo WHERE (kind = $1)");
+        ParamNameLookup lookup{ {"2","2"}, {"1","1"} };
+
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Auto increment") {
+        std::string sql("select $2 as a, ? as b from Foo where kind = $1");
+        std::string expected("SELECT $2 AS a, $3 AS b FROM Foo WHERE (kind = $1)");
+        ParamNameLookup lookup{ {"2","2"}, {"3","3"}, {"1","1"} };
+
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Positional parameter without alias") {
-    std::string sql("select $1 from Foo where kind = $2");
-    std::string expected("SELECT $1 FROM Foo WHERE (kind = $2)");
-    ParamNameLookup lookup{ {"1","1"}, {"2","2"} };
+TEST_CASE("SelectSQL::Named parameter") {
+    SECTION("basic") {
+        std::string sql("select $value as a from Foo where kind = $kind");
+        std::string expected("SELECT $1 AS a FROM Foo WHERE (kind = $2)");
+        ParamNameLookup lookup{ {"1","value"}, {"2", "kind"} };
+
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With type cast") {
+        std::string sql("select $value::int as a from Foo");
+        std::string expected("SELECT CAST($1 AS INTEGER) AS a FROM Foo");
+        ParamNameLookup lookup{ {"1","value"} };
     
-    runTest(sql, expected, lookup);
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Without alias") {
+        std::string sql("select $v, v from Foo");
+        std::string expected(R"(SELECT $1 AS "$v", v FROM Foo)");
+        ParamNameLookup lookup{ {"1","v"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With type cast, without alias") {
+        std::string sql("select $user_name::text, user_name from Foo");
+        std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS "CAST($user_name AS VARCHAR)", user_name FROM Foo)#");
+        ParamNameLookup lookup{ {"1","user_name"} };
+
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Redandant case") {
+        std::string sql("select $user_name::text u1, $u2_id::int as u2_id, $user_name::text u2, user_name from Foo");
+        std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS u1, CAST($2 AS INTEGER) AS u2_id, CAST($1 AS VARCHAR) AS u2, user_name FROM Foo)#");
+        ParamNameLookup lookup{ {"1","user_name"}, {"2","u2_id"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Expression without alias") {
+        std::string sql("select $x::int + $y::int from Foo");
+        std::string expected(R"#(SELECT (CAST($1 AS INTEGER) + CAST($2 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Positional parameter underdering") {
-    std::string sql("select $2 as a from Foo where kind = $1");
-    std::string expected("SELECT $2 AS a FROM Foo WHERE (kind = $1)");
-    ParamNameLookup lookup{ {"2","2"}, {"1","1"} };
-
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in betteen-expr") {
+    SECTION("Without alias") {
+        std::string sql("select $v::int between $x::int and $y::int from Foo");
+        std::string expected(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($2 AS INTEGER) AND CAST($3 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Auto incremental positional parameter") {
-    std::string sql("select $2 as a, ? as b from Foo where kind = $1");
-    std::string expected("SELECT $2 AS a, $3 AS b FROM Foo WHERE (kind = $1)");
-    ParamNameLookup lookup{ {"2","2"}, {"3","3"}, {"1","1"} };
-
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in case-expr") {
+    SECTION("Without alias#1") {
+        std::string sql("select case when $v::int = 0 then $x::int else $y::int end from Foo");
+        std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Without alias#2") {
+        std::string sql("select case $v::int when 99 then $y::int else $x::int end from Foo");
+        std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($y AS INTEGER)) ELSE CAST($x AS INTEGER) END" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","y"}, {"3","x"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter") {
-    std::string sql("select $value as a from Foo where kind = $kind");
-    std::string expected("SELECT $1 AS a FROM Foo WHERE (kind = $2)");
-    ParamNameLookup lookup{ {"1","value"}, {"2", "kind"} };
-
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in logical-operator") {
+    SECTION("Without alias") {
+        std::string sql("select $x::int = 123 AND $y::text = 'abc' from Foo");
+        std::string expected(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($2 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter with type cast") {
-    std::string sql("select $value::int as a from Foo");
-    std::string expected("SELECT CAST($1 AS INTEGER) AS a FROM Foo");
-    ParamNameLookup lookup{ {"1","value"} };
-   
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in scalar-function") {
+    SECTION("Without alias#1") {
+        std::string sql("select string_agg(s, $sep::text) from Foo");
+        std::string expected(R"#(SELECT string_agg(s, CAST($1 AS VARCHAR)) AS "string_agg(s, CAST($sep AS VARCHAR))" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","sep"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Without alias#2") {
+        std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
+        std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM "range"(0, 360, 30) AS t(n))#");
+        ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter without alias") {
-    std::string sql("select $v, v from Foo");
-    std::string expected(R"(SELECT $1 AS "$v", v FROM Foo)");
-    ParamNameLookup lookup{ {"1","v"} };
-   
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in table-function") {
+    SECTION("function args") {
+        std::string sql("select id * 101 from range(0, 10, $step::int) t(id)");
+        std::string expected(R"#(SELECT (id * 101) FROM "range"(0, 10, CAST($1 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter with type cast without alias") {
-    std::string sql("select $user_name::text, user_name from Foo");
-    std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS "CAST($user_name AS VARCHAR)", user_name FROM Foo)#");
-    ParamNameLookup lookup{ {"1","user_name"} };
-
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in subquery") {
+    SECTION("Without alias") {
+        std::string sql(R"#(
+            select (select Foo.v + Point.x + $offset::int from Point)
+            from Foo
+        )#");
+        std::string expected(R"#(SELECT (SELECT ((Foo.v + Point.x) + CAST($1 AS INTEGER)) FROM Point) AS "(SELECT ((Foo.v + Point.x) + CAST($offset AS INTEGER)) FROM Point)" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","offset"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Exists-clause without alias") {
+        std::string sql(R"#(
+            select exists (select Foo.v - Point.x > $diff::int from Point)
+            from Foo
+        )#");
+        std::string expected(R"#(SELECT EXISTS(SELECT ((Foo.v - Point.x) > CAST($1 AS INTEGER)) FROM Point) AS "EXISTS(SELECT ((Foo.v - Point.x) > CAST($diff AS INTEGER)) FROM Point)" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","diff"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Any-clause without alias#1") {
+        std::string sql(R"#(
+            select $v::int = any(select * from range(0, 42, $step::int))
+        )#");
+        std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM "range"(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM ""range""(0, 42, CAST($step AS INTEGER))))")#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Any-clause without alias#2") {
+        std::string sql(R"#(select $v::int = any(range(0, 10, $step::int)))#");
+        std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest("range"(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(""range""(0, 10, CAST($step AS INTEGER)))))")#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Derived table") {
+        std::string sql(R"#(
+            select * from (
+                select $v::int, $s::text 
+            ) v
+        )#");
+        std::string expected(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($2 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
+        ParamNameLookup lookup{ {"1","v"}, {"2","s"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named duplicated parameter with type cast with alias") {
-    std::string sql("select $user_name::text u1, $u2_id::int as u2_id, $user_name::text u2, user_name from Foo");
-    std::string expected(R"#(SELECT CAST($1 AS VARCHAR) AS u1, CAST($2 AS INTEGER) AS u2_id, CAST($1 AS VARCHAR) AS u2, user_name FROM Foo)#");
-    ParamNameLookup lookup{ {"1","user_name"}, {"2","u2_id"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter as expr without alias") {
-    std::string sql("select $x::int + $y::int from Foo");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) + CAST($2 AS INTEGER)) AS "(CAST($x AS INTEGER) + CAST($y AS INTEGER))" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter include betteen without alias") {
-    std::string sql("select $v::int between $x::int and $y::int from Foo");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) BETWEEN CAST($2 AS INTEGER) AND CAST($3 AS INTEGER)) AS "(CAST($v AS INTEGER) BETWEEN CAST($x AS INTEGER) AND CAST($y AS INTEGER))" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter include case expr without alias#1") {
-    std::string sql("select case when $v::int = 0 then $x::int else $y::int end from Foo");
-    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 0)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 0)) THEN (CAST($x AS INTEGER)) ELSE CAST($y AS INTEGER) END" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","x"}, {"3","y"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter include case expr without alias#2") {
-    std::string sql("select case $v::int when 99 then $y::int else $x::int end from Foo");
-    std::string expected(R"#(SELECT CASE  WHEN ((CAST($1 AS INTEGER) = 99)) THEN (CAST($2 AS INTEGER)) ELSE CAST($3 AS INTEGER) END AS "CASE  WHEN ((CAST($v AS INTEGER) = 99)) THEN (CAST($y AS INTEGER)) ELSE CAST($x AS INTEGER) END" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","y"}, {"3","x"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter include logical operator without alias") {
-    std::string sql("select $x::int = 123 AND $y::text = 'abc' from Foo");
-    std::string expected(R"#(SELECT ((CAST($1 AS INTEGER) = 123) AND (CAST($2 AS VARCHAR) = 'abc')) AS "((CAST($x AS INTEGER) = 123) AND (CAST($y AS VARCHAR) = 'abc'))" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","x"}, {"2","y"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in function args without alias") {
-    std::string sql("select string_agg(s, $sep::text) from Foo");
-    std::string expected(R"#(SELECT string_agg(s, CAST($1 AS VARCHAR)) AS "string_agg(s, CAST($sep AS VARCHAR))" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","sep"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in function args without alias#2") {
-    std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
-    std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM "range"(0, 360, 30) AS t(n))#");
-    ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in subquery without alias") {
-    std::string sql(R"#(
-        select (select Foo.v + Point.x + $offset::int from Point)
-        from Foo
-    )#");
-    std::string expected(R"#(SELECT (SELECT ((Foo.v + Point.x) + CAST($1 AS INTEGER)) FROM Point) AS "(SELECT ((Foo.v + Point.x) + CAST($offset AS INTEGER)) FROM Point)" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","offset"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter without alias in exists clause") {
-    std::string sql(R"#(
-        select exists (select Foo.v - Point.x > $diff::int from Point)
-        from Foo
-    )#");
-    std::string expected(R"#(SELECT EXISTS(SELECT ((Foo.v - Point.x) > CAST($1 AS INTEGER)) FROM Point) AS "EXISTS(SELECT ((Foo.v - Point.x) > CAST($diff AS INTEGER)) FROM Point)" FROM Foo)#");
-    ParamNameLookup lookup{ {"1","diff"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter without alias in any clause") {
-    std::string sql(R"#(
-        select $v::int = any(select * from range(0, 42, $step::int))
-    )#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT * FROM "range"(0, 42, CAST($2 AS INTEGER)))) AS "(CAST($v AS INTEGER) = ANY(SELECT * FROM ""range""(0, 42, CAST($step AS INTEGER))))")#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter without alias in any clause#2") {
-    std::string sql(R"#(select $v::int = any(range(0, 10, $step::int)))#");
-    std::string expected(R"#(SELECT (CAST($1 AS INTEGER) = ANY(SELECT unnest("range"(0, 10, CAST($2 AS INTEGER))))) AS "(CAST($v AS INTEGER) = ANY(SELECT unnest(""range""(0, 10, CAST($step AS INTEGER)))))")#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","step"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in table function args") {
-    std::string sql("select id * 101 from range(0, 10, $step::int) t(id)");
-    std::string expected(R"#(SELECT (id * 101) FROM "range"(0, 10, CAST($1 AS INTEGER)) AS t(id))#");
-    ParamNameLookup lookup{ {"1","step"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in joined condition") {
+TEST_CASE("SelectSQL::Named parameter in joined condition") {
     std::string sql("select * from Foo join Bar on Foo.v = Bar.v and Bar.x = $x::int");
     std::string expected("SELECT * FROM Foo INNER JOIN Bar ON (((Foo.v = Bar.v) AND (Bar.x = CAST($1 AS INTEGER))))");
     ParamNameLookup lookup{ {"1","x"} };
@@ -552,320 +566,305 @@ TEST_CASE("Named parameter in joined condition") {
     runTest(sql, expected, lookup);
 }
 
-TEST_CASE("Named parameter in derived table (subquery)") {
-    std::string sql(R"#(
-        select * from (
-            select $v::int, $s::text 
-        ) v
-    )#");
-    std::string expected(R"#(SELECT * FROM (SELECT CAST($1 AS INTEGER) AS "CAST($v AS INTEGER)", CAST($2 AS VARCHAR) AS "CAST($s AS VARCHAR)") AS v)#");
-    ParamNameLookup lookup{ {"1","v"}, {"2","s"} };
-   
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in clauses") {
+    SECTION("Where-clause") {
+        std::string sql(R"#(
+            select * from Foo
+            where v = $v::int and kind = $k::int
+        )#");
+        std::string expected("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($2 AS INTEGER)))");
+        ParamNameLookup lookup{ {"1","v"}, {"2","k"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Group-clause") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            group by xyz, fmod(id, $weeks::int)
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo GROUP BY xyz, fmod(id, CAST($1 AS INTEGER))");
+        ParamNameLookup lookup{ {"1","weeks"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Having-clause") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            having fmod(id, $weeks::int) > 0
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo HAVING (fmod(id, CAST($1 AS INTEGER)) > 0)");
+        ParamNameLookup lookup{ {"1","weeks"} };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter in where clause") {
-    std::string sql(R"#(
-        select * from Foo
-        where v = $v::int and kind = $k::int
-    )#");
-    std::string expected("SELECT * FROM Foo WHERE ((v = CAST($1 AS INTEGER)) AND (kind = CAST($2 AS INTEGER)))");
-    ParamNameLookup lookup{ {"1","v"}, {"2","k"} };
-   
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::Named parameter in order-clause") {
+    SECTION("basic") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER))");
+        ParamNameLookup lookup{ {"1","weeks"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With limit/offset#1") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            offset $off
+            limit $min
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","off"},
+            {"3","lim"},
+        };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With limit/offset#2") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            limit $min
+            offset $off
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","off"},
+            {"3","lim"},
+        };
+
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With limit only") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            limit $min
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $2");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","lim"},
+        };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With offset only)") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            offset $off
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) OFFSET $2");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","off"},
+        };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With percentage limit/offset") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            offset $off
+            limit $min%
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($3) % OFFSET $2");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","off"},
+            {"3","lim"},
+        };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With percent limit only") {
+        std::string sql(R"#(
+            select count( distinct *) as c from Foo
+            order by fmod(id, $weeks::int)
+            limit $min%
+        )#");
+        std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($2) %");
+        ParamNameLookup lookup{ 
+            {"1","weeks"},
+            {"2","lim"},
+        };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-TEST_CASE("Named parameter in group by clause") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        group by xyz, fmod(id, $weeks::int)
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo GROUP BY xyz, fmod(id, CAST($1 AS INTEGER))");
-    ParamNameLookup lookup{ {"1","weeks"} };
-   
-    runTest(sql, expected, lookup);
+TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
+    SECTION("positional") {
+        SECTION("anonymous/select-list") {
+            std::string sql("select $1::ENUM('hide', 'visible') as vis");
+
+            std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
+            ParamNameLookup lookup{{"1","1"}};
+        
+            runTest(sql, expected, lookup);
+        }
+        SECTION("predefined/select-list") {
+            std::string sql("select $1::Visibility as vis");
+
+            std::string expected("SELECT CAST($1 AS Visibility) AS vis");
+            ParamNameLookup lookup{{"1","1"}};
+        
+            runTest(sql, expected, lookup);
+        }
+    }
+    SECTION("Named") {
+        SECTION("anonymous/select-list") {
+            std::string sql("select $vis::ENUM('hide', 'visible') as vis");
+
+            std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
+            ParamNameLookup lookup{{"1","vis"}};
+        
+            runTest(sql, expected, lookup);
+        }
+        SECTION("predefined/select-list") {
+            std::string sql("select $vis::Visibility as vis");
+
+            std::string expected("SELECT CAST($1 AS Visibility) AS vis");
+            ParamNameLookup lookup{{"1","vis"}};
+        
+            runTest(sql, expected, lookup);
+        }
+    }
 }
 
-TEST_CASE("Named parameter in having clause") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        having fmod(id, $weeks::int) > 0
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo HAVING (fmod(id, CAST($1 AS INTEGER)) > 0)");
-    ParamNameLookup lookup{ {"1","weeks"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER))");
-    ParamNameLookup lookup{ {"1","weeks"} };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause (plus limit/offset#1)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        offset $off
-        limit $min
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","off"},
-        {"3","lim"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause#2 (plus limit/offset#2)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        limit $min
-        offset $off
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $3 OFFSET $2");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","off"},
-        {"3","lim"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause#3 (plus limit only)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        limit $min
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT $2");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","lim"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause#4 (plus offset only)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        offset $off
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) OFFSET $2");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","off"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause#5 (plus percentage limit/offset)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        offset $off
-        limit $min%
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($3) % OFFSET $2");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","off"},
-        {"3","lim"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named parameter in order by clause#6 (plus percent limit only)") {
-    std::string sql(R"#(
-        select count( distinct *) as c from Foo
-        order by fmod(id, $weeks::int)
-        limit $min%
-    )#");
-    std::string expected("SELECT count(DISTINCT *) AS c FROM Foo ORDER BY fmod(id, CAST($1 AS INTEGER)) LIMIT ($2) %");
-    ParamNameLookup lookup{ 
-        {"1","weeks"},
-        {"2","lim"},
-    };
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Positional enum parameter (anonymous/select-list)") {
-    std::string sql("select $1::ENUM('hide', 'visible') as vis");
-
-    std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
-    ParamNameLookup lookup{{"1","1"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named enum parameter (anonymous/select-list)") {
-    std::string sql("select $vis::ENUM('hide', 'visible') as vis");
-
-    std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
-    ParamNameLookup lookup{{"1","vis"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Positional enum parameter (predefined/select-list)") {
-    std::string sql("select $1::Visibility as vis");
-
-    std::string expected("SELECT CAST($1 AS Visibility) AS vis");
-    ParamNameLookup lookup{{"1","1"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Named enum parameter (predefined/select-list)") {
-    std::string sql("select $vis::Visibility as vis");
-
-    std::string expected("SELECT CAST($1 AS Visibility) AS vis");
-    ParamNameLookup lookup{{"1","vis"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("CTE (with named parameter)") {
-    std::string sql(R"#(
-        with ph as (
-            select $a::int as a, $b::text as b
-        )
-        select b, a from ph
-    )#");
-    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Not materialized CTE (with named parameter)") {
-    std::string sql(R"#(
-        with ph as not materialized (
-            select $a::int as a, $b::text as b
-        )
-        select b, a from ph
-    )#");
-    std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Not materialized CTE#2 (with named parameter)") {
-    std::string sql(R"#(
-        with ph as not materialized (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Default materialized CTE#2 (with named parameter)") {
-    std::string sql(R"#(
-        with ph as (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Materialized CTE#1 (with named parameter)") {
-    std::string sql(R"#(
-        with ph as materialized (
-            select $a::int as a, $b::text as b
-        )
-        select b, a from ph
-    )#");
-    std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Materialized CTE#2 (with named parameter)") {
-    std::string sql(R"#(
-        with ph as materialized (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Materialized CTE#3 (CTEx2)") {
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Foo.id, $a::text as a from Foo
-                cross join (
-                    select $b::int as b
-                )
-            ),
-            v2 as materialized (
-                select $c::text as c
+TEST_CASE("SelectSQL::CTE") {
+    SECTION("default#1") {
+        std::string sql(R"#(
+            with ph as (
+                select $a::int as a, $b::text as b
             )
-        select id, b, c, a from v
-        cross join v2
-    )#");
-    std::string expected("WITH v AS MATERIALIZED (SELECT Foo.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT CAST($3 AS VARCHAR) AS c)SELECT id, b, c, a FROM v , v2");
-
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "c"}};
-   
-    runTest(sql, expected, lookup);
-}
-
-TEST_CASE("Materialized CTE (nested CTE)") {
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Bar.id, $a::text as a from Foo
-                cross join (
-                    select $b::int as b
-                )
-            ),
-            v2 as materialized (
-                select id, b, a from v
+            select b, a from ph
+        )#");
+        std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("default#2 (plus where-clause parameter)") {
+        std::string sql(R"#(
+            with ph as (
+                select $a::int as a, $b::text as b, kind from Foo
             )
-        select a, b from v2
-    )#");
-   
-    std::string expected("WITH v AS MATERIALIZED (SELECT Bar.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT id, b, a FROM v)SELECT a, b FROM v2");
-
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-   
-    runTest(sql, expected, lookup);
+            select b, a from ph
+            where kind = $k
+        )#");
+        std::string expected("WITH ph AS (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Not materialized#1") {
+        std::string sql(R"#(
+            with ph as not materialized (
+                select $a::int as a, $b::text as b
+            )
+            select b, a from ph
+        )#");
+        std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Not materialized CTE#2 (plus where-clause parameter)") {
+        std::string sql(R"#(
+            with ph as not materialized (
+                select $a::int as a, $b::text as b, kind from Foo
+            )
+            select b, a from ph
+            where kind = $k
+        )#");
+        std::string expected("WITH ph AS NOT MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
-// TEST_CASE("Recursive default CTE") {
+TEST_CASE("SelectSQL::materialized-CTE") {
+    SECTION("basic#1") {
+        std::string sql(R"#(
+            with ph as materialized (
+                select $a::int as a, $b::text as b
+            )
+            select b, a from ph
+        )#");
+        std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b)SELECT b, a FROM ph");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("basic#2") {
+        std::string sql(R"#(
+            with ph as materialized (
+                select $a::int as a, $b::text as b, kind from Foo
+            )
+            select b, a from ph
+            where kind = $k
+        )#");
+        std::string expected("WITH ph AS MATERIALIZED (SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS b, kind FROM Foo)SELECT b, a FROM ph WHERE (kind = $3)");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("CTEx2") {
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Foo.id, $a::text as a from Foo
+                    cross join (
+                        select $b::int as b
+                    )
+                ),
+                v2 as materialized (
+                    select $c::text as c
+                )
+            select id, b, c, a from v
+            cross join v2
+        )#");
+        std::string expected("WITH v AS MATERIALIZED (SELECT Foo.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT CAST($3 AS VARCHAR) AS c)SELECT id, b, c, a FROM v , v2");
+
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "c"}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("nested") {
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Bar.id, $a::text as a from Foo
+                    cross join (
+                        select $b::int as b
+                    )
+                ),
+                v2 as materialized (
+                    select id, b, a from v
+                )
+            select a, b from v2
+        )#");
+    
+        std::string expected("WITH v AS MATERIALIZED (SELECT Bar.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT id, b, a FROM v)SELECT a, b FROM v2");
+
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+    
+        runTest(sql, expected, lookup);
+    }
+}
+
+TEST_CASE("SelectSQL::Recursive CTE") {
 //     std::string sql(R"#(
 //         with recursive t(n) AS (
 //             VALUES ($min_value::int)
@@ -880,8 +879,9 @@ TEST_CASE("Materialized CTE (nested CTE)") {
    
 //     runTest(sql, expected, lookup);
 // }
+}
 
-TEST_CASE("Set operator") {
+TEST_CASE("SelectSQL::Set-operator") {
     std::string sql(R"#(
         select id from Foo where id > $n1
         union all
@@ -894,15 +894,5 @@ TEST_CASE("Set operator") {
    
     runTest(sql, expected, lookup);
 }
-
-
-TEST_CASE("Named parameter ????") {
-    // TODO: not implement
-    // window function
-    //    * filter
-    //    * partition
-    //    * order by
-    //    * frame
-}//
 
 #endif

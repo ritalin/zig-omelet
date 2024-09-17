@@ -287,7 +287,7 @@ static auto runResolveParamType(
     }
 }
 
-TEST_CASE("Resolve without parameters") {
+TEST_CASE("ResolveParam::without parameters") {
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
     std::string sql("select * from Foo");
     ParamNameLookup lookup{};
@@ -298,306 +298,305 @@ TEST_CASE("Resolve without parameters") {
     runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
 }
 
-TEST_CASE("Resolve positional parameter on where clause") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql("select * from Foo where kind = $1");
-    ParamNameLookup lookup{{"1","1"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
+TEST_CASE("ResolveParam::positional parameter") {
+    SECTION("where clause") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select * from Foo where kind = $1");
+        ParamNameLookup lookup{{"1","1"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("select list and where clause") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, $2::text from Foo where kind = $1");
+        ParamNameLookup lookup{{"1","1"}, {"2","2"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","VARCHAR"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
-TEST_CASE("Resolve positional parameter on select list and where clause") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql("select id, $2::text from Foo where kind = $1");
-    ParamNameLookup lookup{{"1","1"}, {"2","2"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","VARCHAR"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
+TEST_CASE("ResolveParam::named parameter") {
+    SECTION("where clause") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select * from Foo where kind = $kind");
+        ParamNameLookup lookup{{"1","kind"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("select list and where clause") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, $phrase::text from Foo where kind = $kind");
+        ParamNameLookup lookup{{"1","phrase"}, {"2","kind"}};
+        ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("joined select list and where clause") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select Foo.id, $phrase::text 
+            from Foo 
+            join Bar on Foo.id = Bar.id and Bar.value <> $serch_word
+            where Foo.kind = $kind
+        )#");
+        ParamNameLookup lookup{{"1","phrase"}, {"2", "serch_word"}, {"3","kind"}};
+        ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("select list and where clause with subquery") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select x.*, null, '' as "''", 1+2, $seq::int as n
+            from (
+                select id, kind, 123::bigint, $phrase::text as s
+                from Foo
+                where kind = $kind
+            ) x
+        )#");
+        ParamNameLookup lookup{{"1","seq"}, {"2", "phrase"}, {"3","kind"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("duplicated named parameter#1 (same type)") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select x.*, null, '' as "''", 1+2, $seq::int as n1
+            from (
+                select id, kind, 123::bigint, $kind::int as c
+                from Foo
+                where kind = $kind
+            ) x
+        )#");
+        ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("duplicated named parameter#2 (NOT same type)") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select x.*, null, '' as "''", 1+2, $seq::int as n1, $kind::int as k2
+            from (
+                select id, kind, 123::bigint, $kind::text || '_abc' as c
+                from Foo
+                where kind = $kind::int
+            ) x
+        )#");
+        ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
-TEST_CASE("Resolve named parameter on where clause") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql("select * from Foo where kind = $kind");
-    ParamNameLookup lookup{{"1","kind"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
+TEST_CASE("ResolveParam::user type#1 (ENUM)") {
+    SECTION("anonymous/select-list") {
+        std::string schema("CREATE TYPE Visibility as ENUM ('hide','visible')");
+        std::string sql("select $vis::enum('hide','visible') as vis");
 
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+        ParamNameLookup lookup{{"1","vis"}};
+        ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{
+            {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
+        };
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("predefined/select-list") {
+        std::string schema("CREATE TYPE Visibility as ENUM ('hide','visible')");
+        std::string sql("select $vis::Visibility as vis");
+
+        ParamNameLookup lookup{{"1","vis"}};
+        ParamTypeLookup bound_types{{"1","Visibility"}};
+        UserTypeExpects user_type_names{"Visibility"};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("anonymous/where#1") {
+        std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
+        std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis ENUM('hide', 'visible') not null)");
+        std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
+
+        ParamNameLookup lookup{{"1","vis"}};
+        ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{
+            {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
+        };
+
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("anonymous/where#2") {
+        std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
+        std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
+        std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
+
+        ParamNameLookup lookup{{"1","vis"}};
+        ParamTypeLookup bound_types{{"1","Visibility"}};
+        UserTypeExpects user_type_names{"Visibility"};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("predefined/where") {
+        std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
+        std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
+        std::string sql("select * from Control where vis = $vis::Visibility");
+
+        ParamNameLookup lookup{{"1","vis"}};
+        ParamTypeLookup bound_types{{"1","Visibility"}};
+        UserTypeExpects user_type_names{"Visibility"};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
-TEST_CASE("Resolve named parameter on select list and where clause") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql("select id, $phrase::text from Foo where kind = $kind");
-    ParamNameLookup lookup{{"1","phrase"}, {"2","kind"}};
-    ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve named parameters on joined select list and where clause") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select Foo.id, $phrase::text 
-        from Foo 
-        join Bar on Foo.id = Bar.id and Bar.value <> $serch_word
-        where Foo.kind = $kind
-    )#");
-    ParamNameLookup lookup{{"1","phrase"}, {"2", "serch_word"}, {"3","kind"}};
-    ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve named parameter on select list and where clause with subquery") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        select x.*, null, '' as "''", 1+2, $seq::int as n
-        from (
-            select id, kind, 123::bigint, $phrase::text as s
-            from Foo
-            where kind = $kind
-        ) x
-    )#");
-    ParamNameLookup lookup{{"1","seq"}, {"2", "phrase"}, {"3","kind"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve duplicated named parameter on select list and where clause with subquery#1 (same type)") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        select x.*, null, '' as "''", 1+2, $seq::int as n1
-        from (
-            select id, kind, 123::bigint, $kind::int as c
-            from Foo
-            where kind = $kind
-        ) x
-    )#");
-    ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve duplicated named parameter on select list and where clause with subquery#2 (NOT same type)") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        select x.*, null, '' as "''", 1+2, $seq::int as n1, $kind::int as k2
-        from (
-            select id, kind, 123::bigint, $kind::text || '_abc' as c
-            from Foo
-            where kind = $kind::int
-        ) x
-    )#");
-    ParamNameLookup lookup{{"1","seq"}, {"2","kind"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve enum parameter#1 (anonymous/select-list)") {
-    std::string schema("CREATE TYPE Visibility as ENUM ('hide','visible')");
-    std::string sql("select $vis::enum('hide','visible') as vis");
-
-    ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
-    };
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve enum parameter#2 (predefined/select-list)") {
-    std::string schema("CREATE TYPE Visibility as ENUM ('hide','visible')");
-    std::string sql("select $vis::Visibility as vis");
-
-    ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","Visibility"}};
-    UserTypeExpects user_type_names{"Visibility"};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve enum parameter#3 (anonymous/where#1)") {
-    std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
-    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis ENUM('hide', 'visible') not null)");
-    std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
-
-    ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{
-        {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
-    };
-
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve enum parameter#4 (anonymous/where#2)") {
-    std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
-    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
-    std::string sql("select * from Control where vis = $vis::ENUM('hide', 'visible')");
-
-    ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","Visibility"}};
-    UserTypeExpects user_type_names{"Visibility"};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve enum parameter#5 (predefined/where)") {
-    std::string schema_1("CREATE TYPE Visibility as ENUM('hide','visible')");
-    std::string schema_2("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility not null)");
-    std::string sql("select * from Control where vis = $vis::Visibility");
-
-    ParamNameLookup lookup{{"1","vis"}};
-    ParamTypeLookup bound_types{{"1","Visibility"}};
-    UserTypeExpects user_type_names{"Visibility"};
-    AnonTypeExpects anon_types{};
-
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve not materialized CTE parameter") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with ph as not materialized (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve default CTE parameter") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with ph as (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve materialized CTE parameter") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with ph as materialized (
-            select $a::int as a, $b::text as b, kind from Foo
-        )
-        select b, a from ph
-        where kind = $k
-    )#");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve materialized CTE (x2)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string schema_3("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Foo.id, Bar.id, xys, kind, a from Foo
-                join Bar on Foo.id = Bar.id
-                cross join (
-                    select $a::int as a
-                )
-            ),
-            v2 as materialized (
-                select $b::text as b, x from Point
+TEST_CASE("ResolveParam::CTE") {
+    SECTION("not materialized CTE") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with ph as not materialized (
+                select $a::int as a, $b::text as b, kind from Foo
             )
-        select xys, id, b, x, a from v
-        cross join v2
-    )#");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema_1, schema_2, schema_3}, lookup, bound_types, user_type_names, anon_types);
-}
-
-TEST_CASE("Resolve materialized CTE (nested)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Foo.id, Bar.id, xys, kind, a from Foo
-                join Bar on Foo.id = Bar.id
-                cross join (
-                    select $a::int as a
-                )
-            ),
-            v2 as materialized (
-                select id, id_1, $b::date from v
+            select b, a from ph
+            where kind = $k
+        )#");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("default CTE") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with ph as (
+                select $a::int as a, $b::text as b, kind from Foo
             )
-        select id_1, id from v2
-    )#");
-    ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "DATE"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+            select b, a from ph
+            where kind = $k
+        )#");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
-TEST_CASE("Resolve combining operation") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Foo where id > $n1
-        union all
-        select id from Bar where id <= $n2
-    )#");
+TEST_CASE("ResolveParam::materialized CTE") {
+    SECTION("basic") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with ph as materialized (
+                select $a::int as a, $b::text as b, kind from Foo
+            )
+            select b, a from ph
+            where kind = $k
+        )#");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}, {"3", "k"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("CTEx2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string schema_3("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Foo.id, Bar.id, xys, kind, a from Foo
+                    join Bar on Foo.id = Bar.id
+                    cross join (
+                        select $a::int as a
+                    )
+                ),
+                v2 as materialized (
+                    select $b::text as b, x from Point
+                )
+            select xys, id, b, x, a from v
+            cross join v2
+        )#");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema_1, schema_2, schema_3}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("nested") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Foo.id, Bar.id, xys, kind, a from Foo
+                    join Bar on Foo.id = Bar.id
+                    cross join (
+                        select $a::int as a
+                    )
+                ),
+                v2 as materialized (
+                    select id, id_1, $b::date from v
+                )
+            select id_1, id from v2
+        )#");
+        ParamNameLookup lookup{{"1","a"}, {"2", "b"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "DATE"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
+}
 
-    ParamNameLookup lookup{{"1","n1"}, {"2", "n2"}};
-    ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
-    UserTypeExpects user_type_names{};
-    AnonTypeExpects anon_types{};
-   
-    runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+TEST_CASE("ResolveParam::combining operation") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Foo where id > $n1
+            union all
+            select id from Bar where id <= $n2
+        )#");
+
+        ParamNameLookup lookup{{"1","n1"}, {"2", "n2"}};
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
 #endif

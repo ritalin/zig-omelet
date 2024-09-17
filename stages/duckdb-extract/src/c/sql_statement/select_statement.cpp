@@ -95,6 +95,10 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
                 walkExpressionInternal(collector, child, depth+1);
             }
 
+            // filter clause
+            if (fn_expr.filter) {
+                walkExpressionInternal(collector, fn_expr.filter, depth+1);
+            }
             // order by(s)
             walkOrderBysNodeInternal(collector, *fn_expr.order_bys, depth+1);
         }
@@ -109,6 +113,38 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
             }
             // right
             walkSelectStatementInternal(collector, *sq_expr.subquery, depth+1);
+        }
+        break;
+    case duckdb::ExpressionClass::WINDOW:
+        {
+            auto& fn_expr = expr->Cast<duckdb::WindowExpression>();
+
+            // function args
+            for (auto& child: fn_expr.children) {
+                walkExpressionInternal(collector, child, depth+1);
+            }
+        
+            for (auto& child: fn_expr.partitions) {
+                walkExpressionInternal(collector, child, depth+1);
+            }
+            for (auto& order_by: fn_expr.orders) {
+                walkExpressionInternal(collector, order_by.expression, depth+1);                
+            }
+            if (fn_expr.filter_expr) {
+                walkExpressionInternal(collector, fn_expr.filter_expr, depth+1);
+            }
+            if (fn_expr.start_expr) {
+                walkExpressionInternal(collector, fn_expr.start_expr, depth+1);                
+            }
+            if (fn_expr.end_expr) {
+                walkExpressionInternal(collector, fn_expr.end_expr, depth+1);                
+            }
+            if (fn_expr.offset_expr) {
+                walkExpressionInternal(collector, fn_expr.offset_expr, depth+1);                
+            }
+            if (fn_expr.default_expr) {
+                walkExpressionInternal(collector, fn_expr.default_expr, depth+1);                
+            }
         }
         break;
     case duckdb::ExpressionClass::CONSTANT:
@@ -253,7 +289,10 @@ static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duck
                 walkExpressionInternal(collector, select_node.having, depth+1);
             }
             if (select_node.sample) {
-                collector.channel.warn(std::format("[TODO] Unsupported sample clause (depth: {})", depth));
+                // Sampleclause is not accept placeholder
+            }
+            if (select_node.qualify) {
+                walkExpressionInternal(collector, select_node.qualify, depth+1);
             }
             
             walkStatementResultModifires(collector, select_node.modifiers, depth);
@@ -493,6 +532,212 @@ TEST_CASE("SelectSQL::Named parameter in scalar-function") {
         std::string sql("select string_agg(n, $sep::text order by fmod(n, $deg::int) desc) from range(0, 360, 30) t(n)");
         std::string expected(R"#(SELECT string_agg(n, CAST($1 AS VARCHAR) ORDER BY fmod(n, CAST($2 AS INTEGER)) DESC) AS "string_agg(n, CAST($sep AS VARCHAR) ORDER BY fmod(n, CAST($deg AS INTEGER)) DESC)" FROM "range"(0, 360, 30) AS t(n))#");
         ParamNameLookup lookup{ {"1","sep"}, {"2","deg"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("filter") {
+        std::string sql("select id, sum($val::int) filter (fmod(id, $rem::int)) as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) FILTER (WHERE fmod(id, CAST($2 AS INTEGER))) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"} };
+    
+        runTest(sql, expected, lookup);
+    }
+}
+
+TEST_CASE("SelectSQL::Named parameter in window-function") {
+    SECTION("Without alias#1") {
+        std::string sql("select id, sum($val::int) over () from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER () AS "sum(CAST($val AS INTEGER)) OVER ()" FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("With alias") {
+        std::string sql("select id, sum($1::int) over () as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER () AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","1"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("partition by") {
+        std::string sql("select id, sum($val::int) over (partition by fmod(id, $rem::int)) as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (PARTITION BY fmod(id, CAST($2 AS INTEGER))) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("order by#1") {
+        std::string sql("select id, sum($1::int) over (order by id) as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ORDER BY id) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","1"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("order by#2") {
+        std::string sql("select id, sum($1::int) over (order by id desc) as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ORDER BY id DESC) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","1"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("filter") {
+        std::string sql("select id, sum($val::int) filter (fmod(id, $rem::int)) over () as a from Foo");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) FILTER (WHERE fmod(id, CAST($2 AS INTEGER))) OVER () AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("qualify") {
+        std::string sql(R"#(
+            select * 
+            from Foo
+            qualify sum($val::int) over () > 100
+        )#");
+        std::string expected(R"#(SELECT * FROM Foo QUALIFY (sum(CAST($1 AS INTEGER)) OVER () > 100))#");
+        ParamNameLookup lookup{ {"1","val"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("window-clause#1") {
+        std::string sql(R"#(
+            select id, sum($val::int) over w1 as a 
+            from Foo
+            window 
+                w1 as (
+                    partition by fmod(id, $rem::int)
+                    order by id desc
+                )
+        )#");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (PARTITION BY fmod(id, CAST($2 AS INTEGER)) ORDER BY id DESC) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("window-clause#2 (reuse)") {
+        std::string sql(R"#(
+            select id, sum($val::int) over w1 as a, sum(1) over w1 as b
+            from Foo
+            window 
+                w1 as (
+                    partition by fmod(id, $rem::int)
+                    order by id desc
+                )
+        )#");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (PARTITION BY fmod(id, CAST($2 AS INTEGER)) ORDER BY id DESC) AS a, sum(1) OVER (PARTITION BY fmod(id, CAST($2 AS INTEGER)) ORDER BY id DESC) AS b FROM Foo)#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("window-clause#3 (clausex2)") {
+        std::string sql(R"#(
+            select 
+                id, 
+                sum($val::int) over w1 as a,
+                sum(1) over w2 as b
+            from range(0, 10, $step::int) t(id)
+            window 
+                w1 as (
+                    partition by fmod(id, $rem::int)
+                    order by id desc
+                ),
+                w2 as (
+                    partition by fmod(id, $rem2::int)
+                    order by id
+                )
+        )#");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (PARTITION BY fmod(id, CAST($2 AS INTEGER)) ORDER BY id DESC) AS a, sum(1) OVER (PARTITION BY fmod(id, CAST($3 AS INTEGER)) ORDER BY id) AS b FROM "range"(0, 10, CAST($4 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2", "rem"}, {"3", "rem2"}, {"4","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+}
+
+TEST_CASE("SelectSQL::Named parameter in builtin window-function") {
+    SECTION("row_number") {
+        std::string sql("select id, row_number() over (order by id desc) as a from Foo");
+        std::string expected(R"#(SELECT id, row_number() OVER (ORDER BY id DESC) AS a FROM Foo)#");
+        ParamNameLookup lookup{};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("ntile") {
+        std::string sql("select id, ntile($bucket) over () as a from Foo");
+        std::string expected(R"#(SELECT id, ntile($1) OVER () AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1", "bucket"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("lag") {
+        std::string sql("select id, lag(id, $offset, $value_def) over (partition by kind) as a from Foo");
+        std::string expected(R"#(SELECT id, lag(id, $1, $2) OVER (PARTITION BY kind) AS a FROM Foo)#");
+        ParamNameLookup lookup{ {"1", "offset"}, {"2", "value_def"} };
+    
+        runTest(sql, expected, lookup);
+    }
+}
+
+TEST_CASE("SelectSQL::Named parameter in window-function frame") {
+    SECTION("raws frame#1 (current row)") {
+        std::string sql("select id, sum($val::int) over (rows current row) as a from range(0, 10, $step::int) t(id)");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ROWS BETWEEN CURRENT ROW AND CURRENT ROW) AS a FROM "range"(0, 10, CAST($2 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("raws frame#2 (unbounded preceding)") {
+        std::string sql("select id, sum($val::int) over (rows unbounded preceding) as a from range(0, 10, $step::int) t(id)");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a FROM "range"(0, 10, CAST($2 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("raws frame#3 (expr preceding)") {
+        std::string sql("select id, sum($val::int) over (rows 5 preceding) as a from range(0, 10, $step::int) t(id)");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS a FROM "range"(0, 10, CAST($2 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("rows frame#4 (both unbounded)") {
+        std::string sql(R"#(
+            select id, 
+                sum($val::int) 
+                over (
+                    rows between unbounded preceding and unbounded following
+                ) as a
+            from range(0, 10, $step::int) t(id)
+        )#");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a FROM "range"(0, 10, CAST($2 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("rows frame#5 (both expr)") {
+        std::string sql(R"#(
+            select id, 
+                sum($val::int) 
+                over (
+                    rows between $from_row preceding and $to_row following
+                ) as a
+            from range(0, 10, $step::int) t(id)
+        )#");
+        std::string expected(R"#(SELECT id, sum(CAST($1 AS INTEGER)) OVER (ROWS BETWEEN $2 PRECEDING AND $3 FOLLOWING) AS a FROM "range"(0, 10, CAST($4 AS INTEGER)) AS t(id))#");
+        ParamNameLookup lookup{ {"1","val"}, {"2","from_row"}, {"3","to_row"}, {"4","step"} };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("range frame#1 (both expr)") {
+        std::string sql(R"#(
+            select y, month_of_y, record_at, 
+                avg(temperature) 
+                over (
+                    partition by y, month_of_y
+                    range between interval ($days) days preceding and current row
+                ) as a
+            from Temperature
+        )#");
+        std::string expected(R"#(SELECT y, month_of_y, record_at, avg(temperature) OVER (PARTITION BY y, month_of_y RANGE BETWEEN to_days(CAST(trunc(CAST($1 AS DOUBLE)) AS INTEGER)) PRECEDING AND CURRENT ROW) AS a FROM Temperature)#");
+        ParamNameLookup lookup{ {"1","days"} };
     
         runTest(sql, expected, lookup);
     }
@@ -879,6 +1124,9 @@ TEST_CASE("SelectSQL::Recursive CTE") {
    
 //     runTest(sql, expected, lookup);
 // }
+}
+
+TEST_CASE("SelectSQL::Recursive matitealized CTE") {
 }
 
 TEST_CASE("SelectSQL::Set-operator") {

@@ -51,7 +51,21 @@ auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel
     }
 }
 
-auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement {
+static auto bindParamTypeHint(duckdb::Binder& binder, const ParamNameLookup& names) -> BoundParamTypeHint {
+    BoundParamTypeHint result;
+    duckdb::ExpressionBinder expr_binder(binder, binder.context);
+
+    for (auto& [key, entry]: names) {
+        if (entry.type_hint) {
+            auto expr = entry.type_hint->Copy();
+            result.insert({key, expr_binder.Bind(expr)});
+        }
+    }
+
+    return result;
+}
+
+auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names) -> BoundResult {
     duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
     duckdb::BoundParameterMap parameters(parameter_map);
     
@@ -60,7 +74,10 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
     binder->SetCanContainNulls(true);
     binder->parameters = &parameters;
 
-    return std::move(binder->Bind(*stmt));
+    return {
+        .stmt = std::move(binder->Bind(*stmt)),
+        .type_hints = bindParamTypeHint(*binder, names),
+    };
 }
 
 static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> std::vector<char> {
@@ -156,7 +173,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             const int32_t stmt_offset = 1;
             const int32_t stmt_size = 1;
             
-            auto param_result = walkSQLStatement(stmt, this->messageChannel("worker.parse"));
+            auto walk_result = walkSQLStatement(stmt, this->messageChannel("worker.parse"));
             auto q = stmt->ToString();
             
             ParamResolveResult param_type_result;
@@ -164,11 +181,11 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             try {
                 this->conn.BeginTransaction();
 
-                auto bound_stmt = bindTypeToStatement(*this->conn.context, stmt->Copy());
+                auto bound_result = bindTypeToStatement(*this->conn.context, stmt->Copy(), walk_result.names);
 
-                param_type_result = resolveParamType(bound_stmt.plan, std::move(param_result.names));
+                param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints));
                 auto channel = this->messageChannel("worker.parse");
-                column_type_result = resolveColumnType(bound_stmt.plan, param_result.type, channel);
+                column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.type, channel);
 
                 this->conn.Commit();
             }

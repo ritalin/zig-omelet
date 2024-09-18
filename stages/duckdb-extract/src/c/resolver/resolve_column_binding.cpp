@@ -206,12 +206,12 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
 
-        auto bound_statement = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()));
+        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {});
 
         NullableLookup field_lookup;
         CteColumnBindings cte_columns{};
         
-        for (duckdb::idx_t i = 0; auto& expr: bound_statement.plan->expressions) {
+        for (duckdb::idx_t i = 0; auto& expr: bound_result.stmt.plan->expressions) {
             NullableLookup::Column binding{ .table_index = 1, .column_index = i++ };
             results[binding] = ColumnExpressionVisitor::Resolve(expr, field_lookup);
         }

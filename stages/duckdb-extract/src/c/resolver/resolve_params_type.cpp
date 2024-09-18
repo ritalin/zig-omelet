@@ -98,7 +98,7 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
     return nullptr;
 }
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup) -> ParamResolveResult {
+auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints) -> ParamResolveResult {
     LogicalParameterVisitor visitor(std::move(name_lookup));
     visitor.VisitOperator(*op);
 
@@ -206,12 +206,12 @@ static auto runResolveParamType(
     binder->SetCanContainNulls(true);
     binder->parameters = &parameters;
 
-    duckdb::BoundStatement bind_result;
+    BoundResult bound_result;
     ParamCollectionResult walk_result;
     try {
         conn.BeginTransaction();
         walk_result = walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
-        bind_result = binder->Bind(*stmt->Copy());
+        bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names);
         conn.Commit();
     }
     catch (...) {
@@ -219,7 +219,7 @@ static auto runResolveParamType(
         throw;
     }
 
-    auto [resolve_result, user_type_names, anon_types] = resolveParamType(bind_result.plan, std::move(walk_result.names));
+    auto [resolve_result, user_type_names, anon_types] = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints));
 
     parameter_size: {
         UNSCOPED_INFO("Parameter size");
@@ -324,7 +324,6 @@ TEST_CASE("ResolveParam::positional parameter") {
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
     }
-#ifdef XXX
     SECTION("filter clause") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql("select sum($val::int) filter (fmod(id, $div::int) > $rem::int) as a from Foo");
@@ -339,6 +338,7 @@ TEST_CASE("ResolveParam::positional parameter") {
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
     }
+#ifdef XXX
 #endif
 }
 

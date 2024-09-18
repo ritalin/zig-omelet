@@ -42,6 +42,12 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundAggregateExpression &exp
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
 }
 
+auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundWindowExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    bool nullable = true;
+    this->nullable_stack.push(nullable);
+
+    return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
+}
 
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundOperatorExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     auto nullable = false;
@@ -223,7 +229,7 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
     }
 
     result_size: {
-        UNSCOPED_INFO("Result size");
+        INFO("Result size");
         REQUIRE(results.size() == expects.size());
     }
     result_entries: {
@@ -234,11 +240,11 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         for (int i = 1; auto& expect: expects) {
             INFO(std::format("Result entry#{}", i));
             has_entry: {
-                UNSCOPED_INFO("Has entry");
+                INFO("Has entry");
                 REQUIRE_THAT(bindings_result, VectorContains(NullableLookup::Column::from(expect.binding)));
             }
             column_nullability: {
-                UNSCOPED_INFO("Nullability");
+                INFO("Nullability");
                 CHECK(results[expect.binding].from_field == expect.nullable.from_field);
             }
             ++i;

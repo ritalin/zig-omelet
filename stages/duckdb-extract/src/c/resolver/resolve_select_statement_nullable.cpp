@@ -11,6 +11,7 @@
 #include <duckdb/planner/operator/logical_any_join.hpp>
 #include <duckdb/planner/operator/logical_materialized_cte.hpp>
 #include <duckdb/planner/operator/logical_set_operation.hpp>
+#include <duckdb/planner/operator/logical_window.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -145,7 +146,6 @@ auto JoinTypeVisitor::VisitOperatorCteRef(duckdb::LogicalCTERef& op) -> void {
         ++c;
     }
 }
-
 
 auto JoinTypeVisitor::VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType join_type, const ConditionRels& rels) -> NullableLookup {
     NullableLookup internal_join_types{};
@@ -301,6 +301,22 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
+static auto VisitOperatorWindow(duckdb::LogicalWindow& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+    NullableLookup internal_join_types{};
+    JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
+
+    for (auto& child: op.children) {
+        visitor.VisitOperator(*child);
+    }
+
+    for (duckdb::idx_t i = 0; auto& expr: op.expressions) {
+        duckdb::ColumnBinding binding(op.window_index, i++);
+        internal_join_types[binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
+    }
+
+    return std::move(internal_join_types);
+}
+
 static auto VisitOperatorProjection(duckdb::LogicalProjection& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
     JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
@@ -324,6 +340,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
             auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->parent_lookup, this->cte_columns, this->channel);
+            this->join_type_lookup.insert(lookup.begin(), lookup.end());
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_WINDOW:
+        {
+            auto lookup = VisitOperatorWindow(op.Cast<duckdb::LogicalWindow>(), this->parent_lookup, this->cte_columns, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -614,8 +636,18 @@ TEST_CASE("ResolveNullable::joinless") {
         runResolveSelectListNullability(sql, {schema}, expects);
     }
     SECTION("with unary op of nallble") {
-        std::string sql("select -xys from Foo");
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select -xys from Foo");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+        };
+
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("aggregate with filter") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select sum($val::int) filter (fmod(id, $div::int) > $rem::int) as a from Foo");
 
         std::vector<ColumnBindingPair> expects{
             {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
@@ -1273,6 +1305,42 @@ TEST_CASE("ResolveNullable::With group by query") {
             { .binding = duckdb::ColumnBinding(1, 4), .nullable = {.from_field = true, .from_join = false} },
         };
 
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::Builtin window function") {
+    SECTION("row_number") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, row_number() over (order by id desc) as a from Foo");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("ntile") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select xys, ntile($bucket) over () as a from Foo");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("lag") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, lag(id, $offset, $value_def::int) over (partition by kind) as a from Foo");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
         runResolveSelectListNullability(sql, {schema}, expects);
     }
 }

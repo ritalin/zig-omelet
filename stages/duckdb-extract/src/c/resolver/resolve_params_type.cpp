@@ -258,7 +258,7 @@ static auto runResolveParamType(
     }
     user_type_entries: {
         user_type_size: {
-            UNSCOPED_INFO("User type size (predefined)");
+            INFO("User type size (predefined)");
             REQUIRE(user_type_names.size() == user_type_expects.size());
         }
 
@@ -266,7 +266,7 @@ static auto runResolveParamType(
 
         for (int i = 0; auto& name: user_type_names) {
             has_user_type: {
-                UNSCOPED_INFO(std::format("valid user type named#{}", i+1));
+                INFO(std::format("valid user type named#{}", i+1));
                 REQUIRE(lookup.contains(name));   
             }
             ++i;
@@ -274,7 +274,7 @@ static auto runResolveParamType(
     }
     anonymous_entries: {
         anonymous_type_size: {
-            UNSCOPED_INFO("User type size (anonymous)");
+            INFO("User type size (anonymous)");
             REQUIRE(anon_types.size() == anon_type_expects.size());
         }
 
@@ -285,7 +285,7 @@ static auto runResolveParamType(
 
         for (int i = 0; auto& entry: anon_types) {
             has_anon_type: {
-                UNSCOPED_INFO(std::format("valid anon type named#{}", i+1));
+                INFO(std::format("valid anon type named#{}", i+1));
                 REQUIRE(lookup.contains(entry.name));
             }
 

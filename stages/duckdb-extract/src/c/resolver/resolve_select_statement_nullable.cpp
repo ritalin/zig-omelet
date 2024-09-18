@@ -548,7 +548,7 @@ static auto runResolveSelectListNullability(const std::string& sql, std::vector<
         }
 
     Result_size: {
-        UNSCOPED_INFO("Result size");
+        INFO("Result size");
         REQUIRE(join_type_result.size() == expects.size());
     }
     Result_items: {    
@@ -558,938 +558,942 @@ static auto runResolveSelectListNullability(const std::string& sql, std::vector<
         for (int i = 0; i < expects.size(); ++i) {
             auto expect = expects[i];
 
-            INFO(std::format("Result item#{}", i+1)); 
-
-            UNSCOPED_INFO("has column binding");
+            INFO(std::format("has column binding#{}", i+1));
             CHECK_THAT(bindings_result, VectorContains(NullableLookup::Column::from(expect.binding)));
             
-            UNSCOPED_INFO("column nullability (field)");
+            INFO(std::format("column nullability (field)#{}", i+1));
             CHECK(join_type_result[expect.binding].from_field == expect.nullable.from_field);
             
-            UNSCOPED_INFO("column nullability (join)");
+            INFO(std::format("column nullability (join)", i+1));
             CHECK(join_type_result[expect.binding].from_join == expect.nullable.from_join);
         }
     }
 }
 
-TEST_CASE("fromless query") {
-    std::string sql(R"#(
-        select 123, 'abc'
-    )#");
+TEST_CASE("ResolveNullable::fromless") {
+    SECTION("basic") {
+        std::string sql(R"#(
+            select 123, 'abc'
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
-    };
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
+        };
 
-    runResolveSelectListNullability(sql, {}, expects);
+        runResolveSelectListNullability(sql, {}, expects);
+    }
 }
 
-TEST_CASE("joinless query#1") {
-    std::string schema("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Bar
-    )#");
+TEST_CASE("ResolveNullable::joinless") {
+    SECTION("basic") {
+        std::string schema("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Bar
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
-    };
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = false} },
+        };
 
-    runResolveSelectListNullability(sql, {schema}, expects);
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("unordered select list") {
+        std::string schema("CREATE TABLE Bar (id int primary key, value VARCHAR not null, remarks VARCHAR)");
+        std::string sql(R"#(
+            select value, remarks, id from Bar
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("with unary op of nallble") {
+        std::string sql("select -xys from Foo");
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+        };
+
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
 }
 
-TEST_CASE("joinless query#2 (unordered select list)") {
-    std::string schema("CREATE TABLE Bar (id int primary key, value VARCHAR not null, remarks VARCHAR)");
-    std::string sql(R"#(
-        select value, remarks, id from Bar
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema}, expects);
-}
-
-TEST_CASE("joinless query#3 (with unary op of nallble)") {
-    std::string sql("select -xys from Foo");
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
-    };
-
-    runResolveSelectListNullability(sql, {schema}, expects);
-}
-
-TEST_CASE("Inner join#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar on Foo.id = Bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join#2 (nullable key)") {
-    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar on Foo.id = Bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join#3 (join twice)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar b1 on Foo.id = b1.id
-        join Bar b2 on Foo.id = b2.id    
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Left outer join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        left outer join Bar on Foo.id = Bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Right outer join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        right outer join Bar on Foo.id = Bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Left outer join twice") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        left outer join Bar b1 on Foo.id = b1.id
-        left outer join Bar b2 on Foo.id = b2.id    
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join + outer join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar b1 on Foo.id = b1.id
-        left outer join Bar b2 on Foo.id = b2.id    
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Outer join + inner join#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        left outer join Bar b1 on Foo.id = b1.id
-        join Bar b2 on Foo.id = b2.id    
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Outer join + inner join#2") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        left outer join Bar b1 on Foo.id = b1.id
-        join Bar b2 on b1.id = b2.id    
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("scalar subquery (single left outer join)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select 
-            Foo.id,
-            (
-                select Bar.value from Bar
-                where bar.id = Foo.id
-            ) as v
-        from Foo 
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Cross join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        cross join Bar
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Cross join + outer join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        cross join Bar b1
-        left outer join Bar b2 on Foo.id = b2.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Full outer join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        full outer join Bar on Foo.id = Bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join + full outer join#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar b1 on Foo.id = b1.id
-        full outer join Bar b2 on Foo.id = b2.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join + full outer join#2") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar b1 on Foo.id = b1.id
-        full outer join Bar b2 on b1.id = b2.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Full outer + inner join join#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        full outer join Bar b2 on Foo.id = b2.id
-        join Bar b1 on Foo.id = b1.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Full outer + inner join join#2") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        full outer join Bar b2 on Foo.id = b2.id
-        join Bar b1 on b2.id = b1.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Positional join") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        positional join Bar
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join lateral#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select *
-        from Foo 
-        join lateral (
-          select * from Bar
-          where Bar.value = Foo.id
-        ) on true
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join lateral#2 (unordered select list)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select v.k1, v.value, Foo.*, v.k2
-        from Foo 
-        join lateral (
-          select value, id as k1, id as k2 from Bar
-          where Bar.value = Foo.id
-        ) v on true
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 6), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join lateral#3 (nullable key)") {
-    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select *
-        from Foo 
-        join lateral (
-          select * from Bar
-          where Bar.value = Foo.id
-        ) on true
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Outer join lateral") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select *
-        from Foo 
-        left outer join lateral (
-          select * from Bar
-          where Bar.value = Foo.id
-        ) on true
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join with subquery#1") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select *
-        from Foo 
-        join (
-          select * from Bar
-        ) b1 on b1.value = Foo.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("Inner join with subquery#2") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string schema_3("CREATE TABLE Baz (id int primary key, order_date DATE not null)");
-    std::string sql(R"#(
-        select *
-        from Foo 
-        join (
-          select * from Bar
-          join Baz on Bar.id = Baz.id
-        ) b1 on b1.value = Foo.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 4), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 5), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 6), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(9, 7), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
-}
-
-TEST_CASE("With exists query (mark join)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string schema_3("CREATE TABLE Baz (id int primary key, order_date DATE not null)");
-    std::string sql(R"#(
-        with ph as (select $k::int as k)
-        select Bar.* from Bar
-        join lateral (
-            select * from Baz
-            cross join ph
-            where 
-                Baz.id = Bar.id
-                and exists (
-                    from Foo 
-                    where 
-                        Foo.id = Baz.id
-                        and kind = ph.k
-                )
-        ) v on true
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(22, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(22, 1), .nullable = {.from_field = false, .from_join = false} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
-}
-
-TEST_CASE("With order by query") {
-    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from Foo
-        join Bar on Foo.id = Bar.id
-        order by Foo.id, bar.id
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
-
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("With order by query#2") {
-    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select * from (
+TEST_CASE("ResolveNullable::Inner join") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
             select * from Foo
-            order by Foo.id
-        ) v
-        join Bar on v.id = Bar.id
-    )#");
+            join Bar on Foo.id = Bar.id
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
-    };
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
+        };
 
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("nullable key") {
+        std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar on Foo.id = Bar.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("join twice") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar b1 on Foo.id = b1.id
+            join Bar b2 on Foo.id = b2.id    
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With group by query#1") {
-    std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
-    std::string sql(R"#(
-        select Bar.id, Foo.id, count(Foo.kind) as k, count(xys) as s from Foo
-        join Bar on Foo.id = Bar.id
-        group by Bar.id, Foo.id
-    )#");
+TEST_CASE("ResolveNullable::outer join") {
+    SECTION("left outer") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            left outer join Bar on Foo.id = Bar.id
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
-        { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
-    };
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
 
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Left outer join twice") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            left outer join Bar b1 on Foo.id = b1.id
+            left outer join Bar b2 on Foo.id = b2.id    
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Right outer") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            right outer join Bar on Foo.id = Bar.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With group by query#2") {
-    std::string schema("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
-    std::string sql("SELECT x, y, GROUPING(x, y), GROUPING(x), sum(z) FROM Point GROUP BY ROLLUP(x, y)");
+TEST_CASE("ResolveNullable::Inner + outer") {
+    SECTION("Inner -> outer") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar b1 on Foo.id = b1.id
+            left outer join Bar b2 on Foo.id = b2.id    
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 3), .nullable = {.from_field = true, .from_join = false} },
-        { .binding = duckdb::ColumnBinding(1, 4), .nullable = {.from_field = true, .from_join = false} },
-    };
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
 
-    runResolveSelectListNullability(sql, {schema}, expects);
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Outer -> inner#1") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            left outer join Bar b1 on Foo.id = b1.id
+            join Bar b2 on Foo.id = b2.id    
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Outer -> inner#2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            left outer join Bar b1 on Foo.id = b1.id
+            join Bar b2 on b1.id = b2.id    
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With default CTE") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with v as (
-            select id, xys, kind from Foo
-        )
-        select xys, id from v
-    )#");
+TEST_CASE("ResolveNullable::scalar subquery") {
+    SECTION("single left outer join") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select 
+                Foo.id,
+                (
+                    select Bar.value from Bar
+                    where bar.id = Foo.id
+                ) as v
+            from Foo 
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema}, expects);
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With non materialized CTE") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with v as not materialized (
-            select id, xys, kind from Foo
-        )
-        select xys, id from v
-    )#");
+TEST_CASE("ResolveNullable::Cross join") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            cross join Bar
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema}, expects);
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Cross -> outer") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            cross join Bar b1
+            left outer join Bar b2 on Foo.id = b2.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With materialized CTE") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with v as materialized (
-            select id, xys, kind from Foo
-        )
-        select xys, id from v
-    )#");
+TEST_CASE("ResolveNullable::Full outer join") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            full outer join Bar on Foo.id = Bar.id
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema}, expects);
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Inner -> full outer#1") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar b1 on Foo.id = b1.id
+            full outer join Bar b2 on Foo.id = b2.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Inner -> full outer#2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar b1 on Foo.id = b1.id
+            full outer join Bar b2 on b1.id = b2.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Full outer -> inner#1") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            full outer join Bar b2 on Foo.id = b2.id
+            join Bar b1 on Foo.id = b1.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Full outer -> inner#2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            full outer join Bar b2 on Foo.id = b2.id
+            join Bar b1 on b2.id = b1.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(3, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 5), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 6), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(3, 7), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
-TEST_CASE("With materialized CTE (x2)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string schema_3("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Foo.id, Bar.id, xys, kind, a from Foo
-                join Bar on Foo.id = Bar.id
-                cross join (
-                    select $a::int as a
-                )
-            ),
-            v2 as materialized (
-                select $b::text as b, x from Point
+TEST_CASE("ResolveNullable::Positional join") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            positional join Bar
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::lateral join") {
+    SECTION("Inner join lateral#1") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select *
+            from Foo 
+            join lateral (
+            select * from Bar
+            where Bar.value = Foo.id
+            ) on true
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Inner join lateral#2 (unordered select list)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select v.k1, v.value, Foo.*, v.k2
+            from Foo 
+            join lateral (
+            select value, id as k1, id as k2 from Bar
+            where Bar.value = Foo.id
+            ) v on true
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 6), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Inner join lateral#3 (nullable key)") {
+        std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select *
+            from Foo 
+            join lateral (
+            select * from Bar
+            where Bar.value = Foo.id
+            ) on true
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Outer join lateral") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select *
+            from Foo 
+            left outer join lateral (
+            select * from Bar
+            where Bar.value = Foo.id
+            ) on true
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+}
+
+TEST_CASE("join + subquery") {
+    SECTION("Inner join with subquery#1") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select *
+            from Foo 
+            join (
+            select * from Bar
+            ) b1 on b1.value = Foo.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("Inner join with subquery#2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string schema_3("CREATE TABLE Baz (id int primary key, order_date DATE not null)");
+        std::string sql(R"#(
+            select *
+            from Foo 
+            join (
+            select * from Bar
+            join Baz on Bar.id = Baz.id
+            ) b1 on b1.value = Foo.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 4), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 5), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 6), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(9, 7), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::exists clause") {
+    SECTION("mark join") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string schema_3("CREATE TABLE Baz (id int primary key, order_date DATE not null)");
+        std::string sql(R"#(
+            with ph as (select $k::int as k)
+            select Bar.* from Bar
+            join lateral (
+                select * from Baz
+                cross join ph
+                where 
+                    Baz.id = Bar.id
+                    and exists (
+                        from Foo 
+                        where 
+                            Foo.id = Baz.id
+                            and kind = ph.k
+                    )
+            ) v on true
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(22, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(22, 1), .nullable = {.from_field = false, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::With order by query") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from Foo
+            join Bar on Foo.id = Bar.id
+            order by Foo.id, bar.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("subquery with order by clause") {
+        std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select * from (
+                select * from Foo
+                order by Foo.id
+            ) v
+            join Bar on v.id = Bar.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(8, 0), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(8, 4), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(8, 5), .nullable = {.from_field = false, .from_join = true} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::With group by query") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
+        std::string sql(R"#(
+            select Bar.id, Foo.id, count(Foo.kind) as k, count(xys) as s from Foo
+            join Bar on Foo.id = Bar.id
+            group by Bar.id, Foo.id
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = true} },
+            { .binding = duckdb::ColumnBinding(2, 1), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(2, 3), .nullable = {.from_field = true, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("rollup") {
+        std::string schema("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
+        std::string sql("SELECT x, y, GROUPING(x, y), GROUPING(x), sum(z) FROM Point GROUP BY ROLLUP(x, y)");
+
+        std::vector<ColumnBindingPair> expects{
+            { .binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 3), .nullable = {.from_field = true, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(1, 4), .nullable = {.from_field = true, .from_join = false} },
+        };
+
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::CTE") {
+    SECTION("default") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with v as (
+                select id, xys, kind from Foo
             )
-        select xys, id, b, x, a from v
-        cross join v2
-    )#");
+            select xys, id from v
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(26, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(26, 1), .nullable = {.from_field = false, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(26, 2), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(26, 3), .nullable = {.from_field = false, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(26, 4), .nullable = {.from_field = true, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
-}
-
-TEST_CASE("With materialized CTE (nested)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        with
-            v as materialized (
-                select Foo.id, Bar.id, xys, kind, a from Foo
-                join Bar on Foo.id = Bar.id
-                cross join (
-                    select $a::int as a
-                )
-            ),
-            v2 as materialized (
-                select id, id_1 from v
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("With non materialized CTE") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with v as not materialized (
+                select id, xys, kind from Foo
             )
-        select id_1, id from v2
-    )#");
+            select xys, id from v
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(25, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(25, 1), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
 }
 
-TEST_CASE("With materialized CTE (ref from subquery)") {
-    std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        with v as materialized (
-            select id, xys, kind from Foo
-        )
-        select xys, id from (
-            select * from v
-        )
-    )#");
+TEST_CASE("ResolveNullable::Materialized CTE") {
+    SECTION("basic") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with v as materialized (
+                select id, xys, kind from Foo
+            )
+            select xys, id from v
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(15, 0), .nullable = {.from_field = true, .from_join = false}},
-        {.binding = duckdb::ColumnBinding(15, 1), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema}, expects);
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("CTEx2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string schema_3("CREATE TABLE Point (id int, x int not null, y int, z int not null)");
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Foo.id, Bar.id, xys, kind, a from Foo
+                    join Bar on Foo.id = Bar.id
+                    cross join (
+                        select $a::int as a
+                    )
+                ),
+                v2 as materialized (
+                    select $b::text as b, x from Point
+                )
+            select xys, id, b, x, a from v
+            cross join v2
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(26, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(26, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(26, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(26, 3), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(26, 4), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
+    }
+    SECTION("nested CTE") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            with
+                v as materialized (
+                    select Foo.id, Bar.id, xys, kind, a from Foo
+                    join Bar on Foo.id = Bar.id
+                    cross join (
+                        select $a::int as a
+                    )
+                ),
+                v2 as materialized (
+                    select id, id_1 from v
+                )
+            select id_1, id from v2
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(25, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(25, 1), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("reference from subquery") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            with v as materialized (
+                select id, xys, kind from Foo
+            )
+            select xys, id from (
+                select * from v
+            )
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(15, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(15, 1), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
 }
 
-TEST_CASE("With combining operation (union#1)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Foo where id > $n1
-        union all
-        select id from Bar where id <= $n2
-    )#");
+TEST_CASE("ResolveNullable::With combining operation") {
+    SECTION("union#1 (bottom nullable)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Foo where id > $n1
+            union all
+            select id from Bar where id <= $n2
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("union#2") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select id from Foo where id > $n1
+            union all
+            select id from Foo where id <= $n2
+        )#");
 
-TEST_CASE("With combining operation (union#2)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string sql(R"#(
-        select id from Foo where id > $n1
-        union all
-        select id from Foo where id <= $n2
-    )#");
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1}, expects);
+    }
+    SECTION("intersect#1 (bottom nullable)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Foo where id > $n1
+            intersect all
+            select id from Bar where id <= $n2
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1}, expects);
-}
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("intersect#2 (top nullable)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Bar where id > $n1
+            intersect all
+            select id from Foo where id <= $n2
+        )#");
 
-TEST_CASE("With combining operation (intersect#1)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Foo where id > $n1
-        intersect all
-        select id from Bar where id <= $n2
-    )#");
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("except#1 (top nullable)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Foo where id > $n1
+            except all
+            select id from Bar where id <= $n2
+        )#");
 
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
+    SECTION("except#2 (bottom nullable)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
+        std::string sql(R"#(
+            select id from Bar where id > $n1
+            except all
+            select id from Foo where id <= $n2
+        )#");
 
-TEST_CASE("With combining operation (intersect#2)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Bar where id > $n1
-        intersect all
-        select id from Foo where id <= $n2
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("With combining operation (except#1)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Foo where id > $n1
-        except all
-        select id from Bar where id <= $n2
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = false, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
-}
-
-TEST_CASE("With combining operation (except#2)") {
-    std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-    std::string schema_2("CREATE TABLE Bar (id int, value VARCHAR not null)");
-    std::string sql(R"#(
-        select id from Bar where id > $n1
-        except all
-        select id from Foo where id <= $n2
-    )#");
-
-    std::vector<ColumnBindingPair> expects{
-        {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
-    };
-   
-    runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(2, 0), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema_1, schema_2}, expects);
+    }
 }
 
 #endif

@@ -380,32 +380,32 @@ auto runTest(
     ;
 
     query: {
-        UNSCOPED_INFO("Walk result");
+        INFO("Walk result");
         CHECK_THAT(stmt->ToString(), Equals(expected));
     }
     statement_type: {
-        UNSCOPED_INFO("Statement type");
+        INFO("Statement type");
         CHECK(param_result.type == StatementType::Select);
     }
     placeholders: {
         INFO("Placeholder maps");
         map_size: {
-            UNSCOPED_INFO("map size");
+            INFO("map size");
             REQUIRE(param_result.names.size() == lookup.size());
         }
         param_entries: {
-            UNSCOPED_INFO("names entries");
+            INFO("names entries");
 
             auto view = param_result.names | std::views::keys;
             auto keys = std::vector<PositionalParam>(view.begin(), view.end());
 
             for (int i = 1; auto& [positional, entry]: lookup) {
                 param_positional: {
-                    UNSCOPED_INFO(std::format("positional key exists#{}", i));
+                    INFO(std::format("positional key exists#{}", i));
                     CHECK_THAT(keys, VectorContains(positional));
                 }
                 param_name: {
-                    UNSCOPED_INFO(std::format("named value exists#{}", i));
+                    INFO(std::format("named value exists#{}", i));
                     CHECK_THAT(param_result.names.at(positional).name, Equals(entry.name));
                 }
             }
@@ -1052,7 +1052,7 @@ TEST_CASE("SelectSQL::CTE") {
     }
 }
 
-TEST_CASE("SelectSQL::materialized-CTE") {
+TEST_CASE("SelectSQL::materialized CTE") {
     SECTION("basic#1") {
         std::string sql(R"#(
             with ph as materialized (

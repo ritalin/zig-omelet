@@ -229,27 +229,27 @@ static auto runResolveParamType(
     auto [resolve_result, user_type_names, anon_types] = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints));
 
     parameter_size: {
-        UNSCOPED_INFO("Parameter size");
+        INFO("Parameter size");
         REQUIRE(resolve_result.size() == name_lookup.size());
     }
     parameter_entries: {
         for (int i = 0; auto& entry: resolve_result) {
             has_param: {
-                UNSCOPED_INFO(std::format("valid named parameter#{}", i));
+                INFO(std::format("valid named parameter#{}", i+1));
                 REQUIRE(name_lookup.contains(entry.position));
                 REQUIRE_THAT(entry.name, Equals(name_lookup.at(entry.position).name));
             }
 
             if (param_types.contains(entry.position)) {
                 with_type_param: {
-                    UNSCOPED_INFO(std::format("valid parameter type#{} (has type)", i));
+                    INFO(std::format("valid parameter type#{} (has type)", i+1));
                     REQUIRE(param_types.contains(entry.position));
                     REQUIRE_THAT(entry.type_name.value(), Equals(param_types.at(entry.position)));
                 }
             }
             else {
                 without_type_param: {
-                    UNSCOPED_INFO(std::format("valid parameter type#{} (has ANY type)", i));
+                    INFO(std::format("valid parameter type#{} (has ANY type)", i+1));
                     REQUIRE_FALSE((bool)entry.type_name);
                 }
             }
@@ -266,7 +266,7 @@ static auto runResolveParamType(
 
         for (int i = 0; auto& name: user_type_names) {
             has_user_type: {
-                UNSCOPED_INFO(std::format("valid user type named#{}", i));
+                UNSCOPED_INFO(std::format("valid user type named#{}", i+1));
                 REQUIRE(lookup.contains(name));   
             }
             ++i;
@@ -285,7 +285,7 @@ static auto runResolveParamType(
 
         for (int i = 0; auto& entry: anon_types) {
             has_anon_type: {
-                UNSCOPED_INFO(std::format("valid anon type named#{}", i));
+                UNSCOPED_INFO(std::format("valid anon type named#{}", i+1));
                 REQUIRE(lookup.contains(entry.name));
             }
 
@@ -345,8 +345,6 @@ TEST_CASE("ResolveParam::positional parameter") {
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
     }
-#ifdef XXX
-#endif
 }
 
 TEST_CASE("ResolveParam::named parameter") {
@@ -456,29 +454,147 @@ TEST_CASE("ResolveParam::named parameter") {
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
     }
 }
-#ifdef XXX
 
 TEST_CASE("ResolveParam::window function") {
-    SECTION("") {
-        FAIL("*** Not implemented ***");
-    }
+    SECTION("function args") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, sum($val::bigint) over () as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")}, 
+        };
+        ParamTypeLookup bound_types{{"1","BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
 
-    // function args
-    // patrition by
-    // order by
-    // filter
-    // qualify
-    // frame
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("patrition by") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, sum($val::bigint) over (partition by fmod(id, $rem::int)) as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")},
+            {"2", ParamLookupEntry("rem")} 
+        };
+        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("order by") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, sum($val::double) over (order by fmod(id, $rem::int)) as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")},
+            {"2", ParamLookupEntry("rem")} 
+        };
+        ParamTypeLookup bound_types{ {"1","DOUBLE"}, {"2","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("filter") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, sum($val::bigint) filter (fmod(id, $div::int) > $rem::int) over () as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")},
+            {"2", ParamLookupEntry("div")},
+            {"3", ParamLookupEntry("rem")} 
+        };
+        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"}, {"3","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("qualify") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select * 
+            from Foo
+            qualify sum($val::int) over () > 100
+        )#");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")},
+        };
+        ParamTypeLookup bound_types{ {"1","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("frame#1 (rows)") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            select id, 
+                sum($val::int) 
+                over (
+                    rows between $from_row preceding and $to_row following
+                ) as a
+            from Foo
+        )#");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("val")},
+            {"2", ParamLookupEntry("from_row")},
+            {"3", ParamLookupEntry("to_row")},
+        };
+        ParamTypeLookup bound_types{ {"1","INTEGER"}, {"2","BIGINT"}, {"3","BIGINT"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("frame#2 (range)") {
+        std::string schema("CREATE TABLE Temperature (id int primary key, y int not null, month_of_y int not null, record_at DATE not null, temperature FLOAT not null)");
+        std::string sql(R"#(
+            select y, month_of_y, record_at, 
+                avg(temperature) 
+                over (
+                    partition by y, month_of_y
+                    order by record_at
+                    range between interval ($days::int) days preceding and current row
+                ) as a
+            from Temperature
+        )#");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("days")},
+        };
+        ParamTypeLookup bound_types{ {"1","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
 TEST_CASE("ResolveParam::builtin window function") {
-    FAIL("*** Not implemented ***");
+    SECTION("ntile") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, ntile($bucket) over () as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("bucket")},
+        };
+        ParamTypeLookup bound_types{ {"1","BIGINT"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
 
-    // row_number
-    // ntile
-    // lag
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("lag") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select id, lag(id, $offset, $value_def::int) over (partition by kind) as a from Foo");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("offset")},
+            {"2", ParamLookupEntry("value_def")},
+        };
+        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"} };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
-#endif
 
 TEST_CASE("ResolveParam::user type#1 (ENUM)") {
     SECTION("anonymous/select-list") {

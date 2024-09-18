@@ -10,6 +10,7 @@ public:
     ZmqChannel(std::optional<void *> socket, const std::string& id, const std::string& from);
 public:
     static auto unitTestChannel() -> ZmqChannel;
+    auto clone() -> ZmqChannel;
 public:
     auto sendWorkerResult(size_t stmt_offset, size_t stmt_count, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> void;
 public:

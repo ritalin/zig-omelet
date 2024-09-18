@@ -24,6 +24,7 @@ public:
     auto walkCTEStatement(duckdb::CommonTableExpressionMap& cte) -> Result;
 public:
     auto ofPosition(std::string old_name) -> std::string;
+    auto attachTypeHint(PositionalParam name, std::unique_ptr<duckdb::ParsedExpression>&& type_hint) -> void;
 private:
     StatementParameterStyle param_type;
     std::ranges::iterator_t<std::ranges::iota_view<size_t>> gen_position;

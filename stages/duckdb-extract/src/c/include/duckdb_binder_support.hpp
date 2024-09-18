@@ -23,7 +23,7 @@ enum class StatementType {Invalid, Select};
 
 struct ParamLookupEntry {
     std::string name;
-    std::shared_ptr<duckdb::CastExpression> type_hint = nullptr;
+    std::shared_ptr<duckdb::ParsedExpression> type_hint = nullptr;
 };
 
 struct ParamCollectionResult {

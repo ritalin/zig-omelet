@@ -59,6 +59,10 @@ auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
     }
 }
 
+auto ParameterCollector::attachTypeHint(PositionalParam name, std::unique_ptr<duckdb::ParsedExpression>&& type_hint) -> void {
+    this->name_map.at(name).type_hint = std::move(type_hint);
+}
+
 }
 
 #ifndef DISABLE_CATCH2_TEST

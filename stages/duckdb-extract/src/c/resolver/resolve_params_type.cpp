@@ -13,7 +13,7 @@ namespace worker {
 
 class LogicalParameterVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-    LogicalParameterVisitor(ParamNameLookup&& names_ref): names(std::move(names_ref)) {}
+    LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref): names(std::move(names_ref)), type_hints(std::move(type_hints_ref)) {}
 public:
     auto VisitResult() -> ParamResolveResult;
 protected:
@@ -22,6 +22,8 @@ private:
     auto hasAnyType(const PositionalParam& position, const std::string& type_name) -> bool;
 private:
     ParamNameLookup names;
+    BoundParamTypeHint type_hints;
+private:
     std::unordered_multimap<PositionalParam, std::string> param_types;
     std::unordered_map<PositionalParam, ParamEntry> parameters;
     std::vector<std::string> user_type_names;
@@ -75,7 +77,12 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
         }
     }
     else {
-        type_name = expr.return_type.ToString();
+        if (this->type_hints.contains(expr.identifier)) {
+            type_name = type_hints.at(expr.identifier)->return_type.ToString();
+        }
+        else {
+            type_name = expr.return_type.ToString();
+        }
     }
     
     if (! this->parameters.contains(expr.identifier)) {
@@ -99,7 +106,7 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
 }
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints) -> ParamResolveResult {
-    LogicalParameterVisitor visitor(std::move(name_lookup));
+    LogicalParameterVisitor visitor(std::move(name_lookup), std::move(type_hints));
     visitor.VisitOperator(*op);
 
     return visitor.VisitResult();
@@ -332,7 +339,7 @@ TEST_CASE("ResolveParam::positional parameter") {
             {"2", ParamLookupEntry("div")}, 
             {"3", ParamLookupEntry("rem")}
         };
-        ParamTypeLookup bound_types{ {"1","INTEGER"}, {"2","INTEGER"}, {"2","INTEGER"} };
+        ParamTypeLookup bound_types{ {"1","INTEGER"}, {"2","INTEGER"}, {"3","INTEGER"} };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -441,8 +448,8 @@ TEST_CASE("ResolveParam::named parameter") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("seq")}, 
             {"2", ParamLookupEntry("kind")}
-            };
-        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 

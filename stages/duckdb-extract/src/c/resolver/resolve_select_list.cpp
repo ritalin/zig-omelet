@@ -916,7 +916,7 @@ TEST_CASE("Select from predefined enum list") {
 }
 
 TEST_CASE("Select from anonymous enum list") {
-    SKIP("Anonymous enum list is bound as appropriate type !!!");
+    SKIP("Anonymous enum list is bound as enum type !!!");
     std::string schema("CREATE TABLE Element (id INTEGER primary key, child_visibles ENUM('hide', 'visible')[] not null)");
     std::string sql("select child_visibles, id from Element");
 
@@ -1008,13 +1008,5 @@ TEST_CASE("Select from combining operation (except)") {
    
     runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
 }
-
-#ifdef ENABLE_TEST
-
-TEST_CASE("Select from table function") {
-    SKIP("Not implemented");
-}
-
-#endif
 
 #endif

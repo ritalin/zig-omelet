@@ -46,7 +46,13 @@ static auto walkExpressionInternal(ParameterCollector& collector, duckdb::unique
     case duckdb::ExpressionClass::CAST: 
         {
             auto& cast_expr = expr->Cast<duckdb::CastExpression>();
+            auto sv_child = cast_expr.child->Copy();
+
             walkExpressionInternal(collector, cast_expr.child, depth+1);
+
+            if (cast_expr.child->expression_class == duckdb::ExpressionClass::PARAMETER) {
+                collector.attachTypeHint(sv_child->Cast<duckdb::ParameterExpression>().identifier, cast_expr.Copy());
+            }
         }
         break;
     case duckdb::ExpressionClass::COMPARISON:

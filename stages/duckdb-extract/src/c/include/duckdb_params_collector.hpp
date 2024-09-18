@@ -27,7 +27,7 @@ public:
 private:
     StatementParameterStyle param_type;
     std::ranges::iterator_t<std::ranges::iota_view<size_t>> gen_position;
-    std::unordered_map<NamedParam, PositionalParam> name_map;
+    std::unordered_map<NamedParam, ParamLookupEntry> name_map;
 };
 
 }

@@ -33,28 +33,27 @@ auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
     }
 }
 
-auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string> {
-    auto swap_entries = map | std::views::transform([](auto pair) -> std::unordered_map<std::string, std::string>::value_type {  
-        auto [key, value] = pair;
-        return {value, key};
+auto swapMapEntry(const std::unordered_map<std::string, ParamLookupEntry>& map) -> std::unordered_map<std::string, ParamLookupEntry> {
+    auto swap_entries = map | std::views::transform([](auto& pair) {  
+        auto& [key, value] = pair;
+        return std::pair<std::string, ParamLookupEntry>{value.name, ParamLookupEntry(key, value.type_hint) };
     });
 
-    return std::unordered_map<std::string, std::string>(swap_entries.begin(), swap_entries.end());
+    return std::unordered_map<std::string, ParamLookupEntry>(swap_entries.begin(), swap_entries.end());
 }
 
 auto ParameterCollector::ofPosition(std::string old_name) -> std::string {
     if (this->name_map.contains(old_name)) {
-        return this->name_map[old_name];
+        return this->name_map.at(old_name).name;
     }    
     else if (this->param_type == StatementParameterStyle::Positional) {
-        this->name_map[old_name] = old_name;
+        this->name_map.emplace(old_name, ParamLookupEntry(old_name));
         return old_name;
     }
-    
     else {
         ++this->gen_position;
         auto next = std::to_string(*this->gen_position);
-        this->name_map[old_name] = next;
+        this->name_map.emplace(old_name, ParamLookupEntry(next));
 
         return next;
     }

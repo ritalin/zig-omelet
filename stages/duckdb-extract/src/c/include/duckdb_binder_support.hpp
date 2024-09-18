@@ -1,20 +1,29 @@
 #pragma once
 
 #include <duckdb.hpp>
+#include <duckdb/parser/expression/cast_expression.hpp>
+
 #include "zmq_worker_support.hpp"
 #include "duckdb_nullable_lookup.hpp"
 #include "user_type_support.hpp"
 
 namespace worker {
 
+struct ParamLookupEntry;
+
 using PositionalParam = std::string;
 using NamedParam = std::string;
-using ParamNameLookup = std::unordered_map<PositionalParam, NamedParam>;
+using ParamNameLookup = std::unordered_map<PositionalParam, ParamLookupEntry>;
 
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
+
+struct ParamLookupEntry {
+    std::string name;
+    std::shared_ptr<duckdb::CastExpression> type_hint = nullptr;
+};
 
 struct ParamCollectionResult {
     StatementType type;
@@ -60,7 +69,7 @@ public:
 
 auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle;
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
-auto swapMapEntry(std::unordered_map<std::string, std::string> map) -> std::unordered_map<std::string, std::string>;
+auto swapMapEntry(const std::unordered_map<std::string, ParamLookupEntry>& map) -> std::unordered_map<std::string, ParamLookupEntry>;
 auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult;
 
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt) -> duckdb::BoundStatement;

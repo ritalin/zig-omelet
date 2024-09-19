@@ -793,6 +793,182 @@ TEST_CASE("ResolveParam::materialized CTE") {
     }
 }
 
+TEST_CASE("ResolveParam::Recursive CTE") {
+    SECTION("default CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS (
+                VALUES ($min_value::int)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::bigint
+            )
+            SELECT n FROM t
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("default CTEx2") {
+        std::string sql(R"#(
+            with recursive 
+                t(n) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT m*2 FROM t2 WHERE m < $max_value2::bigint
+                )
+            SELECT n, m FROM t positional join t2
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("max_value2")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","INTEGER"}, {"3", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("default CTE (nested)") {
+        std::string sql(R"#(
+            with recursive
+                t(n) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::bigint
+                ),
+                t2(m) as (
+                    select n + $delta::int as m from t
+                    union all
+                    select m*2 from t2 where m < $max_value2::bigint
+                )
+            SELECT m FROM t2
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("delta")},
+            {"4", ParamLookupEntry("max_value2")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","BIGINT"}, {"3","INTEGER"}, {"4", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("Not matterialized CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS not materialized (
+                VALUES ($min_value::int)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::bigint
+            )
+            SELECT n FROM t
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+}
+
+TEST_CASE("ResolveParam::Recursive materialized CTE") {
+    SECTION("Matirialized CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS materialized (
+                VALUES ($min_value::bigint)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::bigint
+            )
+            SELECT n FROM t
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")}
+        };
+        ParamTypeLookup bound_types{{"1","BIGINT"}, {"2", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("Matirialized CTEx2") {
+        std::string sql(R"#(
+            with recursive 
+                t(n) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT m*2 FROM t2 WHERE m < $max_value2::bigint
+                )
+            SELECT n, m FROM t positional join t2
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("max_value2")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","INTEGER"}, {"3", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+    SECTION("materialized CTE (nested)") {
+        std::string sql(R"#(
+            with recursive
+                t(n) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::bigint
+                ),
+                t2(m) as materialized (
+                    select n + $delta::float as m from t
+                    union all
+                    select m*2 from t2 where m < $max_value2::bigint
+                )
+            SELECT m FROM t2
+        )#");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, 
+            {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("delta")},
+            {"4", ParamLookupEntry("max_value2")}
+        };
+        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","BIGINT"}, {"3","FLOAT"}, {"4", "BIGINT"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+    
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
+}
+
 TEST_CASE("ResolveParam::combining operation") {
     SECTION("basic") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");

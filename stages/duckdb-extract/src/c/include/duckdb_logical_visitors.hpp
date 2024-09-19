@@ -20,6 +20,7 @@ public:
     auto VisitOperator(duckdb::LogicalOperator &op) -> void;
 private:
     auto VisitOperatorGet(const duckdb::LogicalGet& op) -> void;
+    auto VisitOperatorValuesGet(duckdb::LogicalExpressionGet& op) -> void;
     auto VisitOperatorGroupBy(duckdb::LogicalAggregate& op) -> void;
     auto VisitOperatorCteRef(duckdb::LogicalCTERef& op) -> void;
     auto VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&& rels) -> void;

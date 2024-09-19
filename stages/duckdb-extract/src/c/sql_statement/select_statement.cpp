@@ -223,6 +223,15 @@ static auto walkTableRef(ParameterCollector& collector, duckdb::unique_ptr<duckd
             walkSelectStatementInternal(collector, *sq_ref.subquery, 0);
         }
         break;
+    case duckdb::TableReferenceType::EXPRESSION_LIST:
+        {
+            auto& values_ref = table_ref->Cast<duckdb::ExpressionListRef>();
+
+            for (auto& expr: values_ref.values | std::views::join) {
+                walkExpressionInternal(collector, expr, depth+1);
+            }
+        }
+        break;
     default:
         collector.channel.warn(std::format("[TODO] Unsupported table ref type: {} (depth: {})", magic_enum::enum_name(table_ref->type), depth));
         break;
@@ -316,6 +325,13 @@ static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duck
             auto& cte_node = node->Cast<duckdb::CTENode>();
             walkQueryNode(collector, cte_node.query, 0);
             walkQueryNode(collector, cte_node.child, 0);
+        }
+        break;
+    case duckdb::QueryNodeType::RECURSIVE_CTE_NODE:
+        {
+            auto& cte_node = node->Cast<duckdb::RecursiveCTENode>();
+            walkQueryNode(collector, cte_node.left, 0);
+            walkQueryNode(collector, cte_node.right, 0);
         }
         break;
     default: 
@@ -412,7 +428,6 @@ auto runTest(
         }
     }
 }
-
 
 TEST_CASE("SelectSQL::Positional parameter") {
     SECTION("With alias") {
@@ -1052,7 +1067,7 @@ TEST_CASE("SelectSQL::CTE") {
     }
 }
 
-TEST_CASE("SelectSQL::materialized CTE") {
+TEST_CASE("SelectSQL::Materialized CTE") {
     SECTION("basic#1") {
         std::string sql(R"#(
             with ph as materialized (
@@ -1123,23 +1138,144 @@ TEST_CASE("SelectSQL::materialized CTE") {
 }
 
 TEST_CASE("SelectSQL::Recursive CTE") {
-//     std::string sql(R"#(
-//         with recursive t(n) AS (
-//             VALUES ($min_value::int)
-//             UNION ALL
-//             SELECT n+1 FROM t WHERE n < $max_value::int
-//         )
-//         SELECT n FROM t
-//     )#");
-//     std::string expected("WITH RECURSIVE t(n) AS (");
+    SECTION("default CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS (
+                VALUES ($min_value::int)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::int
+            )
+            SELECT n FROM t
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER))))SELECT n FROM t");
 
-//     ParamNameLookup lookup{{"1","min_value"}, {"2", "max_value"}};
-   
-//     runTest(sql, expected, lookup);
-// }
+        ParamNameLookup lookup{{"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("default CTEx2") {
+        std::string sql(R"#(
+            with recursive 
+                t(n) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT m*2 FROM t2 WHERE m < $max_value2::int
+                )
+            SELECT n, m FROM t positional join t2
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER)))), t2 (m) AS ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (m * 2) FROM t2 WHERE (m < CAST($3 AS INTEGER))))SELECT n, m FROM t POSITIONAL JOIN t2");
+
+        ParamNameLookup lookup{{"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")}, {"3", ParamLookupEntry("max_value2")}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("default CTE (nested)") {
+        std::string sql(R"#(
+            with recursive
+                t(n) AS (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) as (
+                    select n + $delta::int as m from t
+                    union all
+                    select m*2 from t2 where m < $max_value2::int
+                )
+            SELECT m FROM t2
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER)))), t2 (m) AS ((SELECT (n + CAST($3 AS INTEGER)) AS m FROM t) UNION  ALL (SELECT (m * 2) FROM t2 WHERE (m < CAST($4 AS INTEGER))))SELECT m FROM t2");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("delta")}, {"4", ParamLookupEntry("max_value2")}
+        };
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Not matirialized CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS not materialized (
+                VALUES ($min_value::int)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::int
+            )
+            SELECT n FROM t
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS NOT MATERIALIZED ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER))))SELECT n FROM t");
+
+        ParamNameLookup lookup{{"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")}};
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
 TEST_CASE("SelectSQL::Recursive matitealized CTE") {
+    SECTION("Matirialized CTE") {
+        std::string sql(R"#(
+            with recursive t(n) AS materialized (
+                VALUES ($min_value::int)
+                UNION ALL
+                SELECT n+1 FROM t WHERE n < $max_value::int
+            )
+            SELECT n FROM t
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS MATERIALIZED ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER))))SELECT n FROM t");
+
+        ParamNameLookup lookup{{"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("Matirialized CTEx2") {
+        std::string sql(R"#(
+            with recursive 
+                t(n) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT m*2 FROM t2 WHERE m < $max_value2::int
+                )
+            SELECT n, m FROM t positional join t2
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS MATERIALIZED ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER)))), t2 (m) AS MATERIALIZED ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (m * 2) FROM t2 WHERE (m < CAST($3 AS INTEGER))))SELECT n, m FROM t POSITIONAL JOIN t2");
+
+        ParamNameLookup lookup{{"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")}, {"3", ParamLookupEntry("max_value2")}};
+    
+        runTest(sql, expected, lookup);
+    }
+    SECTION("materialized CTE (nested)") {
+        std::string sql(R"#(
+            with recursive
+                t(n) AS materialized (
+                    VALUES ($min_value::int)
+                    UNION ALL
+                    SELECT n+1 FROM t WHERE n < $max_value::int
+                ),
+                t2(m) as materialized (
+                    select n + $delta::int as m from t
+                    union all
+                    select m*2 from t2 where m < $max_value2::int
+                )
+            SELECT m FROM t2
+        )#");
+        std::string expected("WITH RECURSIVE t (n) AS MATERIALIZED ((SELECT * FROM (VALUES (CAST($1 AS INTEGER))) AS valueslist) UNION  ALL (SELECT (n + 1) FROM t WHERE (n < CAST($2 AS INTEGER)))), t2 (m) AS MATERIALIZED ((SELECT (n + CAST($3 AS INTEGER)) AS m FROM t) UNION  ALL (SELECT (m * 2) FROM t2 WHERE (m < CAST($4 AS INTEGER))))SELECT m FROM t2");
+
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("min_value")}, {"2", ParamLookupEntry("max_value")},
+            {"3", ParamLookupEntry("delta")}, {"4", ParamLookupEntry("max_value2")}
+        };
+    
+        runTest(sql, expected, lookup);
+    }
 }
 
 TEST_CASE("SelectSQL::Set-operator") {

@@ -99,7 +99,7 @@ auto JoinTypeVisitor::VisitOperatorValuesGet(duckdb::LogicalExpressionGet& op) -
 
 auto JoinTypeVisitor::VisitOperatorGroupBy(duckdb::LogicalAggregate& op) -> void {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, this->join_type_lookup, this->cte_columns, this->channel);
+    JoinTypeVisitor visitor(internal_join_types, this->join_type_lookup, this->channel);
 
     for (auto& c: op.children) {
         visitor.VisitOperator(*c);
@@ -140,30 +140,6 @@ auto JoinTypeVisitor::VisitOperatorGroupBy(duckdb::LogicalAggregate& op) -> void
 }
 
 auto JoinTypeVisitor::VisitOperatorCteRef(duckdb::LogicalCTERef& op) -> void {
-    // if (!this->cte_columns.get().contains(op.cte_index)) return;
-
-    // auto& binding_vec = this->cte_columns.get().at(op.cte_index);
-    // auto bindings_view = 
-    //     binding_vec
-    //     | std::views::transform([](const auto& x) {
-    //         return std::pair<std::string, NullableLookup::Column>{x.name, x.binding};
-    //     })
-    // ;
-    // auto lookup = std::unordered_map<std::string, NullableLookup::Column>(bindings_view.begin(), bindings_view.end());
-
-    // for (duckdb::idx_t c = 0; auto& col_name: op.bound_columns) {
-    //     if (lookup.contains(col_name)) {
-    //         auto& from_binding = lookup[col_name];
-    //         auto nullability = this->parent_lookup[from_binding];
-
-    //         NullableLookup::Column to_binding{
-    //             .table_index = op.table_index, 
-    //             .column_index = c, 
-    //         };
-    //         this->join_type_lookup[to_binding] = nullability;
-    //     }
-    //     ++c;
-    // }
     for (duckdb::idx_t c = 0; auto& col_name: op.bound_columns) {
         {
             NullableLookup::Column from_binding{
@@ -183,7 +159,7 @@ auto JoinTypeVisitor::VisitOperatorCteRef(duckdb::LogicalCTERef& op) -> void {
 
 auto JoinTypeVisitor::VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType join_type, const ConditionRels& rels) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, this->parent_lookup, this->cte_columns, this->channel);
+    JoinTypeVisitor visitor(internal_join_types, this->parent_lookup, this->channel);
 
     visitor.VisitOperator(op);
 
@@ -335,9 +311,9 @@ auto JoinTypeVisitor::VisitOperatorJoin(duckdb::LogicalJoin& op, ConditionRels&&
     }
 }
 
-static auto VisitOperatorWindow(duckdb::LogicalWindow& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto VisitOperatorWindow(duckdb::LogicalWindow& op, NullableLookup& parent_join_types, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
+    JoinTypeVisitor visitor(internal_join_types, parent_join_types, channel);
 
     for (auto& child: op.children) {
         visitor.VisitOperator(*child);
@@ -351,9 +327,9 @@ static auto VisitOperatorWindow(duckdb::LogicalWindow& op, NullableLookup& paren
     return std::move(internal_join_types);
 }
 
-static auto VisitOperatorUnnest(duckdb::LogicalUnnest& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto VisitOperatorUnnest(duckdb::LogicalUnnest& op, NullableLookup& parent_join_types, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
+    JoinTypeVisitor visitor(internal_join_types, parent_join_types, channel);
 
     for (auto& child: op.children) {
         visitor.VisitOperator(*child);
@@ -367,9 +343,9 @@ static auto VisitOperatorUnnest(duckdb::LogicalUnnest& op, NullableLookup& paren
     return std::move(internal_join_types);
 }
 
-static auto VisitOperatorProjection(duckdb::LogicalProjection& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto VisitOperatorProjection(duckdb::LogicalProjection& op, NullableLookup& parent_join_types, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
-    JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
+    JoinTypeVisitor visitor(internal_join_types, parent_join_types, channel);
 
     for (auto& child: op.children) {
         visitor.VisitOperator(*child);
@@ -385,18 +361,18 @@ static auto VisitOperatorProjection(duckdb::LogicalProjection& op, NullableLooku
     return std::move(results);
 }
 
-static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& internal_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup;
+static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& internal_join_type, ZmqChannel& channel) -> NullableLookup;
 static auto RebindTableIndex(duckdb::idx_t table_index, NullableLookup&& internal_join_type) -> NullableLookup;
 
-static auto VisitOperatorRecursiveCte(duckdb::LogicalRecursiveCTE& op, NullableLookup& parent_join_types, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto VisitOperatorRecursiveCte(duckdb::LogicalRecursiveCTE& op, NullableLookup& parent_join_types, ZmqChannel& channel) -> NullableLookup {
     visit_rec_cte_top: {
-        auto cte_lookup = resolveSelectListNullabilityInternal(op.children[0], parent_join_types, cte_columns, channel);
+        auto cte_lookup = resolveSelectListNullabilityInternal(op.children[0], parent_join_types, channel);
         // rebind to CTE table_index
         cte_lookup = RebindTableIndex(op.table_index, std::move(cte_lookup));
         parent_join_types.insert(cte_lookup.begin(), cte_lookup.end());
     }
     visit_rec_rest: {
-        auto cte_lookup = resolveSelectListNullabilityInternal(op.children[1], parent_join_types, cte_columns, channel);
+        auto cte_lookup = resolveSelectListNullabilityInternal(op.children[1], parent_join_types, channel);
         // rebind to CTE table_index 
         // need to pass to parent plan beacause this is recursive CTE
         cte_lookup = RebindTableIndex(op.table_index, std::move(cte_lookup));
@@ -409,19 +385,19 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->parent_lookup, this->cte_columns, this->channel);
+            auto lookup = VisitOperatorProjection(op.Cast<duckdb::LogicalProjection>(), this->parent_lookup, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_WINDOW:
         {
-            auto lookup = VisitOperatorWindow(op.Cast<duckdb::LogicalWindow>(), this->parent_lookup, this->cte_columns, this->channel);
+            auto lookup = VisitOperatorWindow(op.Cast<duckdb::LogicalWindow>(), this->parent_lookup, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_UNNEST:
         {
-            auto lookup = VisitOperatorUnnest(op.Cast<duckdb::LogicalUnnest>(), this->parent_lookup, this->cte_columns, this->channel);
+            auto lookup = VisitOperatorUnnest(op.Cast<duckdb::LogicalUnnest>(), this->parent_lookup, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -436,8 +412,7 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
         break;
     case duckdb::LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
         {
-            CteColumnBindings cte_columns{};
-            auto cte_lookup = VisitOperatorRecursiveCte(op.Cast<duckdb::LogicalRecursiveCTE>(), this->parent_lookup, cte_columns, this->channel);
+            auto cte_lookup = VisitOperatorRecursiveCte(op.Cast<duckdb::LogicalRecursiveCTE>(), this->parent_lookup, this->channel);
             this->join_type_lookup.insert(cte_lookup.begin(), cte_lookup.end());
         }
         break;
@@ -500,10 +475,8 @@ static auto RebindTableIndex(duckdb::idx_t table_index, NullableLookup&& interna
     return std::move(lookup);
 }
 
-static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& internal_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup;
-
-static auto resolveSetOperation(duckdb::LogicalSetOperation& op, NullableLookup& internal_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup {
-    auto left_lookup = resolveSelectListNullabilityInternal(op.children[0], internal_join_type, cte_columns, channel);
+static auto resolveSetOperation(duckdb::LogicalSetOperation& op, NullableLookup& internal_join_type, ZmqChannel& channel) -> NullableLookup {
+    auto left_lookup = resolveSelectListNullabilityInternal(op.children[0], internal_join_type, channel);
 
     if (op.type != duckdb::LogicalOperatorType::LOGICAL_UNION) {
         return std::move(left_lookup);
@@ -511,7 +484,7 @@ static auto resolveSetOperation(duckdb::LogicalSetOperation& op, NullableLookup&
     else {
         NullableLookup result{};
 
-        auto right_lookup = resolveSelectListNullabilityInternal(op.children[1], internal_join_type, cte_columns, channel);
+        auto right_lookup = resolveSelectListNullabilityInternal(op.children[1], internal_join_type, channel);
         auto right_table_index = right_lookup.begin()->first.table_index;
 
         for (duckdb::idx_t c = 0; auto& [left_binding, left_nullable]: left_lookup) {
@@ -531,38 +504,14 @@ static auto resolveSetOperation(duckdb::LogicalSetOperation& op, NullableLookup&
     }
 }
 
-static auto UpdateCteColumns(const duckdb::idx_t table_index, std::vector<duckdb::unique_ptr<duckdb::Expression>>& exprs) -> std::vector<CteColumnEntry> {
-    std::vector<CteColumnEntry> entries;
-    entries.reserve(exprs.size());
-
-    std::unordered_map<std::string, uint32_t> name_lookup{};
-
-    for (duckdb::idx_t c = 0; auto& expr: exprs) {
-        auto name = ColumnNameVisitor::Resolve(expr);
-        auto& count = name_lookup[name];
-
-        if (count > 0) {
-            name = std::format("{}_{}", name, count);
-        }
-        count += 1;
-        
-        entries.emplace_back(CteColumnEntry{
-            .name = std::move(name), 
-            .binding = {.table_index = table_index, .column_index = c++}
-        });
-    }
-
-    return std::move(entries);
-}
-
-static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& parent_join_type, CteColumnBindings& cte_columns, ZmqChannel& channel) -> NullableLookup {
+static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NullableLookup& parent_join_type, ZmqChannel& channel) -> NullableLookup {
     NullableLookup lookup;
 
     switch (op->type) {
     case duckdb::LogicalOperatorType::LOGICAL_ORDER_BY:
         {
             if (op->children.size() > 0) {
-                return resolveSelectListNullabilityInternal(op->children[0], parent_join_type, cte_columns, channel);
+                return resolveSelectListNullabilityInternal(op->children[0], parent_join_type, channel);
             }
         }
         break;
@@ -570,36 +519,30 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
     case duckdb::LogicalOperatorType::LOGICAL_INTERSECT:
     case duckdb::LogicalOperatorType::LOGICAL_EXCEPT:
         {
-            lookup = resolveSetOperation(op->Cast<duckdb::LogicalSetOperation>(), parent_join_type, cte_columns, channel);
+            lookup = resolveSetOperation(op->Cast<duckdb::LogicalSetOperation>(), parent_join_type, channel);
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
         {
-            lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), parent_join_type, cte_columns, channel);
+            lookup = VisitOperatorProjection(op->Cast<duckdb::LogicalProjection>(), parent_join_type, channel);
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_MATERIALIZED_CTE: 
         {
             auto& op_cte = op->Cast<duckdb::LogicalMaterializedCTE>();
             visit_cte: {
-                // TODO: Unnecessary?
-                cte_columns[op_cte.table_index] = UpdateCteColumns(op_cte.table_index, op_cte.children[0]->expressions);
-
-                auto cte_lookup = resolveSelectListNullabilityInternal(op_cte.children[0], parent_join_type, cte_columns, channel);
+                auto cte_lookup = resolveSelectListNullabilityInternal(op_cte.children[0], parent_join_type, channel);
                 cte_lookup = RebindTableIndex(op_cte.table_index, std::move(cte_lookup));
                 parent_join_type.insert(cte_lookup.begin(), cte_lookup.end());
             }
             visit_rest: {
-                lookup = resolveSelectListNullabilityInternal(op_cte.children[1], parent_join_type, cte_columns, channel);
+                lookup = resolveSelectListNullabilityInternal(op_cte.children[1], parent_join_type, channel);
             }
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
         {
-            // TODO: Unnecessary?
-            CteColumnBindings cte_columns{};
-
-            lookup = VisitOperatorRecursiveCte(op->Cast<duckdb::LogicalRecursiveCTE>(), parent_join_type, cte_columns, channel);
+            lookup = VisitOperatorRecursiveCte(op->Cast<duckdb::LogicalRecursiveCTE>(), parent_join_type, channel);
         }
         break;
     default: 
@@ -611,9 +554,8 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
 
 auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup {
     NullableLookup internal_join_types{};
-    CteColumnBindings cte_columns{};
 
-    return resolveSelectListNullabilityInternal(op, internal_join_types, cte_columns, channel);
+    return resolveSelectListNullabilityInternal(op, internal_join_types, channel);
 }
 
 }

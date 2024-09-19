@@ -42,13 +42,6 @@ struct ParamEntry {
     size_t sort_order;
 };
 
-struct CteColumnEntry {
-    std::string name;
-    NullableLookup::Column binding;
-};
-using CteColumnBindings = std::unordered_map<duckdb::idx_t, std::vector<CteColumnEntry>>;
-using CteColumnBindingsRef = std::reference_wrapper<const CteColumnBindings>;
-
 struct ColumnEntry {
     std::string field_name;
     std::string field_type;

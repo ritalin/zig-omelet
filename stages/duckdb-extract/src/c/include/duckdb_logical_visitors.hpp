@@ -12,8 +12,8 @@ public:
     using Rel = duckdb::idx_t;
     using ConditionRels = std::map<NullableLookup::Column, NullableLookup::Column>;
 public:
-     JoinTypeVisitor(NullableLookup& lookup, NullableLookup& parent_lookup_ref, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel): 
-        channel(channel), join_type_lookup(lookup), parent_lookup(parent_lookup_ref), cte_columns(cte_columns) 
+     JoinTypeVisitor(NullableLookup& lookup, NullableLookup& parent_lookup_ref, ZmqChannel& channel): 
+        channel(channel), join_type_lookup(lookup), parent_lookup(parent_lookup_ref)
     {
     }
 public:
@@ -30,7 +30,6 @@ private:
     ZmqChannel& channel;
     NullableLookup& join_type_lookup;
     NullableLookup& parent_lookup;
-    CteColumnBindingsRef cte_columns;
 };
 
 class ColumnNameVisitor: public duckdb::LogicalOperatorVisitor {

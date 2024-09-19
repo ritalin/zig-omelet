@@ -12,6 +12,7 @@
 #include <duckdb/planner/operator/logical_materialized_cte.hpp>
 #include <duckdb/planner/operator/logical_set_operation.hpp>
 #include <duckdb/planner/operator/logical_window.hpp>
+#include <duckdb/planner/operator/logical_unnest.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -309,8 +310,24 @@ static auto VisitOperatorWindow(duckdb::LogicalWindow& op, NullableLookup& paren
         visitor.VisitOperator(*child);
     }
 
-    for (duckdb::idx_t i = 0; auto& expr: op.expressions) {
-        duckdb::ColumnBinding binding(op.window_index, i++);
+    for (duckdb::idx_t c = 0; auto& expr: op.expressions) {
+        duckdb::ColumnBinding binding(op.window_index, c++);
+        internal_join_types[binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
+    }
+
+    return std::move(internal_join_types);
+}
+
+static auto VisitOperatorUnnest(duckdb::LogicalUnnest& op, NullableLookup& parent_join_types, const CteColumnBindingsRef& cte_columns, ZmqChannel& channel) -> NullableLookup {
+    NullableLookup internal_join_types{};
+    JoinTypeVisitor visitor(internal_join_types, parent_join_types, cte_columns, channel);
+
+    for (auto& child: op.children) {
+        visitor.VisitOperator(*child);
+    }
+
+    for (duckdb::idx_t c = 0; auto& expr: op.expressions) {
+        duckdb::ColumnBinding binding(op.unnest_index, c++);
         internal_join_types[binding] = ColumnExpressionVisitor::Resolve(expr, internal_join_types);
     }
 
@@ -346,6 +363,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     case duckdb::LogicalOperatorType::LOGICAL_WINDOW:
         {
             auto lookup = VisitOperatorWindow(op.Cast<duckdb::LogicalWindow>(), this->parent_lookup, this->cte_columns, this->channel);
+            this->join_type_lookup.insert(lookup.begin(), lookup.end());
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_UNNEST:
+        {
+            auto lookup = VisitOperatorUnnest(op.Cast<duckdb::LogicalUnnest>(), this->parent_lookup, this->cte_columns, this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -1305,6 +1328,44 @@ TEST_CASE("ResolveNullable::With group by query") {
             { .binding = duckdb::ColumnBinding(1, 4), .nullable = {.from_field = true, .from_join = false} },
         };
 
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+}
+
+TEST_CASE("ResolveNullable::Builtin unnest function") {
+    SECTION("Expand list#1") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select 42::int as x, xys, unnest([1, 2, 3, 5, 7, 11]) from Foo");
+
+        // Note: list initializer([]) is a alias for list_value function, and is not operator.
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {schema}, expects);
+    }
+    SECTION("Expand list#2") {
+        std::string sql("select 42::int as x, unnest('[1, 2, 3, 5, 7]'::json::int[]) as x");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {}, expects);
+    }
+    SECTION("Result of generate_series") {
+        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("select null::int as x, xys, unnest(generate_series(1, 20, 3)) from Foo");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 2), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
         runResolveSelectListNullability(sql, {schema}, expects);
     }
 }

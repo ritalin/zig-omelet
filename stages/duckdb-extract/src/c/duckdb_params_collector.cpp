@@ -63,6 +63,10 @@ auto ParameterCollector::attachTypeHint(PositionalParam name, std::unique_ptr<du
     this->name_map.at(name).type_hint = std::move(type_hint);
 }
 
+auto ParameterCollector::putSampleValue(PositionalParam name, ExampleKind kind, const duckdb::Value & sample_value) -> void {
+    this->examples.insert({name, {.kind = kind, .value = sample_value} });
+}
+
 }
 
 #ifndef DISABLE_CATCH2_TEST

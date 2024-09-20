@@ -10,25 +10,33 @@
 namespace worker {
 
 struct ParamLookupEntry;
+struct ParamExample;
 
 using PositionalParam = std::string;
 using NamedParam = std::string;
 using ParamNameLookup = std::unordered_map<PositionalParam, ParamLookupEntry>;
+using ParamExampleLookup = std::unordered_map<PositionalParam, ParamExample>;
 
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 using BoundParamTypeHint = std::unordered_map<PositionalParam, duckdb::unique_ptr<duckdb::Expression>>;
 
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
+enum class ExampleKind {General, Path};
 
 struct ParamLookupEntry {
     std::string name;
     std::shared_ptr<duckdb::ParsedExpression> type_hint = nullptr;
 };
+struct ParamExample {
+    ExampleKind kind;
+    duckdb::Value value;
+};
 
 struct ParamCollectionResult {
     StatementType type;
     ParamNameLookup names;
+    ParamExampleLookup examples;
 };
 struct BoundResult {
     duckdb::BoundStatement stmt;

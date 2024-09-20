@@ -65,8 +65,17 @@ static auto bindParamTypeHint(duckdb::Binder& binder, const ParamNameLookup& nam
     return result;
 }
 
-auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names) -> BoundResult {
-    duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map{};
+auto bindTypeToStatement(
+    duckdb::ClientContext& context, 
+    duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, 
+    const ParamNameLookup& names, 
+    const ParamExampleLookup& examples) -> BoundResult 
+{
+    auto example_view = examples | std::views::transform([](const auto& pair) {
+        return std::make_pair(pair.first, duckdb::BoundParameterData(pair.second.value));
+    });
+
+    duckdb::case_insensitive_map_t<duckdb::BoundParameterData> parameter_map(example_view.begin(), example_view.end());
     duckdb::BoundParameterMap parameters(parameter_map);
     
     auto binder = duckdb::Binder::CreateBinder(context);
@@ -181,9 +190,9 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
             try {
                 this->conn.BeginTransaction();
 
-                auto bound_result = bindTypeToStatement(*this->conn.context, stmt->Copy(), walk_result.names);
+                auto bound_result = bindTypeToStatement(*this->conn.context, stmt->Copy(), walk_result.names, walk_result.examples);
 
-                param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints));
+                param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints), std::move(walk_result.examples));
                 auto channel = this->messageChannel("worker.parse");
                 column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.type, channel);
 

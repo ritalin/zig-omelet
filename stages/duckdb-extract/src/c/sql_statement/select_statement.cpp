@@ -194,7 +194,7 @@ static auto walkSelectListItem(ParameterCollector& collector, duckdb::unique_ptr
     }
 }
 
-static auto walkTableFunctionArg(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>&& arg, std::string&& param_name, uint32_t depth) -> duckdb::unique_ptr<duckdb::ParsedExpression> {
+static auto walkTableFunctionArg(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>&& arg, const std::string& param_name, uint32_t depth) -> duckdb::unique_ptr<duckdb::ParsedExpression> {
     switch (arg->expression_class) {
     case duckdb::ExpressionClass::CONSTANT:
         {
@@ -214,8 +214,10 @@ static auto walkTableFunctionArg(ParameterCollector& collector, duckdb::unique_p
     case duckdb::ExpressionClass::CAST:
         {
             auto& cast_arg = arg->Cast<duckdb::CastExpression>();
-            cast_arg.child = walkTableFunctionArg(collector, std::move(cast_arg.child), std::move(param_name), depth);
+            cast_arg.child = walkTableFunctionArg(collector, std::move(cast_arg.child), param_name, depth);
             cast_arg.alias = "";
+
+            collector.attachTypeHint(param_name, cast_arg.Copy());
 
             return arg;
         }

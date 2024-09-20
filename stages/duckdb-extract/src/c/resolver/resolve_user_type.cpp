@@ -123,7 +123,7 @@ static auto runResolveUserTypeInternal(const std::string& sql, const std::vector
     try {
         conn.BeginTransaction();
 
-        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {});
+        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
         auto channel = ZmqChannel::unitTestChannel();
         entry = resolveUserType(bound_result.stmt.plan, channel);
 

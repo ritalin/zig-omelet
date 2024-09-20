@@ -16,6 +16,7 @@ public:
     LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref): names(std::move(names_ref)), type_hints(std::move(type_hints_ref)) {}
 public:
     auto VisitResult() -> ParamResolveResult;
+    auto paramFromExample(const ParamExampleLookup& examples) -> void;
 protected:
 	auto VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 private:
@@ -62,6 +63,24 @@ auto LogicalParameterVisitor::hasAnyType(const PositionalParam& position, const 
     return hasAnyTypeInternal(this->param_types, position, type_name);
 }
 
+auto LogicalParameterVisitor::paramFromExample(const ParamExampleLookup& examples) -> void {
+    auto example_view = examples | std::views::transform([this](const auto& pair) {
+        auto positional = pair.first;
+        auto& param_type = this->type_hints.contains(positional) ? this->type_hints.at(positional)->return_type : pair.second.value.type();
+
+        ParamEntry entry{
+            .position = positional,
+            .name = this->names.at(positional).name,
+            .type_name = param_type.ToString(),
+            .sort_order = std::stoul(positional)
+        };
+
+        return std::pair(positional, entry);
+    });
+
+    this->parameters.insert(example_view.begin(), example_view.end());
+}
+
 auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     std::string type_name;
 
@@ -105,8 +124,14 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
     return nullptr;
 }
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints) -> ParamResolveResult {
+auto resolveParamType(
+    duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
+    ParamNameLookup&& name_lookup, 
+    BoundParamTypeHint&& type_hints, 
+    ParamExampleLookup&& examples) -> ParamResolveResult 
+{
     LogicalParameterVisitor visitor(std::move(name_lookup), std::move(type_hints));
+    visitor.paramFromExample(examples);
     visitor.VisitOperator(*op);
 
     return visitor.VisitResult();
@@ -218,7 +243,7 @@ static auto runResolveParamType(
     try {
         conn.BeginTransaction();
         walk_result = walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
-        bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names);
+        bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names, walk_result.examples);
         conn.Commit();
     }
     catch (...) {
@@ -226,7 +251,12 @@ static auto runResolveParamType(
         throw;
     }
 
-    auto [resolve_result, user_type_names, anon_types] = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints));
+    auto [resolve_result, user_type_names, anon_types] = resolveParamType(
+        bound_result.stmt.plan, 
+        std::move(walk_result.names), 
+        std::move(bound_result.type_hints),
+        std::move(walk_result.examples)
+    );
 
     parameter_size: {
         INFO("Parameter size");
@@ -452,6 +482,23 @@ TEST_CASE("ResolveParam::named parameter") {
         AnonTypeExpects anon_types{};
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
+    }
+}
+
+TEST_CASE("ResolveParam::table function") {
+    SECTION("range") {
+        std::string sql(R"#(
+            select id from range(0, "$stop" := 20::bigint, "$step" := 3) t(id)
+        )#");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("stop")},
+            {"2", ParamLookupEntry("step")}
+        };
+        ParamTypeLookup bound_types{{"1","BIGINT"}, {"2","INTEGER"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
     }
 }
 

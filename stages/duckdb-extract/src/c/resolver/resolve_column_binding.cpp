@@ -219,7 +219,7 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
 
-        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {});
+        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
 
         NullableLookup field_lookup;
         

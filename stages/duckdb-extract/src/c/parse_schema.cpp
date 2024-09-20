@@ -32,7 +32,7 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
     try {
         conn.BeginTransaction();
         extract: {
-            auto bound_result = bindTypeToStatement(*conn.context, std::move(stmt->Copy()), {});
+            auto bound_result = bindTypeToStatement(*conn.context, std::move(stmt->Copy()), {}, {});
 
             entry = resolveUserType(bound_result.stmt.plan, channel);
         }

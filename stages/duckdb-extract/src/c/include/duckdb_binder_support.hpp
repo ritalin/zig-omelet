@@ -79,9 +79,9 @@ auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
 auto swapMapEntry(const std::unordered_map<std::string, ParamLookupEntry>& map) -> std::unordered_map<std::string, ParamLookupEntry>;
 auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult;
 
-auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names) -> BoundResult;
+auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names, const ParamExampleLookup& examples) -> BoundResult;
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints) -> ParamResolveResult;
+auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints, ParamExampleLookup&& examples) -> ParamResolveResult;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> ColumnResolveResult;
 auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> NullableLookup;
 auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeEntry>;

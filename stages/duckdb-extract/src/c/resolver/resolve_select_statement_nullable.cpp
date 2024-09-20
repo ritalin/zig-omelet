@@ -594,7 +594,7 @@ static auto runResolveSelectListNullability(const std::string& sql, std::vector<
         try {
             conn.BeginTransaction();
 
-            auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {});
+            auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
             auto channel = ZmqChannel::unitTestChannel();
             join_type_result = resolveSelectListNullability(bound_result.stmt.plan, channel);
 

@@ -194,7 +194,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 
                 param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints), std::move(walk_result.examples));
                 auto channel = this->messageChannel("worker.parse");
-                column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.type, channel);
+                column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.type, this->conn, channel);
 
                 this->conn.Commit();
             }

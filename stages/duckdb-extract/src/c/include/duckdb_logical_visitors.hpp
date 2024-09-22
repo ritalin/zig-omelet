@@ -12,8 +12,8 @@ public:
     using Rel = duckdb::idx_t;
     using ConditionRels = std::map<NullableLookup::Column, NullableLookup::Column>;
 public:
-     JoinTypeVisitor(NullableLookup& lookup, NullableLookup& parent_lookup_ref, ZmqChannel& channel): 
-        channel(channel), join_type_lookup(lookup), parent_lookup(parent_lookup_ref)
+     JoinTypeVisitor(NullableLookup& lookup, NullableLookup& parent_lookup_ref, SampleNullableCache& sample_cache_ref, duckdb::Connection& conn_ref, ZmqChannel& channel): 
+        channel(channel), conn(conn_ref), join_type_lookup(lookup), parent_lookup(parent_lookup_ref), sample_cache(sample_cache_ref)
     {
     }
 public:
@@ -28,8 +28,10 @@ private:
     auto VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, const ConditionRels& rels) -> NullableLookup;
 private:
     ZmqChannel& channel;
+    duckdb::Connection& conn;
     NullableLookup& join_type_lookup;
     NullableLookup& parent_lookup;
+    SampleNullableCache& sample_cache;
 };
 
 class ColumnNameVisitor: public duckdb::LogicalOperatorVisitor {
@@ -45,9 +47,12 @@ private:
 
 class ColumnExpressionVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-    ColumnExpressionVisitor(NullableLookup& field_nullabilities): nullabilities(field_nullabilities) {}
+    ColumnExpressionVisitor(NullableLookup& field_nullabilities, SampleNullableCache& sample_cache_ref): 
+        nullabilities(field_nullabilities), sample_cache(sample_cache_ref)
+    {
+    }
 public:
-    static auto Resolve(duckdb::unique_ptr<duckdb::Expression> &expr, NullableLookup& nullabilitiess) -> NullableLookup::Nullability;
+    static auto Resolve(duckdb::unique_ptr<duckdb::Expression> &expr, NullableLookup& nullabilitiess, SampleNullableCache& sample_cache) -> NullableLookup::Nullability;
 protected:
     auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
     auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
@@ -66,6 +71,7 @@ private:
 private:
     NullableLookup& nullabilities;
     std::stack<bool> nullable_stack;
+    SampleNullableCache& sample_cache;
 };
 
 }

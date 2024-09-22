@@ -13,6 +13,7 @@
 #include "duckdb_nullable_lookup.hpp"
 
 #include <iostream>
+#include <numeric>
 
 namespace worker {
 
@@ -24,10 +25,44 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundConstantExpression &expr
     return nullptr;
 }
 
+static std::unordered_set<std::string> child_extractor{"struct_extract"};
+
+static auto extractFieldPath(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& args) -> std::string {
+    auto name_view = args | std::views::transform([](duckdb::unique_ptr<duckdb::Expression>& arg) {
+        if (arg->expression_class == duckdb::ExpressionClass::BOUND_CONSTANT) {
+            return arg->Cast<duckdb::BoundConstantExpression>().value.ToString();
+        }
+        else {
+            return arg->alias;
+        }
+    });
+
+    return std::accumulate(name_view.begin()+1, name_view.end(), name_view.front(), [](auto acc, const auto p) {
+        return std::format("{}.{}", acc, p);
+    });
+}
+
+static auto extractFieldNullable(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& args, SampleNullableCache& cache) -> bool {
+    if (args.size() == 0) return true;
+    if (args[0]->expression_class != duckdb::ExpressionClass::BOUND_COLUMN_REF) return true;
+
+    auto table_index = args[0]->Cast<duckdb::BoundColumnRefExpression>().binding.table_index;
+    auto& sample_map = cache[table_index];
+
+    auto path = extractFieldPath(args);
+    return sample_map.contains(path) ? sample_map[path].from_field : true;
+}
+
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundFunctionExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     bool nullable = true;
     if (expr.is_operator) {
         nullable = this->EvalNullability(expr.children, true);
+    }
+    else {
+        if (child_extractor.contains(expr.function.name)) {
+            // apply `unnest` function
+            nullable = extractFieldNullable(expr.children, this->sample_cache);
+        }
     }
 
     this->nullable_stack.push(nullable);
@@ -51,6 +86,16 @@ auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundWindowExpression &expr, 
 
 auto ColumnExpressionVisitor::VisitReplace(duckdb::BoundUnnestExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     bool nullable = true;
+
+    if (expr.child->expression_class == duckdb::ExpressionClass::BOUND_COLUMN_REF) {
+        auto& child_expr = expr.child->Cast<duckdb::BoundColumnRefExpression>();
+        if (child_expr.return_type.id() == duckdb::LogicalTypeId::LIST) {
+            auto& cache = this->sample_cache[child_expr.binding.table_index];
+            auto name = child_expr.alias + ".";
+
+            nullable = cache.contains(name) ? cache[name].from_field : true;
+        }
+    }
     this->nullable_stack.push(nullable);
 
     return duckdb::unique_ptr<duckdb::Expression>(new DummyExpression());
@@ -159,8 +204,12 @@ auto ColumnExpressionVisitor::EvalNullability(duckdb::vector<duckdb::unique_ptr<
     return (! terminate_value);
 }
 
-auto ColumnExpressionVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression> &expr, NullableLookup& nullabilities) -> NullableLookup::Nullability {
-    ColumnExpressionVisitor visitor(nullabilities);
+auto ColumnExpressionVisitor::Resolve(
+    duckdb::unique_ptr<duckdb::Expression> &expr, 
+    NullableLookup& nullabilities, 
+    SampleNullableCache& sample_cache) -> NullableLookup::Nullability 
+{
+    ColumnExpressionVisitor visitor(nullabilities, sample_cache);
 
     duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> exprs;
     {
@@ -222,10 +271,11 @@ auto runCreateColumnBindingLookup(const std::string sql, const std::vector<std::
         auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
 
         NullableLookup field_lookup;
+        SampleNullableCache sample_cache{};
         
         for (duckdb::idx_t i = 0; auto& expr: bound_result.stmt.plan->expressions) {
             NullableLookup::Column binding{ .table_index = 1, .column_index = i++ };
-            results[binding] = ColumnExpressionVisitor::Resolve(expr, field_lookup);
+            results[binding] = ColumnExpressionVisitor::Resolve(expr, field_lookup, sample_cache);
         }
         conn.Commit();
     }

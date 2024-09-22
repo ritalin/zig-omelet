@@ -126,10 +126,10 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     };
 }
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, ZmqChannel& channel) -> ColumnResolveResult {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {
     if (stmt_type != StatementType::Select) return {};
 
-    auto join_types = resolveSelectListNullability(op, channel);
+    auto join_types = resolveSelectListNullability(op, conn, channel);
 
     return resolveColumnTypeInternal(op, join_types, channel);
 }
@@ -215,7 +215,7 @@ static auto runBindStatement(
         auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
 
         auto channel = ZmqChannel::unitTestChannel();
-        column_result = resolveColumnType(bound_result.stmt.plan, stmt_type, channel);
+        column_result = resolveColumnType(bound_result.stmt.plan, stmt_type, conn, channel);
         conn.Commit();
     }
     catch (...) {
@@ -787,6 +787,12 @@ TEST_CASE("SelectList::subquery") {
         std::vector<UserTypeEntry> anon_types{};
 
         runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
+    }
+}
+
+TEST_CASE("SelectList::table function") {
+    SECTION("") {
+        
     }
 }
 

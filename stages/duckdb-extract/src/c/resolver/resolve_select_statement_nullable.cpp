@@ -1625,6 +1625,46 @@ TEST_CASE("ResolveNullable::table function") {
     
         runResolveSelectListNullability(sql, {}, expects);
     }
+    SECTION("read_json#6 from CTE#1") {
+        std::string sql(R"#(
+            with source as (
+                select *
+                from read_json("$dataset" := '_dataset-examples/struct_sample_2.json') t(j)
+            )
+            select unnest(s.j.data_1, recursive := true), unnest(s.j.data_2)
+            from source s
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 3), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 4), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {}, expects);
+    }
+    SECTION("read_json#6 from CTE#2") {
+        std::string sql(R"#(
+            with source as (
+                select unnest(j)
+                from read_json("$dataset" := '_dataset-examples/struct_sample_2.json') t(j)
+            )
+            select unnest(s.data_1, recursive := true), unnest(s.data_2)
+            from source s
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 3), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(7, 4), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {}, expects);
+    }
     SECTION("range#1") {
         std::string sql(R"#(
             select u.*

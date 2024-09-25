@@ -7,7 +7,7 @@
 #include "duckdb_nullable_lookup.hpp"
 
 namespace worker {
-    inline std::ostream& operator << (std::ostream& os, NullableLookup::Column const& v) {
+    inline std::ostream& operator << (std::ostream& os, ColumnNullableLookup::Column const& v) {
         os << std::format("({}, {})", v.table_index, v.column_index);
         return os;
     }

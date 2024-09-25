@@ -30,7 +30,7 @@ auto ColumnNameVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) ->
     return std::move(visitor.column_name);
 }
 
-auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const NullableLookup& join_lookup, ZmqChannel& channel) -> ColumnResolveResult {
+auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ColumnNullableLookup& join_lookup, ZmqChannel& channel) -> ColumnResolveResult {
     std::vector<ColumnEntry> columns;
     columns.reserve(op->expressions.size());
 
@@ -93,7 +93,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                     }
                 }
                 columns: {
-                    NullableLookup::Column binding{
+                    ColumnNullableLookup::Column binding{
                         .table_index = op_projection.table_index, 
                         .column_index = i,
                     };

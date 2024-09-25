@@ -82,9 +82,9 @@ auto bindTypeToStatement(
 
     binder->SetCanContainNulls(true);
     binder->parameters = &parameters;
-
+    
     return {
-        .stmt = std::move(binder->Bind(*stmt)),
+        .stmt = binder->Bind(*stmt),
         .type_hints = bindParamTypeHint(*binder, names),
     };
 }

@@ -20,9 +20,24 @@ using ParamExampleLookup = std::unordered_map<PositionalParam, ParamExample>;
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 using BoundParamTypeHint = std::unordered_map<PositionalParam, duckdb::unique_ptr<duckdb::Expression>>;
 
-using SamplePath = std::string;
-using SampleNullabilityMap = std::map<SamplePath, NullableLookup::Nullability>;
-using SampleNullableCache = std::unordered_map<duckdb::idx_t, SampleNullabilityMap>;
+struct Nullability {
+    bool from_field;
+    bool from_join;
+public:
+    auto shouldNulls() -> bool { return this->from_join || this->from_field; }
+};
+
+using ColumnNullableLookup = GenericNullableLookup<Nullability>;
+
+struct SampleNullabilityNode {
+    std::string name;
+    Nullability nullable;
+    std::vector<std::shared_ptr<SampleNullabilityNode>> children;
+public:
+    auto findByName(const std::string& name) -> std::shared_ptr<SampleNullabilityNode>;
+};
+
+using SampleNullableCache = GenericNullableLookup<std::shared_ptr<SampleNullabilityNode>>;
 
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
@@ -87,7 +102,7 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints, ParamExampleLookup&& examples) -> ParamResolveResult;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult;
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, ZmqChannel& channel) -> NullableLookup;
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnNullableLookup;
 auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeEntry>;
 
 }

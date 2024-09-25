@@ -46,10 +46,27 @@ static auto findSampleNode(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>
     if (cache.contains(binding_to.table_index, binding_to.column_index)) {
         return cache[binding_to];
     }
-    if (args[0]->expression_class != duckdb::ExpressionClass::BOUND_COLUMN_REF) return nullptr;
-    
-    auto binding_from = ColumnNullableLookup::Column::from(args[0]->Cast<duckdb::BoundColumnRefExpression>().binding);
+    if (args.size() < 2) return nullptr;
 
+    auto resolve_lhs = [&]() -> std::shared_ptr<SampleNullabilityNode> {
+        switch (args[0]->expression_class) {
+        case duckdb::ExpressionClass::BOUND_FUNCTION:
+            {
+                return findSampleNode(args[0]->Cast<duckdb::BoundFunctionExpression>().children, binding_to, cache);
+            }
+        case duckdb::ExpressionClass::BOUND_COLUMN_REF:
+            {
+                auto binding_from = ColumnNullableLookup::Column::from(args[0]->Cast<duckdb::BoundColumnRefExpression>().binding);
+                return cache[binding_from];
+            }
+        default: 
+            return nullptr;
+        }
+    };
+
+    auto node = resolve_lhs();
+    assert(node != nullptr);
+    
     std::string name;
     switch (args[1]->expression_class) {
     case duckdb::ExpressionClass::BOUND_CONSTANT:
@@ -59,18 +76,13 @@ static auto findSampleNode(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>
         return nullptr;
     }
 
-    auto node = cache[binding_from];
-    assert(node != nullptr);
-        
     node = node->findByName(name);
     cache[binding_to] = node;
 
     return node;
 }
 
-static auto extractFieldNullable(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& args, ColumnNullableLookup::Column binding_to, SampleNullableCache& cache) -> bool {
-    if (args.size() < 2) return true;
-    
+static auto extractFieldNullable(duckdb::vector<duckdb::unique_ptr<duckdb::Expression>>& args, ColumnNullableLookup::Column binding_to, SampleNullableCache& cache) -> bool {    
     auto node = findSampleNode(args, binding_to, cache);
     if (!node) return true;
 

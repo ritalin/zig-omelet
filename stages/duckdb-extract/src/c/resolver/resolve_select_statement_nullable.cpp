@@ -1580,7 +1580,7 @@ TEST_CASE("ResolveNullable::table function") {
             from (
                 select unnest(j)
                 from read_json("$dataset" := '_dataset-examples/struct_sample_2.json') t(j)
-            )        
+            )
         )#");
 
         std::vector<ColumnBindingPair> expects{
@@ -1593,7 +1593,21 @@ TEST_CASE("ResolveNullable::table function") {
 
         runResolveSelectListNullability(sql, {}, expects);
     }
-    SECTION("read_json#4 list") {
+    SECTION("read_json#3 (derived table/unnest descendant directly)") {
+        std::string sql(R"#(
+            select 
+                unnest(j.data_1.v)
+            from read_json("$dataset" := '_dataset-examples/struct_sample_2.json') t(j)
+        )#");
+
+        std::vector<ColumnBindingPair> expects{
+            {.binding = duckdb::ColumnBinding(1, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(1, 1), .nullable = {.from_field = true, .from_join = false}},
+        };
+    
+        runResolveSelectListNullability(sql, {}, expects);
+    }
+    SECTION("read_json#5 list") {
         std::string sql(R"#(
             select 
                 k, v1, unnest(v1), v2, v3, unnest(v3)

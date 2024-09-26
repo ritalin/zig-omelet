@@ -483,6 +483,21 @@ TEST_CASE("ResolveParam::named parameter") {
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
     }
+    SECTION("named parameter in values") {
+        std::string sql("values ($id_1::int, $name_1::text, $age_1::int), ($id_2::int, $name_2::text, $age_2::int), ");
+        ParamNameLookup lookup{
+            {"1", ParamLookupEntry("id_1")}, {"2", ParamLookupEntry("name_1")}, {"3", ParamLookupEntry("age_1")},
+            {"4", ParamLookupEntry("id_2")}, {"5", ParamLookupEntry("name_2")}, {"6", ParamLookupEntry("age_2")}, 
+        };
+        ParamTypeLookup bound_types{
+            {"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}, 
+            {"4","INTEGER"}, {"5", "VARCHAR"}, {"6","INTEGER"}, 
+        };
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{};
+
+        runResolveParamType(sql, {}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
 TEST_CASE("ResolveParam::table function") {

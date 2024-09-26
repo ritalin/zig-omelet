@@ -1159,6 +1159,21 @@ TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
     }
 }
 
+TEST_CASE("SelectSQL::values clause") {
+    SECTION("default#1") {
+        std::string sql("values ($id_1::int, $name_1::text, $age_1::int), ($id_2::int, $name_2::text, $age_2::int), ");
+
+        std::string expected("SELECT * FROM (VALUES (CAST($1 AS INTEGER), CAST($2 AS VARCHAR), CAST($3 AS INTEGER)), (CAST($4 AS INTEGER), CAST($5 AS VARCHAR), CAST($6 AS INTEGER))) AS valueslist");
+            ParamNameLookup lookup{
+                {"1", ParamLookupEntry("id_1")}, {"2", ParamLookupEntry("name_1")}, {"3", ParamLookupEntry("age_1")}, 
+                {"4", ParamLookupEntry("id_2")}, {"5", ParamLookupEntry("name_2")}, {"6", ParamLookupEntry("age_2")}, 
+            };
+            ParamExampleLookup examples{};
+            
+            runTest(sql, expected, lookup, examples);
+    }
+}
+
 TEST_CASE("SelectSQL::CTE") {
     SECTION("default#1") {
         std::string sql(R"#(

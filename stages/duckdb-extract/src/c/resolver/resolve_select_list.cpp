@@ -59,15 +59,18 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
             std::unordered_multiset<std::string> name_dupe{};
 
             for (size_t i = 0; auto& expr: op->expressions) {
+                UserTypeKind type_kind;
                 std::string type_name;
                 anon_types: {
                     if (isEnumUserType(expr->return_type)) {
                         auto user_type_name = userTypeName(expr->return_type);
                         if (user_type_name != "") {
+                            type_kind = UserTypeKind::User;
                             type_name = user_type_name;
                             user_type_names.push_back(user_type_name);
                         }
                         else {
+                            type_kind = UserTypeKind::Enum;
                             type_name = std::format("SelList::Enum#{}", *index++);
                             anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
                         }
@@ -75,21 +78,25 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                     else if (isArrayUserType(expr->return_type)) {
                         auto user_type_name = userTypeName(expr->return_type);
                         if (user_type_name != "") {
+                            type_kind = UserTypeKind::User;
                             type_name = user_type_name;
                             user_type_names.push_back(user_type_name);
                         }
                         else {
+                            type_kind = UserTypeKind::Array;
                             type_name = std::format("SelList::Array#{}", *index++);
                             anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names, anon_types, index));
                         }
                     }
                     else if (isAliasUserType(expr->return_type)) {
+                        type_kind = UserTypeKind::User;
                         type_name = userTypeName(expr->return_type);
                         if (type_name != "") {
                             user_type_names.push_back(type_name);
                         }
                     }
                     else {
+                        type_kind = UserTypeKind::Primitive;
                         type_name = expr->return_type.ToString();
                     }
                 }
@@ -105,6 +112,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
 
                     auto entry = ColumnEntry{
                         .field_name = dupe_count == 0 ? field_name : std::format("{}_{}", field_name, dupe_count),
+                        .type_kind = type_kind,
                         .field_type = type_name,
                         .nullable = join_lookup[binding].shouldNulls(),
                     };
@@ -234,6 +242,10 @@ static auto runBindStatement(
                 INFO("field name");
                 CHECK_THAT(entry.field_name, Equals(expects[i].field_name));
             }
+            field_category: {
+                INFO("field type kind");
+                CHECK(magic_enum::enum_name(entry.type_kind) == magic_enum::enum_name(expects[i].type_kind));
+            }
             field_type: {
                 INFO("field type");
                 CHECK_THAT(entry.field_type, Equals(expects[i].field_type));
@@ -292,9 +304,9 @@ TEST_CASE("SelectList::basic") {
     SECTION("basic") {
         std::string sql("select 123 as a, 98765432100 as b, 'abc' as c");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "b", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "c", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "b", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "c", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -304,9 +316,9 @@ TEST_CASE("SelectList::basic") {
     SECTION("without alias") {
         std::string sql("select 123, 98765432100, 'abc'");
         std::vector<ColumnEntry> expects{
-            {.field_name = "123", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "98765432100", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "'abc'", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "123", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "98765432100", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "'abc'", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -316,9 +328,9 @@ TEST_CASE("SelectList::basic") {
     SECTION("with null#1") {
         std::string sql("select 123 as a, 98765432100 as b, null::date as c");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "b", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "c", .field_type = "DATE", .nullable = true},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "b", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "c", .type_kind = UserTypeKind::Primitive, .field_type = "DATE", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -328,9 +340,9 @@ TEST_CASE("SelectList::basic") {
     SECTION("with null#2") {
         std::string sql("select 123 + null as a, 98765432100 as b, 'abc' || null as c");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "b", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "c", .field_type = R"#("NULL")#", .nullable = true},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "b", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "c", .type_kind = UserTypeKind::Primitive, .field_type = R"#("NULL")#", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -340,9 +352,9 @@ TEST_CASE("SelectList::basic") {
     SECTION("with null#3") {
         std::string sql("select (null) is not false as a, null is null as b, null is not null as c");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "BOOLEAN", .nullable = false},
-            {.field_name = "b", .field_type = "BOOLEAN", .nullable = false},
-            {.field_name = "c", .field_type = "BOOLEAN", .nullable = false},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "BOOLEAN", .nullable = false},
+            {.field_name = "b", .type_kind = UserTypeKind::Primitive, .field_type = "BOOLEAN", .nullable = false},
+            {.field_name = "c", .type_kind = UserTypeKind::Primitive, .field_type = "BOOLEAN", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -353,8 +365,8 @@ TEST_CASE("SelectList::basic") {
         auto sql = std::string(R"#(SELECT CAST($1 AS INTEGER) AS a, CAST($2 AS VARCHAR) AS "CAST($v AS VARCHAR)")#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "CAST($v AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "CAST($v AS VARCHAR)", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -367,7 +379,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with coalesce#1") {
         std::string sql("select coalesce(null, null, 10) as a");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -377,7 +389,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with coalesce#2") {
         std::string sql("select coalesce(null, null, null)::VARCHAR as a");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -387,7 +399,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with coalesce#3") {
         std::string sql("select coalesce(null, 42, null) as a");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -397,7 +409,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with unary op") {
         std::string sql("select -42 as a");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -407,7 +419,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with unary op with null") {
         std::string sql("select -(null)::int as a");
         std::vector<ColumnEntry> expects{
-            {.field_name = "a", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "a", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -417,7 +429,7 @@ TEST_CASE("SelectList::has expression") {
     SECTION("with scalar function call") {
         std::string sql("select concat('hello ', 'world ') as fn");
         std::vector<ColumnEntry> expects{
-            {.field_name = "fn", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "fn", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -434,7 +446,7 @@ TEST_CASE("SelectList::case expression") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xyz", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -448,7 +460,7 @@ TEST_CASE("SelectList::case expression") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "xyz", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xyz", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -462,7 +474,7 @@ TEST_CASE("SelectList::case expression") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "xyz", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -476,7 +488,7 @@ TEST_CASE("SelectList::case expression") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "xyz", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "xyz", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -491,10 +503,10 @@ TEST_CASE("SelectList::projection") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -506,8 +518,8 @@ TEST_CASE("SelectList::projection") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -519,9 +531,9 @@ TEST_CASE("SelectList::projection") {
         std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -533,9 +545,9 @@ TEST_CASE("SelectList::projection") {
         std::string sql("select kind, xys, id from Foo order by kind, id");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -556,9 +568,9 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -576,9 +588,9 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -596,12 +608,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -619,9 +631,9 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -639,12 +651,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -662,12 +674,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -685,12 +697,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -708,12 +720,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -731,12 +743,12 @@ TEST_CASE("SelectList::has table join") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "kind", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
-            {.field_name = "id_1", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "value", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "kind", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id_1", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "value", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -760,8 +772,8 @@ TEST_CASE("SelectList::subquery") {
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "v", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "v", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -779,9 +791,9 @@ TEST_CASE("SelectList::subquery") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "CAST($1 AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},        
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "CAST($1 AS VARCHAR)", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},        
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -802,7 +814,7 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string sql("select $vis::Visibility as vis");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "vis", .field_type = "Visibility", .nullable = true},
+            {.field_name = "vis", .type_kind = UserTypeKind::User, .field_type = "Visibility", .nullable = true},
         };
         std::vector<std::string> user_type_names{"Visibility"};
         std::vector<UserTypeEntry> anon_types{};
@@ -814,7 +826,7 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string sql("select $vis::ENUM('hide','visible') as vis");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "vis", .field_type = "SelList::Enum#1", .nullable = true},
+            {.field_name = "vis", .type_kind = UserTypeKind::Enum, .field_type = "SelList::Enum#1", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
@@ -829,8 +841,8 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string sql("select vis, id from Control");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "vis", .field_type = "Visibility", .nullable = false},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "vis", .type_kind = UserTypeKind::User, .field_type = "Visibility", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{"Visibility"};
         std::vector<UserTypeEntry> anon_types{};
@@ -844,8 +856,8 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string sql("select vis, id from Control");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "vis", .field_type = "Visibility2", .nullable = false},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "vis", .type_kind = UserTypeKind::User, .field_type = "Visibility2", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{"Visibility2"};
         std::vector<UserTypeEntry> anon_types{};
@@ -853,6 +865,25 @@ TEST_CASE("SelectList::user type (ENUM)") {
         runBindStatement(sql, {schema_1, schema_2, schema_3}, expects, user_type_names, anon_types);
     }
 }
+
+// TEST_CASE("SelectList::user type (STRUCT)") {
+//     SECTION("predefined struct") {
+//         std::string schema("create type Family as Struct (key text, value int)");
+//         std::string sql("select {'key': 'dad', 'value': 42}::Family as family");
+
+//         std::vector<ColumnEntry> expects{
+//             {.field_name = "family", .field_type = "Family", .nullable = false},
+//         };
+//         std::vector<std::string> user_type_names{"Family"};
+//     }
+//     SECTION("anonymous struct") {
+//         std::string sql("select {'key': 'dad', 'value': 42}");
+
+//     }
+//     SECTION("nested anonymous struct [x2]") {
+
+//     }
+// }
 
 TEST_CASE("SelectList::user type (ALIAS)") {
 
@@ -863,8 +894,8 @@ TEST_CASE("SelectList::user type (ALIAS)") {
 
         std::vector<ColumnEntry> expects{
             // {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "desc_text", .field_type = "Description", .nullable = true},
-            {.field_name = "remarks", .field_type = "VARCHAR", .nullable = true},
+            {.field_name = "desc_text", .type_kind = UserTypeKind::User, .field_type = "Description", .nullable = true},
+            {.field_name = "remarks", .type_kind = UserTypeKind::Primitive, .field_type = "VARCHAR", .nullable = true},
         };
         std::vector<std::string> user_type_names{"Description"};
         std::vector<UserTypeEntry> anon_types{};
@@ -879,8 +910,8 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::string sql("select id, numbers from Toto");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "numbers", .field_type = "SelList::Array#1", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+            {.field_name = "numbers", .type_kind = UserTypeKind::Array, .field_type = "SelList::Array#1", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
@@ -897,8 +928,8 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::string sql("select child_visibles, id from Element");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "child_visibles", .type_kind = UserTypeKind::Array, .field_type = "SelList::Array#1", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{"Visibility"};
         std::vector<UserTypeEntry> anon_types{
@@ -915,8 +946,8 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::string sql("select child_visibles, id from Element");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "child_visibles", .field_type = "SelList::Array#1", .nullable = false},
-            {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+            {.field_name = "child_visibles", .type_kind = UserTypeKind::Array, .field_type = "SelList::Array#1", .nullable = false},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
@@ -941,8 +972,8 @@ TEST_CASE("SelectList::materialized CTE") {
     )#");
 
     std::vector<ColumnEntry> expects{
-        {.field_name = "xys", .field_type = "INTEGER", .nullable = true},
-        {.field_name = "id", .field_type = "INTEGER", .nullable = false},
+        {.field_name = "xys", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+        {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
     };
     std::vector<std::string> user_type_names{};
     std::vector<UserTypeEntry> anon_types{};
@@ -962,8 +993,8 @@ TEST_CASE("SelectList::Recursive CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "k", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "n", .field_type = "BIGINT", .nullable = false},
+            {.field_name = "k", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "n", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -987,10 +1018,10 @@ TEST_CASE("SelectList::Recursive CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "n", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "h", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "k", .field_type = "DATE", .nullable = true},
-            {.field_name = "m", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "n", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "h", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "k", .type_kind = UserTypeKind::Primitive, .field_type = "DATE", .nullable = true},
+            {.field_name = "m", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1014,8 +1045,8 @@ TEST_CASE("SelectList::Recursive CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "h", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "m", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "h", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "m", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1036,8 +1067,8 @@ TEST_CASE("SelectList::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "k", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "n", .field_type = "BIGINT", .nullable = false},
+            {.field_name = "k", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "n", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1061,10 +1092,10 @@ TEST_CASE("SelectList::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "n", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "h", .field_type = "INTEGER", .nullable = true},
-            {.field_name = "k", .field_type = "DATE", .nullable = true},
-            {.field_name = "m", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "n", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "h", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
+            {.field_name = "k", .type_kind = UserTypeKind::Primitive, .field_type = "DATE", .nullable = true},
+            {.field_name = "m", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1088,8 +1119,8 @@ TEST_CASE("SelectList::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "h", .field_type = "BIGINT", .nullable = false},
-            {.field_name = "m", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "h", .type_kind = UserTypeKind::Primitive, .field_type = "BIGINT", .nullable = false},
+            {.field_name = "m", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1109,7 +1140,7 @@ TEST_CASE("SelectList::combining operation") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1126,7 +1157,7 @@ TEST_CASE("SelectList::combining operation") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};
@@ -1143,7 +1174,7 @@ TEST_CASE("SelectList::combining operation") {
         )#");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "id", .field_type = "INTEGER", .nullable = true},
+            {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{};

@@ -86,6 +86,7 @@ auto LogicalParameterVisitor::paramFromExample(const ParamExampleLookup& example
 }
 
 auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    TypeCategory category;
     std::string type_name;
 
     auto& ret_type = this->type_hints.contains(expr.identifier) ? type_hints.at(expr.identifier)->return_type : expr.return_type;
@@ -93,10 +94,12 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
     if (isEnumUserType(ret_type)) {
         type_name = userTypeName(ret_type);
         if (type_name != "") {
+            category = TypeCategory::User;
             this->user_type_names.push_back(type_name);
         }
         else {
             // process as anonymous user type
+            category = TypeCategory::Anonymous;
             type_name = std::format("Param::{}#{}", magic_enum::enum_name(UserTypeKind::Enum), expr.identifier);
             this->anon_types.push_back(pickEnumUserType(ret_type, type_name));
         }
@@ -106,6 +109,7 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
             this->channel.warn(std::format("Unsupported placeholder type: {}", magic_enum::enum_name(ret_type.id())));
         }
 
+        category = TypeCategory::Primitive;
         type_name = ret_type.ToString();
     }
     
@@ -113,6 +117,7 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
         this->parameters[expr.identifier] = ParamEntry{
             .position = expr.identifier,
             .name = this->names.at(expr.identifier).name,
+            .category = category,
             .type_name = type_name,
             .sort_order = std::stoul(expr.identifier)
         };
@@ -159,7 +164,12 @@ auto resolveParamType(
 using namespace worker;
 using namespace Catch::Matchers;
 
-using ParamTypeLookup = std::unordered_map<NamedParam, std::string>;
+struct ExpectParam {
+    TypeCategory category;
+    std::string type_name;
+};
+
+using ExpectParamLookup = std::unordered_map<NamedParam, ExpectParam>;
 using UserTypeExpects = std::vector<std::string>;
 using AnonTypeExpects = std::vector<UserTypeEntry>;
 
@@ -221,8 +231,8 @@ static auto expectAnonymousUserType(const UserTypeEntry& actual, const UserTypeE
 
 static auto runResolveParamType(
     const std::string& sql, const std::vector<std::string>& schemas, 
-    const ParamNameLookup& name_lookup, const ParamTypeLookup& param_types, 
-    UserTypeExpects user_type_expects, AnonTypeExpects anon_type_expects) -> void 
+    const ParamNameLookup& expect_name_lookup, const ExpectParamLookup& expect_param_types, 
+    UserTypeExpects expect_user_types, AnonTypeExpects expect_anon_types) -> void 
 {
     auto db = Database();
     auto conn = db.connect();
@@ -269,21 +279,24 @@ static auto runResolveParamType(
 
     parameter_size: {
         INFO("Parameter size");
-        REQUIRE(resolve_result.size() == name_lookup.size());
+        REQUIRE(resolve_result.size() == expect_name_lookup.size());
     }
     parameter_entries: {
         for (int i = 0; auto& entry: resolve_result) {
             has_param: {
                 INFO(std::format("valid named parameter#{}", i+1));
-                REQUIRE(name_lookup.contains(entry.position));
-                REQUIRE_THAT(entry.name, Equals(name_lookup.at(entry.position).name));
+                REQUIRE(expect_name_lookup.contains(entry.position));
+                REQUIRE_THAT(entry.name, Equals(expect_name_lookup.at(entry.position).name));
             }
-
-            if (param_types.contains(entry.position)) {
+            type_param_kind: {
+                INFO(std::format("valid parameter type kind#{} (has type)", i+1));
+                REQUIRE(magic_enum::enum_name(entry.category) == magic_enum::enum_name(expect_param_types.at(entry.position).category));
+            }
+            if (expect_param_types.contains(entry.position)) {
                 with_type_param: {
                     INFO(std::format("valid parameter type#{} (has type)", i+1));
-                    REQUIRE(param_types.contains(entry.position));
-                    REQUIRE_THAT(entry.type_name.value(), Equals(param_types.at(entry.position)));
+                    REQUIRE(expect_param_types.contains(entry.position));
+                    REQUIRE_THAT(entry.type_name.value(), Equals(expect_param_types.at(entry.position).type_name));
                 }
             }
             else {
@@ -298,10 +311,10 @@ static auto runResolveParamType(
     user_type_entries: {
         user_type_size: {
             INFO("User type size (predefined)");
-            REQUIRE(user_type_names.size() == user_type_expects.size());
+            REQUIRE(user_type_names.size() == expect_user_types.size());
         }
 
-        std::unordered_set<std::string> lookup(user_type_expects.begin(), user_type_expects.end());
+        std::unordered_set<std::string> lookup(expect_user_types.begin(), expect_user_types.end());
 
         for (int i = 0; auto& name: user_type_names) {
             has_user_type: {
@@ -314,10 +327,10 @@ static auto runResolveParamType(
     anonymous_entries: {
         anonymous_type_size: {
             INFO("User type size (anonymous)");
-            REQUIRE(anon_types.size() == anon_type_expects.size());
+            REQUIRE(anon_types.size() == expect_anon_types.size());
         }
 
-        auto view = anon_type_expects | std::views::transform([](auto x) {
+        auto view = expect_anon_types | std::views::transform([](auto x) {
             return std::pair<std::string, UserTypeEntry>(x.name, x);
         });
         std::unordered_map<std::string, UserTypeEntry> lookup(view.begin(), view.end());
@@ -337,7 +350,7 @@ TEST_CASE("ResolveParam::without parameters") {
     std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
     std::string sql("select * from Foo");
     ParamNameLookup lookup{};
-    ParamTypeLookup bound_types{};
+    ExpectParamLookup bound_types{};
     UserTypeExpects user_type_names{};
     AnonTypeExpects anon_types{};
 
@@ -351,7 +364,7 @@ TEST_CASE("ResolveParam::positional parameter") {
         ParamNameLookup lookup{
             { "1", ParamLookupEntry("1") }
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -364,7 +377,10 @@ TEST_CASE("ResolveParam::positional parameter") {
             {"1", ParamLookupEntry("1")}, 
             {"2", ParamLookupEntry("2")}
         };
-        ParamTypeLookup bound_types{ {"1", "INTEGER"}, {"2", "VARCHAR"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -378,7 +394,11 @@ TEST_CASE("ResolveParam::positional parameter") {
             {"2", ParamLookupEntry("div")}, 
             {"3", ParamLookupEntry("rem")}
         };
-        ParamTypeLookup bound_types{ {"1","INTEGER"}, {"2","INTEGER"}, {"3","INTEGER"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -393,7 +413,7 @@ TEST_CASE("ResolveParam::named parameter") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("kind")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -406,7 +426,10 @@ TEST_CASE("ResolveParam::named parameter") {
             {"1", ParamLookupEntry("phrase")}, 
             {"2", ParamLookupEntry("kind")}
             };
-        ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2","INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -425,7 +448,11 @@ TEST_CASE("ResolveParam::named parameter") {
             {"1", ParamLookupEntry("phrase")}, 
             {"2", ParamLookupEntry("serch_word")}, 
             {"3", ParamLookupEntry("kind")}};
-        ParamTypeLookup bound_types{{"1","VARCHAR"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -446,7 +473,11 @@ TEST_CASE("ResolveParam::named parameter") {
             {"2", ParamLookupEntry("phrase")}, 
             {"3", ParamLookupEntry("kind")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -466,7 +497,10 @@ TEST_CASE("ResolveParam::named parameter") {
             {"1", ParamLookupEntry("seq")}, 
             {"2", ParamLookupEntry("kind")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -486,7 +520,10 @@ TEST_CASE("ResolveParam::named parameter") {
             {"1", ParamLookupEntry("seq")}, 
             {"2", ParamLookupEntry("kind")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -498,9 +535,13 @@ TEST_CASE("ResolveParam::named parameter") {
             {"1", ParamLookupEntry("id_1")}, {"2", ParamLookupEntry("name_1")}, {"3", ParamLookupEntry("age_1")},
             {"4", ParamLookupEntry("id_2")}, {"5", ParamLookupEntry("name_2")}, {"6", ParamLookupEntry("age_2")}, 
         };
-        ParamTypeLookup bound_types{
-            {"1","INTEGER"}, {"2", "VARCHAR"}, {"3","INTEGER"}, 
-            {"4","INTEGER"}, {"5", "VARCHAR"}, {"6","INTEGER"}, 
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"4", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"5", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"6", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
         };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
@@ -518,7 +559,10 @@ TEST_CASE("ResolveParam::table function") {
             {"1", ParamLookupEntry("stop")},
             {"2", ParamLookupEntry("step")}
         };
-        ParamTypeLookup bound_types{{"1","BIGINT"}, {"2","INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -533,7 +577,7 @@ TEST_CASE("ResolveParam::window function") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("val")}, 
         };
-        ParamTypeLookup bound_types{{"1","BIGINT"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -546,7 +590,10 @@ TEST_CASE("ResolveParam::window function") {
             {"1", ParamLookupEntry("val")},
             {"2", ParamLookupEntry("rem")} 
         };
-        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -559,7 +606,10 @@ TEST_CASE("ResolveParam::window function") {
             {"1", ParamLookupEntry("val")},
             {"2", ParamLookupEntry("rem")} 
         };
-        ParamTypeLookup bound_types{ {"1","DOUBLE"}, {"2","INTEGER"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "DOUBLE"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -573,7 +623,11 @@ TEST_CASE("ResolveParam::window function") {
             {"2", ParamLookupEntry("div")},
             {"3", ParamLookupEntry("rem")} 
         };
-        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"}, {"3","INTEGER"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -589,7 +643,7 @@ TEST_CASE("ResolveParam::window function") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("val")},
         };
-        ParamTypeLookup bound_types{ {"1","INTEGER"} };
+        ExpectParamLookup bound_types{ {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -610,7 +664,11 @@ TEST_CASE("ResolveParam::window function") {
             {"2", ParamLookupEntry("from_row")},
             {"3", ParamLookupEntry("to_row")},
         };
-        ParamTypeLookup bound_types{ {"1","INTEGER"}, {"2","BIGINT"}, {"3","BIGINT"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -631,7 +689,7 @@ TEST_CASE("ResolveParam::window function") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("days")},
         };
-        ParamTypeLookup bound_types{ {"1","INTEGER"} };
+        ExpectParamLookup bound_types{ {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -646,7 +704,7 @@ TEST_CASE("ResolveParam::builtin window function") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("bucket")},
         };
-        ParamTypeLookup bound_types{ {"1","BIGINT"} };
+        ExpectParamLookup bound_types{ {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} } };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -659,7 +717,10 @@ TEST_CASE("ResolveParam::builtin window function") {
             {"1", ParamLookupEntry("offset")},
             {"2", ParamLookupEntry("value_def")},
         };
-        ParamTypeLookup bound_types{ {"1","BIGINT"}, {"2","INTEGER"} };
+        ExpectParamLookup bound_types{ 
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} } 
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
@@ -675,7 +736,7 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Anonymous, .type_name = "Param::Enum#1"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{
             {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
@@ -693,7 +754,7 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Visibility"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::User, .type_name = "Visibility"} }};
         UserTypeExpects user_type_names{"Visibility"};
         AnonTypeExpects anon_types{};
 
@@ -707,7 +768,7 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Anonymous, .type_name = "Param::Enum#1"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{
             {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
@@ -726,7 +787,7 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::Anonymous, .type_name = "Param::Enum#1"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{
             {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
@@ -745,7 +806,7 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Visibility"}};
+        ExpectParamLookup bound_types{{"1", ExpectParam{.category = TypeCategory::User, .type_name = "Visibility"} }};
         UserTypeExpects user_type_names{"Visibility"};
         AnonTypeExpects anon_types{};
 
@@ -768,7 +829,11 @@ TEST_CASE("ResolveParam::CTE") {
             {"2", ParamLookupEntry("b")}, 
             {"3", ParamLookupEntry("k")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -788,7 +853,10 @@ TEST_CASE("ResolveParam::CTE") {
             {"2", ParamLookupEntry("b")}, 
             {"3", ParamLookupEntry("k")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -811,7 +879,10 @@ TEST_CASE("ResolveParam::materialized CTE") {
             {"2", ParamLookupEntry("b")}, 
             {"3", ParamLookupEntry("k")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}, {"3", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -840,7 +911,10 @@ TEST_CASE("ResolveParam::materialized CTE") {
             {"1", ParamLookupEntry("a")}, 
             {"2", ParamLookupEntry("b")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "VARCHAR"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "VARCHAR"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -867,7 +941,10 @@ TEST_CASE("ResolveParam::materialized CTE") {
             {"1", ParamLookupEntry("a")}, 
             {"2", ParamLookupEntry("b")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "DATE"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "DATE"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -890,7 +967,10 @@ TEST_CASE("ResolveParam::Recursive CTE") {
             {"1", ParamLookupEntry("min_value")}, 
             {"2", ParamLookupEntry("max_value")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -917,7 +997,11 @@ TEST_CASE("ResolveParam::Recursive CTE") {
             {"2", ParamLookupEntry("max_value")},
             {"3", ParamLookupEntry("max_value2")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","INTEGER"}, {"3", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -945,7 +1029,12 @@ TEST_CASE("ResolveParam::Recursive CTE") {
             {"3", ParamLookupEntry("delta")},
             {"4", ParamLookupEntry("max_value2")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","BIGINT"}, {"3","INTEGER"}, {"4", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"4", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -965,7 +1054,10 @@ TEST_CASE("ResolveParam::Recursive CTE") {
             {"1", ParamLookupEntry("min_value")}, 
             {"2", ParamLookupEntry("max_value")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -988,7 +1080,10 @@ TEST_CASE("ResolveParam::Recursive materialized CTE") {
             {"1", ParamLookupEntry("min_value")}, 
             {"2", ParamLookupEntry("max_value")}
         };
-        ParamTypeLookup bound_types{{"1","BIGINT"}, {"2", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -1015,7 +1110,10 @@ TEST_CASE("ResolveParam::Recursive materialized CTE") {
             {"2", ParamLookupEntry("max_value")},
             {"3", ParamLookupEntry("max_value2")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","INTEGER"}, {"3", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -1043,7 +1141,12 @@ TEST_CASE("ResolveParam::Recursive materialized CTE") {
             {"3", ParamLookupEntry("delta")},
             {"4", ParamLookupEntry("max_value2")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2","BIGINT"}, {"3","FLOAT"}, {"4", "BIGINT"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }, 
+            {"3", ExpectParam{.category = TypeCategory::Primitive, .type_name = "FLOAT"} }, 
+            {"4", ExpectParam{.category = TypeCategory::Primitive, .type_name = "BIGINT"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     
@@ -1065,7 +1168,10 @@ TEST_CASE("ResolveParam::combining operation") {
             {"1", ParamLookupEntry("n1")}, 
             {"2", ParamLookupEntry("n2")}
         };
-        ParamTypeLookup bound_types{{"1","INTEGER"}, {"2", "INTEGER"}};
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }, 
+            {"2", ExpectParam{.category = TypeCategory::Primitive, .type_name = "INTEGER"} }
+        };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
     

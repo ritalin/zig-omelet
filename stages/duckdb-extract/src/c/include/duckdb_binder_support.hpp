@@ -39,6 +39,7 @@ public:
 
 using SampleNullableCache = GenericNullableLookup<std::shared_ptr<SampleNullabilityNode>>;
 
+enum class TypeCategory {Primitive, User, Anonymous};
 enum class StatementParameterStyle {Positional, Named};
 enum class StatementType {Invalid, Select};
 enum class ExampleKind {General, Path};
@@ -65,12 +66,14 @@ struct BoundResult {
 struct ParamEntry {
     PositionalParam position;
     NamedParam name;
+    TypeCategory category;
     std::optional<std::string> type_name;
     size_t sort_order;
 };
 
 struct ColumnEntry {
     std::string field_name;
+    TypeCategory category;
     std::string field_type;
     bool nullable;
 };

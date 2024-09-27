@@ -28,13 +28,13 @@ static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
 }
 
 static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, int32_t stmt_offset, int32_t stmt_size, ZmqChannel&& channel) -> void {
-    std::optional<UserTypeEntry> entry;
+    std::optional<UserTypeResult> result;
     try {
         conn.BeginTransaction();
         extract: {
             auto bound_result = bindTypeToStatement(*conn.context, std::move(stmt->Copy()), {}, {});
 
-            entry = resolveUserType(bound_result.stmt.plan, channel);
+            result = resolveUserType(bound_result.stmt.plan, channel);
         }
         conn.Commit();
     }
@@ -44,12 +44,20 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
     }
 
     send: {
-        if (entry) {
-            std::unordered_map<std::string, std::vector<char>> topic_bodies({
-                {topic_user_type, encodeUserType(entry.value())},
-            });
+        if (result) {
+            send_user_type: {
+                std::unordered_map<std::string, std::vector<char>> topic_bodies({
+                    {topic_user_type, encodeUserType(result.value().entry)},
+                });
 
-            channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
+                channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
+            }
+            send_nested_type: {
+                // TODO:
+            }
+            send_anonymous_type: {
+                // TODO:
+            }
         }
     }
 }

@@ -55,6 +55,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION: 
         {
             auto& op_projection = op->Cast<duckdb::LogicalProjection>();
+            auto index = AnonymousCounter(1).begin();
             std::unordered_multiset<std::string> name_dupe{};
 
             for (size_t i = 0; auto& expr: op->expressions) {
@@ -67,7 +68,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                             user_type_names.push_back(user_type_name);
                         }
                         else {
-                            type_name = std::format("SelList::Enum#{}", i+1);
+                            type_name = std::format("SelList::Enum#{}", *index++);
                             anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
                         }
                     }
@@ -78,8 +79,8 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                             user_type_names.push_back(user_type_name);
                         }
                         else {
-                            type_name = std::format("SelList::Array#{}", i+1);
-                            anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names));
+                            type_name = std::format("SelList::Array#{}", *index++);
+                            anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names, anon_types, index));
                         }
                     }
                     else if (isAliasUserType(expr->return_type)) {
@@ -95,7 +96,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
                 columns: {
                     ColumnNullableLookup::Column binding{
                         .table_index = op_projection.table_index, 
-                        .column_index = i,
+                        .column_index = i++,
                     };
                     auto field_name = ColumnNameVisitor::Resolve(expr);
 
@@ -110,7 +111,6 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
 
                     columns.emplace_back(std::move(entry));
                 }
-                ++i;
             }
         }
         break;
@@ -171,7 +171,7 @@ static auto expectAnonymousUserType(UserTypeEntry actual, UserTypeEntry expect, 
     }
     user_type_fields: {
         for (int j = 0; auto& field: actual.fields) {
-            INFO(std::format("type field#{} of Anonymous type#{}", j, i));
+            INFO(std::format("type field#{} of Anonymous type#{}", j, i+1));
             field_name: {
                 UNSCOPED_INFO("user type field name");
                 CHECK_THAT(field.field_name, Equals(expect.fields[j].field_name));
@@ -880,12 +880,12 @@ TEST_CASE("SelectList::user type (LIST)") {
 
         std::vector<ColumnEntry> expects{
             {.field_name = "id", .field_type = "INTEGER", .nullable = false},
-            {.field_name = "numbers", .field_type = "SelList::Array#2", .nullable = false},
+            {.field_name = "numbers", .field_type = "SelList::Array#1", .nullable = false},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
-            {.kind = UserTypeKind::Array, .name = "SelList::Array#2", .fields = {
-                UserTypeEntry::Member("Anon::Primitive#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}}))
+            {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
+                UserTypeEntry::Member("Anon::Primitive#2", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}}))
             }},
         };
 
@@ -903,7 +903,7 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::vector<std::string> user_type_names{"Visibility"};
         std::vector<UserTypeEntry> anon_types{
             {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
-                UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Visibility", .fields = {}}))
+                UserTypeEntry::Member("Anon::User#2", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Visibility", .fields = {}}))
             }},
         };
 
@@ -921,7 +921,7 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
             {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
-                UserTypeEntry::Member("Anon::Enum#1", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Anon::Enum#1", .fields = {
+                UserTypeEntry::Member("Anon::Enum#2", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Anon::Enum#1", .fields = {
                     UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")
                 }}))
             }},

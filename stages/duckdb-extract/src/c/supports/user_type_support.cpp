@@ -14,6 +14,10 @@ auto isEnumUserType(const duckdb::LogicalType &ty) -> bool {
     return ty.id() == duckdb::LogicalTypeId::ENUM;
 }
 
+auto isStructUserType(const duckdb::LogicalType &ty) -> bool {
+    return ty.id() == duckdb::LogicalTypeId::STRUCT;
+}
+
 auto isArrayUserType(const duckdb::LogicalType &ty) -> bool {
     return (
         (ty.id() == duckdb::LogicalTypeId::LIST)
@@ -28,8 +32,22 @@ auto isAliasUserType(const duckdb::LogicalType &ty) -> bool {
     return ext_info->type == duckdb::ExtraTypeInfoType::GENERIC_TYPE_INFO;
 }
 
+auto isPredefinedUserType(const duckdb::LogicalType &ty) -> bool {
+    return ty.id() == duckdb::LogicalTypeId::USER;
+}
+
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string {
     return ty.GetAlias();
+}
+
+auto userTypeNameAnonymous(UserTypeKind type_kind, size_t index) -> std::string {
+    return std::format("Anon::{}#{}", magic_enum::enum_name(type_kind), index);
+}
+
+auto resolveNameAnonymous(const std::optional<std::string>& field_name_opt, UserTypeKind type_kind, std::ranges::iterator_t<AnonymousCounter>& index) -> std::string {
+    if (field_name_opt) return field_name_opt.value();
+
+    return userTypeNameAnonymous(type_kind, *index++);
 }
 
 auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_name) -> UserTypeEntry {
@@ -53,48 +71,149 @@ auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_nam
     };
 }
 
-static auto pickUserTypeMember(const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, size_t index) -> UserTypeEntry::Member {
-    if (isEnumUserType(ty)) {
-        auto type_name = userTypeName(ty);
-        user_type_names.push_back(type_name);
+// static auto pickAnonymousUserTypeMember(const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, size_t index) -> UserTypeEntry::Member;
+static auto pickNestedUserTypeMember(const std::optional<std::string> field_name_opt, const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, std::vector<UserTypeEntry>& nested_anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry::Member;
 
-        return UserTypeEntry::Member(
-            std::format("Anon::{}#{}", magic_enum::enum_name(UserTypeKind::Enum), index+1),
-            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Enum, .name = type_name, .fields = {}})
-        );
+auto pickStructUserType(const duckdb::LogicalType& ty, const std::string& type_name, std::vector<std::string>& nested_user_types, std::vector<UserTypeEntry>& nested_anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry {
+    auto *ext_info = ty.AuxInfo();
+
+    std::vector<UserTypeEntry::Member> fields;
+    if (ext_info->type == duckdb::ExtraTypeInfoType::STRUCT_TYPE_INFO) {
+        auto& struct_ext_info = ext_info->Cast<duckdb::StructTypeInfo>();
+
+        for (auto& [field_name, child_type]: struct_ext_info.child_types) {
+            fields.push_back(pickNestedUserTypeMember(field_name, child_type, nested_user_types, nested_anon_types, index));
+        }
+    }
+
+    return {
+        .kind = UserTypeKind::Struct,
+        .name = type_name,
+        .fields = std::move(fields),
+    };
+}
+
+// static auto pickAnonymousUserTypeMember(const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, AnonymousCounter index) -> UserTypeEntry::Member {
+//     if (isEnumUserType(ty)) {
+//         auto type_name = userTypeName(ty);
+//         user_type_names.push_back(type_name);
+
+//         return UserTypeEntry::Member(
+//             userTypeNameAnonymous(UserTypeKind::Enum, *index++),
+//             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Enum, .name = type_name, .fields = {}})
+//         );
+//     }
+//     if (isArrayUserType(ty)) {
+//         auto member_name = userTypeNameAnonymous(UserTypeKind::Array, index);
+//         auto member_type = pickArrayUserType(ty, member_name, user_type_names, index);
+
+//         return UserTypeEntry::Member(
+//             member_name,
+//             std::make_shared<UserTypeEntry>(std::move(member_type))
+//         );
+//     }
+//     else {
+//         return UserTypeEntry::Member(
+//             userTypeNameAnonymous(UserTypeKind::Primitive, index),
+//             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Primitive, .name = ty.ToString(), .fields = {}})
+//         );
+//     }
+// }
+
+static auto pickNestedUserTypeMember(
+    const std::optional<std::string> field_name_opt, const duckdb::LogicalType &ty, 
+    std::vector<std::string>& user_type_names, 
+    std::vector<UserTypeEntry>& nested_anon_types, 
+    std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry::Member 
+{
+    if (isEnumUserType(ty)) {
+        auto member_type_name = userTypeName(ty);
+        std::string member_field_name;
+
+        if (member_type_name == "") {
+            // when anonymous enum field
+            member_type_name = userTypeNameAnonymous(UserTypeKind::Enum, *index++);
+            member_field_name = field_name_opt.value_or(std::string(member_type_name));
+            auto member_type = pickEnumUserType(ty, member_type_name);
+
+            nested_anon_types.push_back(member_type);
+
+            return UserTypeEntry::Member(
+                member_field_name,
+                std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
+            );
+        }
+        else {
+            // when predefined enum type (except for create type)
+            member_field_name = resolveNameAnonymous(field_name_opt, UserTypeKind::User, index);
+
+            user_type_names.push_back(member_type_name);
+
+            return UserTypeEntry::Member(
+                member_field_name,
+                std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::User, .name = member_type_name, .fields = {}})
+            );   
+        }
     }
     if (isArrayUserType(ty)) {
-        auto member_name = std::format("Anon::{}#{}", magic_enum::enum_name(UserTypeKind::Array), index+1);
-        auto member_type = pickArrayUserType(ty, member_name, user_type_names);
+        auto member_name = userTypeNameAnonymous(UserTypeKind::Array, *index++);
+        auto member_type = pickArrayUserType(ty, member_name, user_type_names, nested_anon_types, index);
+
+        nested_anon_types.push_back(member_type);
 
         return UserTypeEntry::Member(
-            member_name,
-            std::make_shared<UserTypeEntry>(std::move(member_type))
+            field_name_opt.value_or(std::string(member_type.name)),
+            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
+        );
+    }
+    if (isStructUserType(ty)) {
+        auto member_name = userTypeNameAnonymous(UserTypeKind::Struct, *index++);
+        auto member_type = pickStructUserType(ty, member_name, user_type_names, nested_anon_types, index);
+
+        nested_anon_types.push_back(member_type);
+
+        return UserTypeEntry::Member(
+            field_name_opt.value_or(std::string(member_type.name)),
+            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
+        );
+    }
+    else if (isPredefinedUserType(ty)) {
+        // when create member of list/struct
+        auto& info = ty.AuxInfo()->Cast<duckdb::UserTypeInfo>();
+
+        user_type_names.push_back(info.user_type_name);
+
+        return UserTypeEntry::Member(
+            resolveNameAnonymous(field_name_opt, UserTypeKind::User, index),
+            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::User, .name = info.user_type_name, .fields = {}})
         );
     }
     else {
         return UserTypeEntry::Member(
-            std::format("Anon::{}#{}", magic_enum::enum_name(UserTypeKind::Primitive), index+1),
+            resolveNameAnonymous(field_name_opt, UserTypeKind::Primitive, index),
             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Primitive, .name = ty.ToString(), .fields = {}})
         );
     }
 }
 
-auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry {
+auto pickArrayUserType(
+    const duckdb::LogicalType &ty, const std::string& type_name, 
+    std::vector<std::string>& user_type_names, 
+    std::vector<UserTypeEntry>& anon_types,
+    std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry {
     auto *ext_info = ty.AuxInfo();
 
     std::vector<UserTypeEntry::Member> fields;
     fields.reserve(1);
-
+        
     if (ext_info->type == duckdb::ExtraTypeInfoType::LIST_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ListTypeInfo>();
-        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, user_type_names, 0));
+        fields.emplace_back(pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index));
     }
     else if (ext_info->type == duckdb::ExtraTypeInfoType::ARRAY_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ArrayTypeInfo>();
-        fields.emplace_back(pickUserTypeMember(member_ext_info.child_type, user_type_names, 0));
+        fields.emplace_back(pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index));
     }
-
 
     return {
         .kind = UserTypeKind::Array,
@@ -103,9 +222,15 @@ auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_na
     };
 }
 
-auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry {
+auto pickAliasUserType(
+    const duckdb::LogicalType &ty, const std::string& type_name, 
+    std::vector<std::string>& user_type_names, 
+    std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry 
+{
+    std::vector<UserTypeEntry> anon_types{};
+
     std::vector<UserTypeEntry::Member> fields{
-        pickUserTypeMember(ty, user_type_names, 0)
+        pickNestedUserTypeMember(std::nullopt, ty, user_type_names, anon_types, index)
     };
 
     return {
@@ -119,12 +244,16 @@ static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     switch (kind) {
     case UserTypeKind::Enum: 
         return std::string("enum");
+    case UserTypeKind::Struct: 
+        return std::string("struct");
     case UserTypeKind::Array: 
         return std::string("array");
     case UserTypeKind::Alias: 
         return std::string("alias");
     case UserTypeKind::Primitive: 
         return std::string("primitive");
+    case UserTypeKind::User: 
+        return std::string("user");
     default:
         return std::string("unknown");
     }

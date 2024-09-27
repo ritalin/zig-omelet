@@ -1,12 +1,14 @@
 #pragma once
 
+#include <ranges>
+
 #include <duckdb.hpp>
 
 #include "cbor_encode.hpp"
 
 namespace worker {
 
-enum class UserTypeKind {Enum, Array, Primitive, Alias};
+enum class UserTypeKind {Enum, Struct, Array, Primitive, Alias, User};
 
 struct UserTypeEntry;
 
@@ -26,16 +28,21 @@ public:
     std::vector<Member> fields;
 };
 
+using AnonymousCounter = std::ranges::iota_view<size_t>;
+
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string;
 
 auto isEnumUserType(const duckdb::LogicalType &ty) -> bool;
 auto pickEnumUserType(const duckdb::LogicalType &ty, const std::string& type_name) -> UserTypeEntry;
 
+auto isStructUserType(const duckdb::LogicalType &ty) -> bool;
+auto pickStructUserType(const duckdb::LogicalType& ty, const std::string& type_name, std::vector<std::string>& nested_user_types, std::vector<UserTypeEntry>& nested_anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry;
+
 auto isArrayUserType(const duckdb::LogicalType &ty) -> bool;
-auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry;
+auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names, std::vector<UserTypeEntry>& anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry;
 
 auto isAliasUserType(const duckdb::LogicalType &ty) -> bool;
-auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names) -> UserTypeEntry;
+auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry;
 
 auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void;
 

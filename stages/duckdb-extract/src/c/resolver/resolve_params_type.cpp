@@ -13,7 +13,10 @@ namespace worker {
 
 class LogicalParameterVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-    LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref): names(std::move(names_ref)), type_hints(std::move(type_hints_ref)) {}
+    LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref, ZmqChannel& channel_ref): 
+        names(std::move(names_ref)), type_hints(std::move(type_hints_ref)), channel(channel_ref)
+    {
+    }
 public:
     auto VisitResult() -> ParamResolveResult;
     auto paramFromExample(const ParamExampleLookup& examples) -> void;
@@ -25,6 +28,7 @@ private:
     ParamNameLookup names;
     BoundParamTypeHint type_hints;
 private:
+    ZmqChannel& channel;
     std::unordered_multimap<PositionalParam, std::string> param_types;
     std::unordered_map<PositionalParam, ParamEntry> parameters;
     std::vector<std::string> user_type_names;
@@ -84,24 +88,25 @@ auto LogicalParameterVisitor::paramFromExample(const ParamExampleLookup& example
 auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
     std::string type_name;
 
-    if (isEnumUserType(expr.return_type)) {
-        type_name = userTypeName(expr.return_type);
+    auto& ret_type = this->type_hints.contains(expr.identifier) ? type_hints.at(expr.identifier)->return_type : expr.return_type;
+
+    if (isEnumUserType(ret_type)) {
+        type_name = userTypeName(ret_type);
         if (type_name != "") {
             this->user_type_names.push_back(type_name);
         }
         else {
             // process as anonymous user type
-            type_name = std::format("Param::{}#{}", magic_enum::enum_name(expr.return_type.id()), expr.identifier);
-            this->anon_types.push_back(pickEnumUserType(expr.return_type, type_name));
+            type_name = std::format("Param::{}#{}", magic_enum::enum_name(UserTypeKind::Enum), expr.identifier);
+            this->anon_types.push_back(pickEnumUserType(ret_type, type_name));
         }
     }
     else {
-        if (this->type_hints.contains(expr.identifier)) {
-            type_name = type_hints.at(expr.identifier)->return_type.ToString();
+        if (isArrayUserType(ret_type) || isStructUserType(ret_type)) {
+            this->channel.warn(std::format("Unsupported placeholder type: {}", magic_enum::enum_name(ret_type.id())));
         }
-        else {
-            type_name = expr.return_type.ToString();
-        }
+
+        type_name = ret_type.ToString();
     }
     
     if (! this->parameters.contains(expr.identifier)) {
@@ -128,9 +133,10 @@ auto resolveParamType(
     duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     ParamNameLookup&& name_lookup, 
     BoundParamTypeHint&& type_hints, 
-    ParamExampleLookup&& examples) -> ParamResolveResult 
+    ParamExampleLookup&& examples,
+    ZmqChannel& channel) -> ParamResolveResult 
 {
-    LogicalParameterVisitor visitor(std::move(name_lookup), std::move(type_hints));
+    LogicalParameterVisitor visitor(std::move(name_lookup), std::move(type_hints), channel);
     visitor.paramFromExample(examples);
     visitor.VisitOperator(*op);
 
@@ -238,6 +244,7 @@ static auto runResolveParamType(
     binder->SetCanContainNulls(true);
     binder->parameters = &parameters;
 
+
     BoundResult bound_result;
     ParamCollectionResult walk_result;
     try {
@@ -251,11 +258,13 @@ static auto runResolveParamType(
         throw;
     }
 
+    auto channel = ZmqChannel::unitTestChannel();
     auto [resolve_result, user_type_names, anon_types] = resolveParamType(
         bound_result.stmt.plan, 
         std::move(walk_result.names), 
         std::move(bound_result.type_hints),
-        std::move(walk_result.examples)
+        std::move(walk_result.examples),
+        channel
     );
 
     parameter_size: {
@@ -666,10 +675,13 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{
-            {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
+            {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
+                UserTypeEntry::Member("hide"), 
+                UserTypeEntry::Member("visible") 
+            }},
         };
 
         runResolveParamType(sql, {schema}, lookup, bound_types, user_type_names, anon_types);
@@ -695,10 +707,13 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Param::ENUM#1"}};
+        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{
-            {.kind = UserTypeKind::Enum, .name = "Param::ENUM#1", .fields = { UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible") }},
+            {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
+                UserTypeEntry::Member("hide"), 
+                UserTypeEntry::Member("visible") 
+            }},
         };
 
         runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
@@ -711,9 +726,14 @@ TEST_CASE("ResolveParam::user type#1 (ENUM)") {
         ParamNameLookup lookup{
             {"1", ParamLookupEntry("vis")}
         };
-        ParamTypeLookup bound_types{{"1","Visibility"}};
-        UserTypeExpects user_type_names{"Visibility"};
-        AnonTypeExpects anon_types{};
+        ParamTypeLookup bound_types{{"1","Param::Enum#1"}};
+        UserTypeExpects user_type_names{};
+        AnonTypeExpects anon_types{
+            {.kind = UserTypeKind::Enum, .name = "Param::Enum#1", .fields = { 
+                UserTypeEntry::Member("hide"), 
+                UserTypeEntry::Member("visible") 
+            }},
+        };
 
         runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
     }

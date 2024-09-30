@@ -30,6 +30,47 @@ auto ColumnNameVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) ->
     return std::move(visitor.column_name);
 }
 
+static auto evalColumnType(
+    const duckdb::LogicalType& ty, 
+    std::vector<std::string>& user_type_names, 
+    std::vector<UserTypeEntry>& anon_types, 
+    std::ranges::iterator_t<AnonymousCounter>& index) -> std::pair<UserTypeKind, std::string> 
+{
+    std::string type_name = userTypeName(ty);
+
+    if (type_name != "") {
+        // Predefined user type
+        user_type_names.push_back(type_name);
+        return std::make_pair(std::move(UserTypeKind::User), std::move(type_name));
+    }
+
+    if (isEnumUserType(ty)) {
+        // Anonymous enum type
+        type_name = std::format("SelList::Enum#{}", *index++);
+        anon_types.push_back(pickEnumUserType(ty, type_name));
+
+        return std::make_pair(std::move(UserTypeKind::Enum), std::move(type_name));
+    }
+
+    if (isArrayUserType(ty)) {
+        // Anonymous Array type
+        type_name = std::format("SelList::Array#{}", *index++);
+        anon_types.push_back(pickArrayUserType(ty, type_name, user_type_names, anon_types, index));
+
+        return std::make_pair(std::move(UserTypeKind::Array), std::move(type_name));
+    }
+
+    if (isStructUserType(ty)) {
+        // Anonymous Struct type
+        type_name = std::format("SelList::Struct#{}", *index++);
+        anon_types.push_back(pickStructUserType(ty, type_name, user_type_names, anon_types, index));
+
+        return std::make_pair(std::move(UserTypeKind::Struct), std::move(type_name));
+    }
+
+    return std::make_pair(std::move(UserTypeKind::Primitive), std::move(ty.ToString()));
+}
+
 auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ColumnNullableLookup& join_lookup, ZmqChannel& channel) -> ColumnResolveResult {
     std::vector<ColumnEntry> columns;
     columns.reserve(op->expressions.size());
@@ -59,47 +100,8 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
             std::unordered_multiset<std::string> name_dupe{};
 
             for (size_t i = 0; auto& expr: op->expressions) {
-                UserTypeKind type_kind;
-                std::string type_name;
-                anon_types: {
-                    if (isEnumUserType(expr->return_type)) {
-                        auto user_type_name = userTypeName(expr->return_type);
-                        if (user_type_name != "") {
-                            type_kind = UserTypeKind::User;
-                            type_name = user_type_name;
-                            user_type_names.push_back(user_type_name);
-                        }
-                        else {
-                            type_kind = UserTypeKind::Enum;
-                            type_name = std::format("SelList::Enum#{}", *index++);
-                            anon_types.push_back(pickEnumUserType(expr->return_type, type_name));
-                        }
-                    }
-                    else if (isArrayUserType(expr->return_type)) {
-                        auto user_type_name = userTypeName(expr->return_type);
-                        if (user_type_name != "") {
-                            type_kind = UserTypeKind::User;
-                            type_name = user_type_name;
-                            user_type_names.push_back(user_type_name);
-                        }
-                        else {
-                            type_kind = UserTypeKind::Array;
-                            type_name = std::format("SelList::Array#{}", *index++);
-                            anon_types.push_back(pickArrayUserType(expr->return_type, type_name, user_type_names, anon_types, index));
-                        }
-                    }
-                    else if (isAliasUserType(expr->return_type)) {
-                        type_kind = UserTypeKind::User;
-                        type_name = userTypeName(expr->return_type);
-                        if (type_name != "") {
-                            user_type_names.push_back(type_name);
-                        }
-                    }
-                    else {
-                        type_kind = UserTypeKind::Primitive;
-                        type_name = expr->return_type.ToString();
-                    }
-                }
+                auto [type_kind, type_name] = evalColumnType(expr->return_type, user_type_names, anon_types, index);
+
                 columns: {
                     ColumnNullableLookup::Column binding{
                         .table_index = op_projection.table_index, 
@@ -167,7 +169,7 @@ static auto expectAnonymousUserType(UserTypeEntry actual, UserTypeEntry expect, 
     INFO(std::format("[{}] Anonymous type#{}", depth, i));
     user_type_kind: {
         UNSCOPED_INFO("user type kind");
-        CHECK(actual.kind == expect.kind);
+        CHECK(magic_enum::enum_name(actual.kind) == magic_enum::enum_name(expect.kind));
     }
     user_type_name: {
         UNSCOPED_INFO("user type name");
@@ -200,8 +202,8 @@ static auto expectAnonymousUserType(UserTypeEntry actual, UserTypeEntry expect, 
 static auto runBindStatement(
     const std::string sql, const std::vector<std::string>& schemas, 
     const std::vector<ColumnEntry>& expects, 
-    const std::vector<std::string>& user_type_names,
-    const std::vector<UserTypeEntry>& anon_types) -> void 
+    const std::vector<std::string>& expect_user_types,
+    const std::vector<UserTypeEntry>& expect_anon_types) -> void 
 {
     auto db = Database();
     auto conn = db.connect();
@@ -259,21 +261,30 @@ static auto runBindStatement(
     }
     user_types_size: {
         INFO("user types size");
-        REQUIRE(column_result.user_type_names.size() == user_type_names.size());
+        REQUIRE(column_result.user_type_names.size() == expect_user_types.size());
     }
     user_types: {
-        for (auto& expect_name: user_type_names) {
+        for (auto& expect_name: expect_user_types) {
             INFO(std::format("has user type name (`{}`)", expect_name));
             CHECK_THAT(column_result.user_type_names, VectorContains(expect_name));
         }
     }
     anonymous_types_size: {
         INFO("Anonymous types size");
-        REQUIRE(column_result.anon_types.size() == anon_types.size());
+        REQUIRE(column_result.anon_types.size() == expect_anon_types.size());
     }
     anonymous_types: {
-        for (int i = 0; auto& anon: column_result.anon_types) {
-            expectAnonymousUserType(anon, anon_types[i], i, 0);
+        auto anon_type_view = column_result.anon_types | std::views::transform([](const auto& x) {
+            return std::pair<std::string, UserTypeEntry>(x.name, x);
+        });
+        std::unordered_map<std::string, UserTypeEntry> anon_type_lookup(anon_type_view.begin(), anon_type_view.end());
+
+        for (int i = 0; auto& anon: expect_anon_types) {
+            INFO(std::format("is exist field identifier#{} ({})", i, anon.name));
+            REQUIRE(anon_type_lookup.contains(anon.name));
+
+            INFO(std::format("check field recursively#{}", anon.name));
+            expectAnonymousUserType(anon_type_lookup.at(anon.name), anon, i, 0);
             ++i;
         }
     }
@@ -866,27 +877,112 @@ TEST_CASE("SelectList::user type (ENUM)") {
     }
 }
 
-// TEST_CASE("SelectList::user type (STRUCT)") {
-//     SECTION("predefined struct") {
-//         std::string schema("create type Family as Struct (key text, value int)");
-//         std::string sql("select {'key': 'dad', 'value': 42}::Family as family");
+TEST_CASE("SelectList::user type (STRUCT)") {
+    SECTION("predefined struct") {
+        std::string schema("create type Family as Struct (key text, value int)");
+        std::string sql("select {'key': 'dad', 'value': 42}::Family as family");
 
-//         std::vector<ColumnEntry> expects{
-//             {.field_name = "family", .field_type = "Family", .nullable = false},
-//         };
-//         std::vector<std::string> user_type_names{"Family"};
-//     }
-//     SECTION("anonymous struct") {
-//         std::string sql("select {'key': 'dad', 'value': 42}");
+        std::vector<ColumnEntry> expects{
+            {.field_name = "family", .type_kind = UserTypeKind::User, .field_type = "Family", .nullable = true},
+        };
+        std::vector<std::string> user_type_names{"Family"};
+        std::vector<UserTypeEntry> anon_types{};
 
-//     }
-//     SECTION("nested anonymous struct [x2]") {
+        runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
+    }
+    SECTION("anonymous struct") {
+        std::string sql("select {'key': 'dad', 'value': 42} as family");
 
-//     }
-// }
+        std::vector<ColumnEntry> expects{
+            {.field_name = "family", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
+        };
+        std::vector<std::string> user_type_names{};
+        std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Struct, .name = "SelList::Struct#1", .fields = {
+                UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+                UserTypeEntry::Member("value", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}}))
+            }},
+        };
+
+        runBindStatement(sql, {}, expects, user_type_names, anon_types);
+    }
+    SECTION("anonymous struct (with predefined enum list)") {
+        std::string schema("create type Gender as ENUM ('male', 'female', 'unknown')");
+        std::string sql("select {'key': 'dad', 'genders': ['male', 'male']::Gender[]} as family");
+
+        std::vector<ColumnEntry> expects{
+            {.field_name = "family", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
+        };
+        std::vector<std::string> user_type_names{"Gender"};
+        std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Struct, .name = "SelList::Struct#1", .fields = {
+                UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+                UserTypeEntry::Member("genders", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {}}))
+            }},
+            {.kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {
+                UserTypeEntry::Member("Anon::User#3", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Gender", .fields = {}})),
+            }},
+        };
+
+        runBindStatement(sql, {schema}, expects, user_type_names, anon_types);
+    }
+    SECTION("predefined struct list") {
+        std::string schema_1("create type Gender as Enum ('male', 'female')");
+        std::string schema_2("create type Child as Struct (key text, gender Gender)");
+        std::string sql("select {'key': 'qwerty', 'children': [{'key': 'son_1', 'gender': 'male'}, {'key': 'son_2', 'gender': 'female'}]::Child[]} as family");
+
+        std::vector<ColumnEntry> expects{
+            {.field_name = "family", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
+        };
+        std::vector<std::string> user_type_names{"Child"};
+        std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Struct, .name = "SelList::Struct#1", .fields = {
+                UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+                UserTypeEntry::Member("children", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {}}))
+            }},
+            {.kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {
+                UserTypeEntry::Member("Anon::User#3", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Child", .fields = {}})),
+            }},
+        };
+
+        runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
+    }
+    SECTION("nested anonymous struct [x2]") {
+        std::string schema_1("create type Gender as Enum ('male', 'female')");
+        std::string schema_2("create type Child as Struct (key text, gender Gender)");
+        std::string sql(R"#(
+            select 
+                {'key': 'foo', 'children': [{'key': 'son_1', 'gender': 'male'}, {'key': 'son_2', 'gender': 'female'}]::Child[]} as family,
+                {'key': 'baz', 'children': [{'key': 'son_3', 'gender': 'male'}]::Child[]} as neighbor,
+        )#");
+
+        std::vector<ColumnEntry> expects{
+            {.field_name = "family", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
+            {.field_name = "neighbor", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#4", .nullable = true},
+        };
+        std::vector<std::string> user_type_names{"Child", "Child"};
+        std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Struct, .name = "SelList::Struct#1", .fields = {
+                UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+                UserTypeEntry::Member("children", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {}}))
+            }},
+            {.kind = UserTypeKind::Array, .name = "Anon::Array#2", .fields = {
+                UserTypeEntry::Member("Anon::User#3", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Child", .fields = {}})),
+            }},
+            {.kind = UserTypeKind::Struct, .name = "SelList::Struct#4", .fields = {
+                UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+                UserTypeEntry::Member("children", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Array, .name = "Anon::Array#5", .fields = {}}))
+            }},
+            {.kind = UserTypeKind::Array, .name = "Anon::Array#5", .fields = {
+                UserTypeEntry::Member("Anon::User#6", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Child", .fields = {}})),
+            }},
+        };
+
+        runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
+    }
+}
 
 TEST_CASE("SelectList::user type (ALIAS)") {
-
     SECTION("basic") {
         std::string schema_1("CREATE TYPE Description AS VARCHAR");
         std::string schema_2("CREATE TABLE Summary (id INTEGER primary key, desc_text Description, remarks VARCHAR)");

@@ -126,34 +126,32 @@ static auto pickNestedUserTypeMember(
     std::vector<UserTypeEntry>& nested_anon_types, 
     std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry::Member 
 {
+    auto member_type_name = userTypeName(ty);
+    std::string member_field_name;
+
+    if (member_type_name != "") {
+        // when predefined type (except for create type)
+        member_field_name = resolveNameAnonymous(field_name_opt, UserTypeKind::User, index);
+
+        user_type_names.push_back(member_type_name);
+
+        return UserTypeEntry::Member(
+            member_field_name,
+            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::User, .name = member_type_name, .fields = {}})
+        );   
+    }
+
     if (isEnumUserType(ty)) {
-        auto member_type_name = userTypeName(ty);
-        std::string member_field_name;
+        member_type_name = userTypeNameAnonymous(UserTypeKind::Enum, *index++);
+        member_field_name = field_name_opt.value_or(std::string(member_type_name));
+        auto member_type = pickEnumUserType(ty, member_type_name);
 
-        if (member_type_name == "") {
-            // when anonymous enum field
-            member_type_name = userTypeNameAnonymous(UserTypeKind::Enum, *index++);
-            member_field_name = field_name_opt.value_or(std::string(member_type_name));
-            auto member_type = pickEnumUserType(ty, member_type_name);
+        nested_anon_types.push_back(member_type);
 
-            nested_anon_types.push_back(member_type);
-
-            return UserTypeEntry::Member(
-                member_field_name,
-                std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
-            );
-        }
-        else {
-            // when predefined enum type (except for create type)
-            member_field_name = resolveNameAnonymous(field_name_opt, UserTypeKind::User, index);
-
-            user_type_names.push_back(member_type_name);
-
-            return UserTypeEntry::Member(
-                member_field_name,
-                std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::User, .name = member_type_name, .fields = {}})
-            );   
-        }
+        return UserTypeEntry::Member(
+            member_field_name,
+            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
+        );
     }
     if (isArrayUserType(ty)) {
         auto member_name = userTypeNameAnonymous(UserTypeKind::Array, *index++);

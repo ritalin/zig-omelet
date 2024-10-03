@@ -314,6 +314,22 @@ TEST_CASE("UserType::Extract struct type (primitive type only)") {
     
         runResolveUserType(sql, {}, UserTypeKind::Struct, "KV", expects, nested_user_type_names, anon_types);
     }
+    SECTION("primitive list member") {
+        std::string sql("create type KV as Struct (key text, value int[])");
+
+        std::vector<UserTypeEntry::Member> expects{
+            UserTypeEntry::Member("key", std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Primitive, .name = "VARCHAR", .fields = {}})),
+            UserTypeEntry::Member("value", std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Array, .name = "Anon::Array#1", .fields = {}})),
+        };
+        UserTypeExpects nested_user_type_names{};
+        AnonTypeExpects anon_types{
+            UserTypeEntry{.kind = UserTypeKind::Array, .name = "Anon::Array#1", .fields = {
+                UserTypeEntry::Member("Anon::Primitive#2", std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Primitive, .name = "INTEGER", .fields = {}})),
+            }}
+        };
+    
+        runResolveUserType(sql, {}, UserTypeKind::Struct, "KV", expects, nested_user_type_names, anon_types);
+    }
 }
 
 TEST_CASE("UserType::Extract struct type (has enum type)") {

@@ -97,6 +97,7 @@ static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> std::vector<c
     for (auto& entry: entries) {
         encoder.addArrayHeader(3);
         encoder.addString(entry.name);
+        encoder.addUInt(static_cast<uint64_t>(entry.type_kind));
 
         if (entry.type_name) {
             encoder.addString(entry.type_name.value());
@@ -127,8 +128,9 @@ static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> std::vector<
     encoder.addArrayHeader(entries.size());
 
     for (auto& entry: entries) {
-        encoder.addArrayHeader(3);
+        encoder.addArrayHeader(4);
         encoder.addString(entry.field_name);
+        encoder.addUInt(static_cast<uint64_t>(entry.type_kind));
         encoder.addString(entry.field_type);
         encoder.addBool(entry.nullable);
     }
@@ -225,6 +227,9 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
     }
     catch (const duckdb::Exception& ex) {
         message = ex.what();
+    }
+    catch (...) {
+        message = "Unexpected error";
     }
     
     this->messageChannel("worker").err(message);

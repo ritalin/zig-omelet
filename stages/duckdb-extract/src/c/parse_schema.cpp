@@ -27,6 +27,30 @@ static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
     return std::move(encoder.rawBuffer());
 }
 
+static auto encodeBoundUserType(std::vector<std::string>&& user_types) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(user_types.size());
+
+    for (auto& name: user_types) {
+        encoder.addString(name);
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
+static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> std::vector<char> {
+    CborEncoder encoder;
+
+    encoder.addArrayHeader(anon_types.size());
+
+    for (auto& entry: anon_types) {
+        encodeUserType(encoder, entry);
+    }
+
+    return std::move(encoder.rawBuffer());
+}
+
 static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, int32_t stmt_offset, int32_t stmt_size, ZmqChannel&& channel) -> void {
     std::optional<UserTypeResult> result;
     try {
@@ -48,15 +72,11 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
             send_user_type: {
                 std::unordered_map<std::string, std::vector<char>> topic_bodies({
                     {topic_user_type, encodeUserType(result.value().entry)},
+                    {topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types))},
+                    {topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names))}
                 });
 
                 channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
-            }
-            send_nested_type: {
-                // TODO:
-            }
-            send_anonymous_type: {
-                // TODO:
             }
         }
     }

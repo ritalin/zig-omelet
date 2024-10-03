@@ -5,10 +5,11 @@
 #include <duckdb.hpp>
 
 #include "cbor_encode.hpp"
+#include "omelet_c_types.h"
 
 namespace worker {
 
-enum class UserTypeKind {Enum, Struct, Array, Primitive, Alias, User};
+enum class UserTypeKind {Enum = ::Enum , Struct = ::Struct, Array = ::Array, Primitive = ::Primitive, Alias = ::Alias, User = ::User};
 
 struct UserTypeEntry;
 
@@ -30,6 +31,7 @@ public:
 
 using AnonymousCounter = std::ranges::iota_view<size_t>;
 
+auto userTypeKindAsText(UserTypeKind kind) -> std::string;
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string;
 
 auto isEnumUserType(const duckdb::LogicalType &ty) -> bool;

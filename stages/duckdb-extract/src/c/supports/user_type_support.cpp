@@ -93,33 +93,6 @@ auto pickStructUserType(const duckdb::LogicalType& ty, const std::string& type_n
     };
 }
 
-// static auto pickAnonymousUserTypeMember(const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, AnonymousCounter index) -> UserTypeEntry::Member {
-//     if (isEnumUserType(ty)) {
-//         auto type_name = userTypeName(ty);
-//         user_type_names.push_back(type_name);
-
-//         return UserTypeEntry::Member(
-//             userTypeNameAnonymous(UserTypeKind::Enum, *index++),
-//             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Enum, .name = type_name, .fields = {}})
-//         );
-//     }
-//     if (isArrayUserType(ty)) {
-//         auto member_name = userTypeNameAnonymous(UserTypeKind::Array, index);
-//         auto member_type = pickArrayUserType(ty, member_name, user_type_names, index);
-
-//         return UserTypeEntry::Member(
-//             member_name,
-//             std::make_shared<UserTypeEntry>(std::move(member_type))
-//         );
-//     }
-//     else {
-//         return UserTypeEntry::Member(
-//             userTypeNameAnonymous(UserTypeKind::Primitive, index),
-//             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::Primitive, .name = ty.ToString(), .fields = {}})
-//         );
-//     }
-// }
-
 static auto pickNestedUserTypeMember(
     const std::optional<std::string> field_name_opt, const duckdb::LogicalType &ty, 
     std::vector<std::string>& user_type_names, 
@@ -238,7 +211,7 @@ auto pickAliasUserType(
     };
 }
 
-static auto userTypeKindAsText(UserTypeKind kind) -> std::string {
+auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     switch (kind) {
     case UserTypeKind::Enum: 
         return std::string("enum");
@@ -261,7 +234,7 @@ auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void {
     encoder.addArrayHeader(2);
     type_header: {
         type_kind: {
-            encoder.addString(userTypeKindAsText(entry.kind));
+            encoder.addUInt(static_cast<uint64_t>(entry.kind));
         }
         type_name: {
             encoder.addString(entry.name);
@@ -285,4 +258,5 @@ auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void {
         }
     }
 }
+
 }

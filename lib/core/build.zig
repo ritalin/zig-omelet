@@ -84,6 +84,26 @@ pub fn build(b: *std.Build) void {
         }
         break:lib_module_cbor_support;
     }
+    const mod_omelet_c = lib_module_omelet_c: {
+        const mod = b.addModule("omelet_c_support", .{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        mod.addCSourceFiles(.{
+            .root = b.path("src/omelet_c/c"),
+            .files = &.{
+                // "dummy.c",
+            },
+            .flags = &.{if (optimize == .Debug) "-Werror" else ""},
+        });
+
+        native_config: {
+            mod.addIncludePath(b.path("src/omelet_c/include"));
+            break:native_config;
+        }
+        break:lib_module_omelet_c mod;
+    };
 
     lib_module: {
         const mod = b.addModule("core", .{
@@ -96,6 +116,7 @@ pub fn build(b: *std.Build) void {
 
         native_config: {
             mod.addIncludePath(b.path("../../vendor/cbor/include"));
+            mod.addIncludePath(b.path("src/omelet_c/include"));
             break:native_config;
         }
         import_modules: {
@@ -118,6 +139,7 @@ pub fn build(b: *std.Build) void {
 
         native_config: {
             mod_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
+            mod_unit_tests.addIncludePath(b.path("src/omelet_c/include"));
             mod_unit_tests.linkLibC();
             mod_unit_tests.linkLibCpp();
             break:native_config;
@@ -130,6 +152,7 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             mod_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             mod_unit_tests.root_module.addImport("cbor", mod_cbor);
+            mod_unit_tests.root_module.addImport("omelet_c", mod_omelet_c);
             break:import_modules;
         }
         test_runner: {

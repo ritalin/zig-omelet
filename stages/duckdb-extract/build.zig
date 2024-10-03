@@ -55,7 +55,10 @@ pub fn build(b: *std.Build) void {
                     .duckdb_prefix = duckdb_prefix,
                     .zmq_prefix = zmq_prefix,
                     .catch2_prefix = catch2_prefix,
-                    .dep_module = dep_lib_core.module("cbor_cpp_support"),
+                    .dep_modules = &.{
+                        .{.name = "cbor_cpp_support", .mod = dep_lib_core.module("cbor_cpp_support")},
+                        .{.name = "omelet_c_support", .mod = dep_lib_core.module("omelet_c_support")},
+                    },
                     .use_catch2 = false
                 });
             });
@@ -127,7 +130,10 @@ pub fn build(b: *std.Build) void {
                     .duckdb_prefix = duckdb_prefix,
                     .zmq_prefix = zmq_prefix,
                     .catch2_prefix = catch2_prefix,
-                    .dep_module = dep_lib_core.module("cbor_cpp_support"),
+                    .dep_modules = &.{
+                        .{.name = "cbor_cpp_support", .mod = dep_lib_core.module("cbor_cpp_support")},
+                        .{.name = "omelet_c_support", .mod = dep_lib_core.module("omelet_c_support")},
+                    },
                     .use_catch2 = true
                 });
             });
@@ -169,7 +175,7 @@ fn createWorkerModule(
         duckdb_prefix: []const u8,
         zmq_prefix: []const u8,
         catch2_prefix: []const u8, 
-        dep_module: *std.Build.Module,
+        dep_modules: []const (struct {name: []const u8, mod: *std.Build.Module}),
         use_catch2: bool
     }
 ) *std.Build.Module {
@@ -202,7 +208,10 @@ fn createWorkerModule(
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });
         mod.addIncludePath(b.path("../../vendor/magic-enum/include"));
-        @import("lib_core").builder_supports.LazyPath.mergeIncludePath(mod, config.dep_module);
+        const mergeIncludePath = @import("lib_core").builder_supports.LazyPath.mergeIncludePath;
+        for (config.dep_modules) |dep_mod| {
+            mergeIncludePath(mod, dep_mod.mod);
+        }
         break:native_config;
     }
     catch2_config: {
@@ -246,9 +255,10 @@ fn createWorkerModule(
         break:duckdb_native_config;
     }
     import_modules: {
-        mod.addImport("cbor_cpp_support", config.dep_module);
+        for (config.dep_modules) |dep_mod| {
+            mod.addImport(dep_mod.name, dep_mod.mod);
+        }
         break:import_modules;
-    
     }
     
     return mod;

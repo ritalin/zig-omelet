@@ -5,6 +5,8 @@ const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
 const FilePath = core_types.FilePath;
 
+const c = @import("../omelet_c/interop.zig");
+
 pub const LogLevel = enum {
     err,
     warn,
@@ -30,6 +32,15 @@ pub const LogLevel = enum {
     }
 };
 pub const LogLevelSet = std.enums.EnumSet(LogLevel);
+
+pub const UserTypeKind = enum(u8) {
+    @"enum" = c.Enum, 
+    @"struct" = c.Struct, 
+    array = c.Array, 
+    primitive = c.Primitive, 
+    user = c.User,
+    alias = c.Alias, 
+};
 
 /// ChannelType
 pub const ChannelType = enum {

@@ -132,6 +132,13 @@ fn parsePayload(walker: *CodeBuilder.Parser.ResultWalker, passed_set: *TargetFie
             passed_set.result_set = true;
         },
         .user_type => |definition| {
+            if (!passed_set.bound_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+            if (!passed_set.anon_user_type) {
+                try parsePayload(walker, passed_set, builder);
+            }
+
             try builder.applyUserType(definition);
             passed_set.user_type = true;
         },

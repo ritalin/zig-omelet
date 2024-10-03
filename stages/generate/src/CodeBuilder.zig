@@ -64,32 +64,70 @@ fn writeLiteral(writer: *std.ArrayList(u8).Writer, text: Symbol) !void {
     try writer.writeByte('\'');
 }
 
-fn buildUserTypeMemberRecursive(allocator: std.mem.Allocator, writer: *std.ArrayList(u8).Writer, user_type: UserTypeDef, user_type_names: std.BufSet) !void {
-    if (user_type_names.contains(user_type.header.name)) {
-        return writer.writeAll(user_type.header.name);
-    }
-
+fn buildUserTypeMemberRecursive(
+    allocator: std.mem.Allocator, 
+    indent_level: usize,
+    writer: *std.ArrayList(u8).Writer, 
+    user_type: UserTypeDef, 
+    user_type_names: std.BufSet, 
+    anon_user_types: std.StringHashMap(UserTypeDef)) anyerror!void 
+{
     switch (user_type.header.kind) {
         .@"enum" => {
             if (user_type.fields.len == 0) return;
-            try writeLiteral(writer, user_type.fields[0].field_name);
-            if (user_type.fields.len == 1) return;
 
-            for (user_type.fields[1..]) |field| {
-                try writer.writeAll(" | ");
-                try writeLiteral(writer, field.field_name);
+            try writeLiteral(writer, user_type.fields[0].field_name);
+            if (user_type.fields.len > 1) {
+                for (user_type.fields[1..]) |field| {
+                    try writer.writeAll(" | ");
+                    try writeLiteral(writer, field.field_name);
+                }
             }
+        },
+        .@"struct" => {
+            try writer.writeAll("{\n");
+            for (user_type.fields) |field| {
+                const field_name = name: {
+                    if (try isLiteral(allocator, field.field_name)) {
+                        break:name try IdentifierFormatter.format(allocator, field.field_name, .camel_case);
+                    }
+                    else {
+                        break:name try std.fmt.allocPrint(allocator, "\"{s}\"", .{field.field_name});
+                    }
+                };
+
+                try writer.writeBytesNTimes("  ", indent_level+1);
+                try writer.print("{s}: ", .{field_name});
+                if (field.field_type) |field_type| {
+                    const field_type_name = try buildTypeMember(allocator, indent_level+1, field_type.header.name, user_type_names, anon_user_types, .{.always_null = true});
+                    try writer.print("{s};", .{field_type_name});
+                }
+                else {
+                     try writer.writeAll("any;");
+                }
+                try writer.writeAll("\n");
+            }
+            
+            try writer.writeBytesNTimes("  ", indent_level);
+            try writer.writeAll("}");
         },
         .array => {
             std.debug.assert((user_type.fields.len == 1) and (user_type.fields[0].field_type != null));
 
-            try buildUserTypeMemberRecursive(allocator, writer, user_type.fields[0].field_type.?, user_type_names);
+            if (user_type.fields[0].field_type) |field_type| {
+                const field_type_name = try buildTypeMember(allocator, indent_level, field_type.header.name, user_type_names, anon_user_types, .{});
+                try writer.writeAll(field_type_name);
+            }
+            else {
+                try writer.writeAll("any");
+            }
             try writer.writeAll("[]");
         },
         .alias => {
             std.debug.assert((user_type.fields.len == 1) and (user_type.fields[0].field_type != null));
 
-            try buildUserTypeMemberRecursive(allocator, writer, user_type.fields[0].field_type.?, user_type_names);
+            const field_type_name = try buildTypeMember(allocator, indent_level, user_type.fields[0].field_type.?.header.name, user_type_names, anon_user_types, .{});
+            try writer.writeAll(field_type_name);
         },
         .primitive => {
             const key = try std.ascii.allocUpperString(allocator, user_type.header.name);
@@ -98,64 +136,50 @@ fn buildUserTypeMemberRecursive(allocator: std.mem.Allocator, writer: *std.Array
             };
             try writer.writeAll(ts_type);
         },
+        .user => {
+            unreachable;
+        },
     }
 }
 
-fn buildUserTypeMemberInternal(
-    allocator: std.mem.Allocator, 
-    writer: *std.ArrayList(u8).Writer, 
-    user_type: UserTypeDef, 
+const UserTypeMemberOptions = std.enums.EnumFieldStruct(enum{always_null}, bool, false);
+
+fn buildTypeMember(
+    allocator: std.mem.Allocator, indent_level: usize, field_type: Symbol, 
     user_type_names: std.BufSet, 
-    opt: std.enums.EnumFieldStruct(enum{anon}, bool, false)) !void 
+    anon_user_types: std.StringHashMap(UserTypeDef),
+    opt: UserTypeMemberOptions) !Symbol 
 {
-    if (user_type.fields.len == 0) {
-        try writer.writeAll("undefined");
-        return;
-    }
-
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    var member_writer = buf.writer();
-
-    try buildUserTypeMemberRecursive(allocator, &member_writer, user_type, user_type_names);
-    
-    if (opt.anon) {
-        try writer.writeAll(buf.items);
-    }
-    else {
-        const type_name = try IdentifierFormatter.format(allocator, user_type.header.name, .pascal_case);
-        try  writer.print("({s}) & {{_brand: '{s}'}}", .{buf.items, type_name});
-    }
-}
-
-fn buildAnonymousTypeMember(allocator: std.mem.Allocator, user_type: UserTypeDef, user_type_names: std.BufSet) !Symbol {
     var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
     var writer = buf.writer();
 
-    try buildUserTypeMemberInternal(allocator, &writer, user_type, user_type_names, .{.anon = true});
+    if (user_type_names.contains(field_type)) {
+        // predefined user type
+        const ts_type = try IdentifierFormatter.format(allocator, field_type, .pascal_case);
+        try writer.writeAll(ts_type);
+    }
+    else if (anon_user_types.get(field_type)) |anon_type| {
+        // anonymous user type
+        if (anon_type.fields.len == 0) {
+            try writer.writeAll("undefined");
+        }
+        try buildUserTypeMemberRecursive(allocator, indent_level, &writer, anon_type, user_type_names, anon_user_types);
+    }
+    else {
+        // builtin type
+        const key = try std.ascii.allocUpperString(allocator, field_type);
+        const ts_type = TypeMappingRules.get(key) orelse {
+            return error.UnsupportedDbType;
+        };
+        try writer.writeAll(ts_type);
+    }
+
+    if (opt.always_null) {
+        try writer.writeAll(" | null");
+    }
 
     return buf.toOwnedSlice();
-}
-
-fn buildTypeMember(allocator: std.mem.Allocator, field_type: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !Symbol {
-    return ts_type: {
-        if (user_type_names.contains(field_type)) {
-            // predefined user type
-            break:ts_type try IdentifierFormatter.format(allocator, field_type, .pascal_case);
-        }
-        else if (anon_user_types.get(field_type)) |anon_type| {
-            // anonymous user type
-            break:ts_type try buildAnonymousTypeMember(allocator, anon_type, user_type_names);
-        }
-        else {
-            // builtin type
-            const key = try std.ascii.allocUpperString(allocator, field_type);
-            break:ts_type TypeMappingRules.get(key) orelse {
-                return error.UnsupportedDbType;
-            };
-        }
-    };
 }
 
 pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
@@ -183,13 +207,13 @@ pub fn applyPlaceholder(self: *Self, parameters: []const FieldTypePair, user_typ
         };
         const ts_type = ts_type: {
             if (p.field_type) |t| {
-                break:ts_type try buildTypeMember(temp_allocator, t, user_type_names, anon_user_types);
+                break:ts_type try buildTypeMember(temp_allocator, INDENT_LEVEL, t, user_type_names, anon_user_types, .{.always_null = true});
             }
             else {
                 break:ts_type "any";
             }
         };
-        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s} | null,\n", .{field, ts_type});
+        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s},\n", .{field, ts_type});
     }
 
     try writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
@@ -264,11 +288,11 @@ pub fn applyResultSets(self: *Self, result_set: []const ResultSetColumn, user_ty
                 break:name try std.fmt.allocPrint(temp_allocator, "\"{s}\"", .{c.field_name});
             }
         };
-        const ts_type = try buildTypeMember(temp_allocator, c.field_type, user_type_names, anon_user_types);
+        const ts_type = try buildTypeMember(temp_allocator, INDENT_LEVEL+1, c.field_type, user_type_names, anon_user_types, .{});
 
-        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s}{s},\n", .{
+        try writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s}{s};\n", .{
             field, ts_type,
-            if (c.nullable) " | null" else ""
+            if (c.nullable) " | null" else "",
         });
     }
     try writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
@@ -292,12 +316,28 @@ pub fn applyUserType(self: *Self, user_type: UserTypeDef) !void {
     
     const INDENT_LEVEL = 0;
 
-    try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{
-        try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case)
-    });
+    const type_name = try IdentifierFormatter.format(arena.allocator(), user_type.header.name, .pascal_case);
 
-    try buildUserTypeMemberInternal(arena.allocator(), &writer, user_type, self.user_type_names, .{});
+    try writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{type_name});
 
+    write_member: {
+        var member_buf = std.ArrayList(u8).init(self.allocator);
+        defer member_buf.deinit();
+        var member_writer = member_buf.writer();
+     
+        try buildUserTypeMemberRecursive(arena.allocator(), INDENT_LEVEL, &member_writer, user_type, self.user_type_names, self.anon_user_types);
+        if (user_type.header.kind == .@"enum") {
+            try  writer.print("({s})", .{member_buf.items});
+        }
+        else {
+            try  writer.print("{s}", .{member_buf.items});
+        }
+        break:write_member;
+    }
+    write_brand: {
+        try  writer.print(" & {{_brand: '{s}'}}", .{type_name});
+        break:write_brand;
+    }
     self.entries.put(.user_type, try buf.toOwnedSlice());
 }
 
@@ -462,13 +502,17 @@ pub const Target = union(enum) {
     anon_user_type: []const UserTypeDef,
 };
 
+pub const UserTypeKind = core.UserTypeKind;
+
 pub const FieldTypePair = struct {
     field_name: Symbol,
+    type_kind: UserTypeKind,
     field_type: ?Symbol = null,
 };
 
 pub const ResultSetColumn = struct {
     field_name: Symbol,
+    type_kind: UserTypeKind,
     field_type: Symbol,
     nullable: bool,
 };
@@ -477,9 +521,8 @@ pub const UserTypeDef = struct {
     header: Header,
     fields: []const Member,
 
-    pub const Kind = enum {@"enum", array, alias, primitive};
     pub const Header = struct {
-        kind: Kind,
+        kind: UserTypeKind,
         name: Symbol,
     };
 
@@ -510,7 +553,8 @@ pub const Parser = struct {
         for (values, 0..) |v, i| {
             result[i] = .{
                 .field_name = v[0],
-                .field_type = v[1],
+                .type_kind = v[1],
+                .field_type = v[2],
             };
         }
 
@@ -533,8 +577,9 @@ pub const Parser = struct {
         for (values, 0..) |v, i| {
             result_set[i] = .{
                 .field_name = v[0],
-                .field_type = v[1],
-                .nullable = v[2],
+                .type_kind = v[1],
+                .field_type = v[2],
+                .nullable = v[3],
             };
         }
 
@@ -542,10 +587,10 @@ pub const Parser = struct {
     }
 
     fn parseUserTypeDefinitionInternal(allocator: std.mem.Allocator, reader: *core.CborStream.Reader, user_type: *UserTypeDef) !void {
-        const HeaderType = struct {Symbol, Symbol};
+        const HeaderType = struct {UserTypeKind, Symbol};
 
         const v = try reader.readTuple(core.StructView(HeaderType));
-        const header: UserTypeDef.Header = .{ .kind = std.meta.stringToEnum(UserTypeDef.Kind, v[0]).?, .name = v[1] };
+        const header: UserTypeDef.Header = .{ .kind = v[0], .name = v[1] };
 
         const filed_len = try reader.readSliceHeader();
         var fields = try allocator.alloc(UserTypeDef.Member, filed_len);
@@ -770,7 +815,7 @@ fn placeholderToCbor(allocator: std.mem.Allocator, items: []const FieldTypePair)
     _ = try writer.writeSliceHeader(items.len);
 
     for (items) |c| {
-        _ = try writer.writeTuple(core.StructView(FieldTypePair), .{c.field_name, c.field_type});
+        _ = try writer.writeTuple(core.StructView(FieldTypePair), .{c.field_name, c.type_kind, c.field_type});
     }
 
     return writer.buffer.toOwnedSlice();
@@ -782,8 +827,8 @@ test "parse parameter#1" {
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
     const expect: []const FieldTypePair = &.{
-        .{.field_name = "id", .field_type = "bigint"},
-        .{.field_name = "name", .field_type = "varchar"},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "bigint"},
+        .{.field_name = "name", .type_kind = .primitive, .field_type = "varchar"},
     };
     const source_bodies = try placeholderToCbor(arena.allocator(), expect);
     
@@ -818,8 +863,8 @@ test "parse parameter#2 (with any type)" {
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
     const expect: []const FieldTypePair = &.{
-        .{.field_name = "id", .field_type = "bigint"},
-        .{.field_name = "name", .field_type = null},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "bigint"},
+        .{.field_name = "name", .type_kind = .primitive, .field_type = null},
     };
     const source_bodies = try placeholderToCbor(arena.allocator(), expect);
 
@@ -895,7 +940,7 @@ fn resultSetToCbor(allocator: std.mem.Allocator, result_set: []const ResultSetCo
     _ = try writer.writeSliceHeader(result_set.len);
 
     for (result_set) |c| {
-        _ = try writer.writeTuple(core.StructView(ResultSetColumn), .{c.field_name, c.field_type, c.nullable});
+        _ = try writer.writeTuple(core.StructView(ResultSetColumn), .{c.field_name, c.type_kind, c.field_type, c.nullable});
     }
 
     return writer.buffer.toOwnedSlice();
@@ -942,8 +987,8 @@ test "parse result set" {
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
     const expect: []const ResultSetColumn = &.{
-        .{.field_name = "a", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "b", .field_type = "VARCHAR", .nullable = true},
+        .{.field_name = "a", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "b", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = true},
     };
 
     const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
@@ -980,13 +1025,13 @@ test "parse result set with aliasless field name" {
     arena.* = std.heap.ArenaAllocator.init(allocator);
 
     const source: []const ResultSetColumn = &.{
-        .{.field_name = "Cast(a as INTEGER)", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "bar_baz", .field_type = "VARCHAR", .nullable = true},
+        .{.field_name = "Cast(a as INTEGER)", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "bar_baz", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = true},
     };
 
     const expect: []const ResultSetColumn = &.{
-        .{.field_name = "Cast(a as INTEGER)", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "bar_baz", .field_type = "VARCHAR", .nullable = true},
+        .{.field_name = "Cast(a as INTEGER)", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "bar_baz", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = true},
     };
 
     const source_bodies: []const core.Event.Payload.TopicBody.Item = &.{.{
@@ -1020,7 +1065,7 @@ test "parse result set with aliasless field name" {
 fn userTypeToCborInternal(writer: *core.CborStream.Writer, user_type: UserTypeDef) !void {
     header: {
         _ = try writer.writeSliceHeader(2);
-        _ = try writer.writeString(@tagName(user_type.header.kind));
+        _ = try writer.writeEnum(UserTypeKind, user_type.header.kind);
         _ = try writer.writeString(user_type.header.name);
         break:header;
     }
@@ -1363,7 +1408,7 @@ test "apply anonymous user type" {
     try std.testing.expectEqualDeep(expects[1], builder.anon_user_types.get("Status").?);
 }
 
-fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
+fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_type_names: []const Symbol, anon_user_types: []const UserTypeDef) !void {
     const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
@@ -1374,7 +1419,9 @@ fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_t
     var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
-    try builder.applyPlaceholder(parameters, user_type_names, anon_user_types);
+    try builder.applyBoundUserType(user_type_names);
+    try builder.applyAnonymousUserType(anon_user_types);
+    try builder.applyPlaceholder(parameters, builder.user_type_names, builder.anon_user_types);
 
     const apply_result = builder.entries.get(.parameter);
     try std.testing.expect(apply_result != null);
@@ -1386,51 +1433,48 @@ fn runApplyPlaceholder(parameters: []const FieldTypePair, expect: Symbol, user_t
 
 test "generate name parameter code#1" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "id", .field_type = "BIGINT"},
-        .{.field_name = "name", .field_type = "VARCHAR"},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "BIGINT"},
+        .{.field_name = "name", .type_kind = .primitive, .field_type = "VARCHAR"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  id: number | null,
         \\  name: string | null,
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#2 (upper case field)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "ID", .field_type = "BIGINT"},
-        .{.field_name = "NAME", .field_type = "VARCHAR"},
+        .{.field_name = "ID", .type_kind = .primitive, .field_type = "BIGINT"},
+        .{.field_name = "NAME", .type_kind = .primitive, .field_type = "VARCHAR"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  id: number | null,
         \\  name: string | null,
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#3 (lower-case)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "id", .field_type = "int"},
-        .{.field_name = "name", .field_type = "varchar"},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "int"},
+        .{.field_name = "name", .type_kind = .primitive, .field_type = "varchar"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  id: number | null,
@@ -1438,41 +1482,35 @@ test "generate name parameter code#3 (lower-case)" {
         \\}
     ;
 
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#4 (with any type)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "id", .field_type = null},
-        .{.field_name = "name", .field_type = null},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = null},
+        .{.field_name = "name", .type_kind = .primitive, .field_type = null},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
-        \\  id: any | null,
-        \\  name: any | null,
+        \\  id: any,
+        \\  name: any,
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (with snake_case)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "user_id", .field_type = "int"},
-        .{.field_name = "user_name", .field_type = "text"},
+        .{.field_name = "user_id", .type_kind = .primitive, .field_type = "int"},
+        .{.field_name = "user_name", .type_kind = .primitive, .field_type = "text"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  userId: number | null,
@@ -1480,20 +1518,17 @@ test "generate name parameter code#5 (with snake_case)" {
         \\}
     ;
 
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (with snake_case type)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "user_id", .field_type = "int"},
-        .{.field_name = "status", .field_type = "ui_status"},
+        .{.field_name = "user_id", .type_kind = .primitive, .field_type = "int"},
+        .{.field_name = "status", .type_kind = .user, .field_type = "ui_status"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{"ui_status"};
+
     const expect = 
         \\export type Parameter = {
         \\  userId: number | null,
@@ -1501,24 +1536,17 @@ test "generate name parameter code#5 (with snake_case type)" {
         \\}
     ;
 
-    var user_type_names = map: {
-        var map = std.BufSet.init(std.testing.allocator);
-        try map.insert("ui_status");
-        break:map map;
-    };
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (with PascalCase)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "UserId", .field_type = "int"},
-        .{.field_name = "UserName", .field_type = "text"},
+        .{.field_name = "UserId", .type_kind = .primitive, .field_type = "int"},
+        .{.field_name = "UserName", .type_kind = .primitive, .field_type = "text"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  userId: number | null,
@@ -1526,20 +1554,17 @@ test "generate name parameter code#5 (with PascalCase)" {
         \\}
     ;
 
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate name parameter code#5 (without alias)" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "UserId", .field_type = "int"},
-        .{.field_name = "CAST(name AS VARCHAR)", .field_type = "text"},
+        .{.field_name = "UserId", .type_kind = .primitive, .field_type = "int"},
+        .{.field_name = "CAST(name AS VARCHAR)", .type_kind = .primitive, .field_type = "text"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  userId: number | null,
@@ -1547,20 +1572,17 @@ test "generate name parameter code#5 (without alias)" {
         \\}
     ;
 
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate positional parameter code" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "1", .field_type = "float"},
-        .{.field_name = "2", .field_type = "text"},
+        .{.field_name = "1", .type_kind = .primitive, .field_type = "float"},
+        .{.field_name = "2", .type_kind = .primitive, .field_type = "text"},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
         \\  1: number | null,
@@ -1568,67 +1590,46 @@ test "generate positional parameter code" {
         \\}
     ;
 
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
-
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate positional parameter code with any type" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "1", .field_type = null},
-        .{.field_name = "2", .field_type = null},
+        .{.field_name = "1", .type_kind = .primitive, .field_type = null},
+        .{.field_name = "2", .type_kind = .primitive, .field_type = null},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Parameter = {
-        \\  1: any | null,
-        \\  2: any | null,
+        \\  1: any,
+        \\  2: any,
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
 
 test "generate positional parameter code with enum user type" {
     const parameters: []const FieldTypePair = &.{
-        .{.field_name = "vis1", .field_type = "Visibility"},
-        .{.field_name = "vis2", .field_type = "Param::Enum#1"},
+        .{.field_name = "vis1", .type_kind = .user, .field_type = "Visibility"},
+        .{.field_name = "vis2", .type_kind = .@"enum", .field_type = "Param::Enum#1"},
     };
+    const anon_user_types = &.{
+        .{  
+            .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
+            .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
+        },
+    };
+    const user_type_names = &.{ "Visibility", "Status"};
+
     const expect = 
         \\export type Parameter = {
         \\  vis1: Visibility | null,
         \\  vis2: 'hide' | 'visible' | null,
         \\}
     ;
-
-    var user_type_names = map: {
-        var map = std.BufSet.init(std.testing.allocator);
-
-        try map.insert("Visibility");
-        try map.insert("Status");
-        break:map map;
-    };
-    defer user_type_names.deinit();
-
-    var anon_user_types = map: {
-        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-
-        try map.put("Param::Enum#1", .{  
-            .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
-            .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
-        });
-        break:map map;
-    };
-    defer anon_user_types.deinit();
 
     try runApplyPlaceholder(parameters, expect, user_type_names, anon_user_types);
 }
@@ -1677,7 +1678,7 @@ test "generate parameter order#2 (positional)" {
     try std.testing.expectEqualStrings(expect, apply_result.?);
 }
 
-fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
+fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_type_names: []const Symbol, anon_user_types: []const UserTypeDef) !void {
     const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
@@ -1689,7 +1690,9 @@ fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_
     var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
-    try builder.applyResultSets(parameters, user_type_names, anon_user_types);
+    try builder.applyBoundUserType(user_type_names);
+    try builder.applyAnonymousUserType(anon_user_types);
+    try builder.applyResultSets(parameters, builder.user_type_names, builder.anon_user_types);
 
     const apply_result = builder.entries.get(.result_set);
     try std.testing.expect(apply_result != null);
@@ -1698,245 +1701,258 @@ fn runApplyResultSets(parameters: []const ResultSetColumn, expect: Symbol, user_
 
 test "generate select list#1 (lowercase field)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "kind", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "value", .field_type = "VARCHAR", .nullable = false},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "value", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = false},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  id: number,
-        \\  kind: number,
-        \\  value: string,
+        \\  id: number;
+        \\  kind: number;
+        \\  value: string;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#2 (PascalCase field)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "userId", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "profileKind", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
+        .{.field_name = "userId", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "profileKind", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "remarks", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = false},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  userId: number,
-        \\  profileKind: number,
-        \\  remarks: string,
+        \\  userId: number;
+        \\  profileKind: number;
+        \\  remarks: string;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#3 (lower snake_case field)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "user_id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "profile_kind", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "remarks", .field_type = "VARCHAR", .nullable = false},
+        .{.field_name = "user_id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "profile_kind", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "remarks", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = false},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  userId: number,
-        \\  profileKind: number,
-        \\  remarks: string,
+        \\  userId: number;
+        \\  profileKind: number;
+        \\  remarks: string;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#4 (upper snake_case field)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "USER_ID", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "PROFILE_KIND", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "REMARKS", .field_type = "VARCHAR", .nullable = false},
+        .{.field_name = "USER_ID", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "PROFILE_KIND", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "REMARKS", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = false},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  userId: number,
-        \\  profileKind: number,
-        \\  remarks: string,
+        \\  userId: number;
+        \\  profileKind: number;
+        \\  remarks: string;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#5 (nullable field)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "kind", .field_type = "INTEGER", .nullable = true},
-        .{.field_name = "value", .field_type = "VARCHAR", .nullable = true},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .type_kind = .primitive, .field_type = "INTEGER", .nullable = true},
+        .{.field_name = "value", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = true},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  id: number,
-        \\  kind: number | null,
-        \\  value: string | null,
+        \\  id: number;
+        \\  kind: number | null;
+        \\  value: string | null;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#6 (field without alias)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "kind", .field_type = "INTEGER", .nullable = true},
-        .{.field_name = "CAST($val AS VARCHAR)", .field_type = "VARCHAR", .nullable = true},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "kind", .type_kind = .primitive, .field_type = "INTEGER", .nullable = true},
+        .{.field_name = "CAST($val AS VARCHAR)", .type_kind = .primitive, .field_type = "VARCHAR", .nullable = true},
     };
+    const anon_user_types = &.{};
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  id: number,
-        \\  kind: number | null,
-        \\  "CAST($val AS VARCHAR)": string | null,
+        \\  id: number;
+        \\  kind: number | null;
+        \\  "CAST($val AS VARCHAR)": string | null;
         \\}
     ;
-
-    var user_type_names = std.BufSet.init(std.testing.allocator);
-    defer user_type_names.deinit();
-
-    var anon_user_types = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#7 (with enum user type)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "vis1", .field_type = "SelList::Enum#1", .nullable = true},
-        .{.field_name = "vis2", .field_type = "Visibility", .nullable = false},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "vis1", .type_kind = .@"enum", .field_type = "SelList::Enum#1", .nullable = true},
+        .{.field_name = "vis2", .type_kind = .user, .field_type = "Visibility", .nullable = false},
     };
-    const expect = 
-        \\export type ResultSet = {
-        \\  id: number,
-        \\  vis1: 'hide' | 'visible' | null,
-        \\  vis2: Visibility,
-        \\}
-    ;
-
-    var user_type_names = map: {
-        var map = std.BufSet.init(std.testing.allocator);
-
-        try map.insert("Visibility");
-        try map.insert("Status");
-        break:map map;
-    };
-    defer user_type_names.deinit();
-
-    var anon_user_types = map: {
-        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-
-        try map.put("SelList::Enum#1", .{  
+    const anon_user_types = &.{
+        .{  
             .header = .{ .kind = .@"enum", .name = "SelList::Enum#1" },
             .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
-        });
-        break:map map;
+        }
     };
-    defer anon_user_types.deinit();
+    const user_type_names = &.{"Visibility", "Status"};
+
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number;
+        \\  vis1: 'hide' | 'visible' | null;
+        \\  vis2: Visibility;
+        \\}
+    ;
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
 test "generate select list#8 (primitive list)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "numbers", .field_type = "SelList::Array#2", .nullable = true},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "numbers", .type_kind = .array, .field_type = "SelList::Array#1", .nullable = true},
     };
+    const anon_user_types = &.{
+        .{  
+            .header = .{ .kind = .array, .name = "SelList::Array#1" },
+            .fields = &.{ .{.field_name = "Anon::Primitive#2", .field_type = .{.header = .{.kind = .primitive, .name = "INTEGER"}, .fields = &.{} }} },
+        }
+    };
+    const user_type_names = &.{};
+
     const expect = 
         \\export type ResultSet = {
-        \\  id: number,
-        \\  numbers: number[] | null,
+        \\  id: number;
+        \\  numbers: number[] | null;
         \\}
     ;
-
-    var user_type_names = map: {
-        const map = std.BufSet.init(std.testing.allocator);
-        break:map map;
-    };
-    defer user_type_names.deinit();
-
-    var anon_user_types = map: {
-        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-
-        try map.put("SelList::Array#2", .{  
-            .header = .{ .kind = .array, .name = "Anon::Primitive#1" },
-            .fields = &.{ .{.field_name = "Anon::Primitive#1", .field_type = .{.header = .{.kind = .primitive, .name = "INTEGER"}, .fields = &.{} }} },
-        });
-        break:map map;
-    };
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
-test "generate select list#8 (predefined rnum list)" {
+test "generate select list#8 (predefined enum list)" {
     const result_set: []const ResultSetColumn = &.{
-        .{.field_name = "id", .field_type = "INTEGER", .nullable = false},
-        .{.field_name = "vis2", .field_type = "SelList::Array#2", .nullable = true},
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "vis2", .type_kind = .array, .field_type = "SelList::Array#1", .nullable = true},
     };
+    const anon_user_types = &.{
+        .{  
+            .header = .{ .kind = .array, .name = "SelList::Array#1" },
+            .fields = &.{ .{.field_name = "Anon::User#2", .field_type = .{.header = .{.kind = .@"user", .name = "Visibility"}, .fields = &.{} }} },
+        }
+    };
+    const user_type_names = &.{"Visibility"};
+
     const expect = 
         \\export type ResultSet = {
-        \\  id: number,
-        \\  vis2: Visibility[] | null,
+        \\  id: number;
+        \\  vis2: Visibility[] | null;
         \\}
     ;
-
-    var user_type_names = map: {
-        var map = std.BufSet.init(std.testing.allocator);
-        try map.insert("Visibility");
-        break:map map;
-    };
-    defer user_type_names.deinit();
-
-    var anon_user_types = map: {
-        var map = std.StringHashMap(UserTypeDef).init(std.testing.allocator);
-
-        try map.put("SelList::Array#2", .{  
-            .header = .{ .kind = .array, .name = "Anon::Enum#1" },
-            .fields = &.{ .{.field_name = "Anon::Enum#1", .field_type = .{.header = .{.kind = .@"enum", .name = "Visibility"}, .fields = &.{} }} },
-        });
-        break:map map;
-    };
-    defer anon_user_types.deinit();
 
     try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
 }
 
-fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol) !void {
+test "generate select list#9 (predefined struct)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "user", .type_kind = .user, .field_type = "USER_PROFILE", .nullable = true},
+    };
+    const anon_user_types = &.{};
+    const user_type_names = &.{"USER_PROFILE"};
+
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number;
+        \\  user: UserProfile | null;
+        \\}
+    ;
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
+}
+
+test "generate select list#9 (anonymous struct)" {
+    const result_set: []const ResultSetColumn = &.{
+        .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
+        .{.field_name = "user", .type_kind = .user, .field_type = "SelList::Array#1", .nullable = true},
+    };
+    const anon_user_types = &.{
+        .{
+            .header = .{.kind = .array, .name = "SelList::Array#1"},
+            .fields = &.{ 
+                .{.field_name = "Anon::Struct#2", .field_type = .{.header = .{.kind = .@"struct", .name = "Anon::Struct#2"}, .fields = &.{}}}
+            }
+        },
+        .{
+            .header = .{.kind = .@"struct", .name = "Anon::Struct#2"},
+            .fields = &.{ 
+                .{.field_name = "name", .field_type = .{.header = .{.kind = .@"primitive", .name = "varchar"}, .fields = &.{}}},
+                .{.field_name = "age", .field_type = .{.header = .{.kind = .@"primitive", .name = "int"}, .fields = &.{}}},
+                .{.field_name = "gender", .field_type = .{.header = .{.kind = .@"enum", .name = "Anon::Enum#3"}, .fields = &.{}}},                
+            }
+        },
+        .{
+            .header = .{.kind = .@"enum", .name = "Anon::Enum#3"},
+            .fields = &.{ 
+                .{.field_name = "male", .field_type = null},
+                .{.field_name = "female", .field_type = null},
+            }
+        },
+    };
+    const user_type_names = &.{"USER_PROFILE"};
+
+    const expect = 
+        \\export type ResultSet = {
+        \\  id: number;
+        \\  user: {
+        \\    name: string | null;
+        \\    age: number | null;
+        \\    gender: 'male' | 'female' | null;
+        \\  }[] | null;
+        \\}
+    ;
+
+    try runApplyResultSets(result_set, expect, user_type_names, anon_user_types);
+}
+
+fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol, user_type_names: []const Symbol, anon_user_types: []const UserTypeDef) !void {
     const allocator = std.testing.allocator;
 
     var dir = std.testing.tmpDir(.{});
@@ -1947,6 +1963,8 @@ fn runApplyUserType(enum_type: UserTypeDef, expect: Symbol) !void {
     var builder = try CodeBuilder.init(allocator);
     defer builder.deinit();
 
+    try builder.applyBoundUserType(user_type_names);
+    try builder.applyAnonymousUserType(anon_user_types);
     try builder.applyUserType(enum_type);
 
     const apply_result = builder.entries.get(.user_type);
@@ -1964,11 +1982,13 @@ test "generate enum user type#1 (PascalCase type name)" {
             .{.field_name = "visible", .field_type = null}, 
         },
     };
+    const user_type_names = &.{};
+
     const expect = 
         \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
-    try runApplyUserType(enum_type, expect);
+    try runApplyUserType(enum_type, expect, user_type_names, &.{});
 }
 
 test "generate enum user type#2 (lowercase type name)" {
@@ -1981,11 +2001,13 @@ test "generate enum user type#2 (lowercase type name)" {
             .{.field_name = "visible", .field_type = null}, 
         },
     };
+    const user_type_names = &.{"Visibility"};
+
     const expect = 
         \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
-    try runApplyUserType(enum_type, expect);
+    try runApplyUserType(enum_type, expect, user_type_names, &.{});
 }
 
 test "generate enum user type#3 (UPPER CASE type name)" {
@@ -1998,14 +2020,16 @@ test "generate enum user type#3 (UPPER CASE type name)" {
             .{.field_name = "visible", .field_type = null},
         },
     };
+    const user_type_names = &.{"VISIBILITY"};
+
     const expect = 
         \\export type Visibility = ('hide' | 'visible') & {_brand: 'Visibility'}
     ;
 
-    try runApplyUserType(enum_type, expect);
+    try runApplyUserType(enum_type, expect, user_type_names, &.{});
 }
 
-test "generate enum user type#3 (snake_case type name)" {
+test "generate enum user type#4 (snake_case type name)" {
     const enum_type: UserTypeDef = .{
         .header = .{
             .kind = .@"enum", .name = "USER_PROFILE_KIND",
@@ -2015,11 +2039,89 @@ test "generate enum user type#3 (snake_case type name)" {
             .{.field_name = "general", .field_type = null},
         },
     };
+    const user_type_names = &.{"USER_PROFILE_KIND"};
+
     const expect = 
         \\export type UserProfileKind = ('admin' | 'general') & {_brand: 'UserProfileKind'}
     ;
 
-    try runApplyUserType(enum_type, expect);
+    try runApplyUserType(enum_type, expect, user_type_names, &.{});
+}
+
+test "generate struct user type#1 (with predefined user type field)" {
+    const user_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"struct", .name = "USER_PROFILE",
+        },
+        .fields = &.{
+            .{.field_name = "user_id", .field_type = .{.header = .{.kind = .primitive, .name = "bigint"}, .fields = &.{}}}, 
+            .{.field_name = "name", .field_type = .{.header = .{.kind = .primitive, .name = "varchar"}, .fields = &.{}}},
+            .{.field_name = "gender", .field_type = .{.header = .{.kind = .primitive, .name = "Gender"}, .fields = &.{}}},
+        },
+    };
+    const anon_user_types = &.{};
+    const user_type_names = &.{"Gender"};
+
+    const expect = 
+        \\export type UserProfile = {
+        \\  userId: number | null;
+        \\  name: string | null;
+        \\  gender: Gender | null;
+        \\} & {_brand: 'UserProfile'}
+    ;
+
+    try runApplyUserType(user_type, expect, user_type_names, anon_user_types);
+}
+
+test "generate struct user type#2 (with anonymous struct type field)" {
+    const user_type: UserTypeDef = .{
+        .header = .{
+            .kind = .@"struct", .name = "USER_PROFILE",
+        },
+        .fields = &.{
+            .{.field_name = "user_id", .field_type = .{.header = .{.kind = .primitive, .name = "bigint"}, .fields = &.{}}}, 
+            .{.field_name = "name", .field_type = .{.header = .{.kind = .primitive, .name = "varchar"}, .fields = &.{}}},
+            .{.field_name = "children", .field_type = .{.header = .{.kind = .array, .name = "Anon::Array#1"}, .fields = &.{}}},
+        },
+    };
+    const anon_user_types = &.{
+        .{
+            .header = .{.kind = .array, .name = "Anon::Array#1"},
+            .fields = &.{ 
+                .{.field_name = "Anon::Struct#2", .field_type = .{.header = .{.kind = .@"struct", .name = "Anon::Struct#2"}, .fields = &.{}}}
+            }
+        },
+        .{
+            .header = .{.kind = .@"struct", .name = "Anon::Struct#2"},
+            .fields = &.{ 
+                .{.field_name = "name", .field_type = .{.header = .{.kind = .@"primitive", .name = "varchar"}, .fields = &.{}}},
+                .{.field_name = "age", .field_type = .{.header = .{.kind = .@"primitive", .name = "int"}, .fields = &.{}}},
+                .{.field_name = "gender", .field_type = .{.header = .{.kind = .@"enum", .name = "Anon::Enum#3"}, .fields = &.{}}},                
+            }
+        },
+        .{
+            .header = .{.kind = .@"enum", .name = "Anon::Enum#3"},
+            .fields = &.{ 
+                .{.field_name = "male", .field_type = null},
+                .{.field_name = "female", .field_type = null},
+            }
+        },
+    };
+    const user_type_names = &.{"Gender"};
+
+    const expect = 
+        \\export type UserProfile = {
+        \\  userId: number | null;
+        \\  name: string | null;
+        \\  children: {
+        \\    name: string | null;
+        \\    age: number | null;
+        \\    gender: 'male' | 'female' | null;
+        \\  }[] | null;
+        \\} & {_brand: 'UserProfile'}
+    ;
+
+    try runApplyUserType(user_type, expect, user_type_names, anon_user_types);
 }
 
 test "generate alias user type#1 (primitive type)" {
@@ -2032,10 +2134,12 @@ test "generate alias user type#1 (primitive type)" {
         }
     };
     const expect = 
-        \\export type Description = (string) & {_brand: 'Description'}
+        \\export type Description = string & {_brand: 'Description'}
     ;
 
-    try runApplyUserType(alias_type, expect);
+    const anon_user_types = &.{};
+
+    try runApplyUserType(alias_type, expect, &.{}, anon_user_types);
 }
 
 test "Output build result#1" {

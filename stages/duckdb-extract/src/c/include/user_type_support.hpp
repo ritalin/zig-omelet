@@ -18,6 +18,7 @@ public:
     std::string field_name;
     std::shared_ptr<UserTypeEntry> field_type;
 public:
+    UserTypeMember(): field_name(""), field_type(nullptr) {}
     UserTypeMember(const std::string& name, std::shared_ptr<UserTypeEntry> type = nullptr): field_name(name), field_type(type) {}
 };
 

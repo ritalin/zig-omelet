@@ -173,23 +173,29 @@ auto pickArrayUserType(
     std::vector<UserTypeEntry>& anon_types,
     std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry {
     auto *ext_info = ty.AuxInfo();
-
-    std::vector<UserTypeEntry::Member> fields;
-    fields.reserve(1);
         
+    UserTypeEntry::Member field;
+
     if (ext_info->type == duckdb::ExtraTypeInfoType::LIST_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ListTypeInfo>();
-        fields.emplace_back(pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index));
+        field = pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index);
     }
     else if (ext_info->type == duckdb::ExtraTypeInfoType::ARRAY_TYPE_INFO) {
         auto& member_ext_info = ext_info->Cast<duckdb::ArrayTypeInfo>();
-        fields.emplace_back(pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index));
+        field = pickNestedUserTypeMember(std::nullopt, member_ext_info.child_type, user_type_names, anon_types, index);
+    }
+
+    if (field.field_type) {
+        const std::unordered_set<UserTypeKind> anon_field_types{UserTypeKind::Enum, UserTypeKind::Struct, UserTypeKind::Array};
+        if (anon_field_types.contains(field.field_type->kind)) {
+            field.field_type = nullptr;
+        }
     }
 
     return {
         .kind = UserTypeKind::Array,
         .name = type_name,
-        .fields = std::move(fields),
+        .fields{std::move(field)},
     };
 }
 

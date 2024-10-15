@@ -280,11 +280,11 @@ static auto runBindStatement(
         std::unordered_map<std::string, UserTypeEntry> anon_type_lookup(anon_type_view.begin(), anon_type_view.end());
 
         for (int i = 0; auto& anon: expect_anon_types) {
-            INFO(std::format("is exist field identifier#{} ({})", i, anon.name));
+            INFO(std::format("is exist field identifier#{} ({})", i+1, anon.name));
             REQUIRE(anon_type_lookup.contains(anon.name));
 
             INFO(std::format("check field recursively#{}", anon.name));
-            expectAnonymousUserType(anon_type_lookup.at(anon.name), anon, i, 0);
+            expectAnonymousUserType(anon_type_lookup.at(anon.name), anon, i, 1);
             ++i;
         }
     }
@@ -1037,7 +1037,7 @@ TEST_CASE("SelectList::user type (LIST)") {
         runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
     }
     SECTION("anonymous enum list") {
-        SKIP("Anonymous enum list is bound as enum type !!!");
+        // SKIP("Anonymous enum list is bound as enum type !!!");
         std::string schema("CREATE TABLE Element (id INTEGER primary key, child_visibles ENUM('hide', 'visible')[] not null)");
         std::string sql("select child_visibles, id from Element");
 
@@ -1048,9 +1048,10 @@ TEST_CASE("SelectList::user type (LIST)") {
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
             {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
-                UserTypeEntry::Member("Anon::Enum#2", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::Enum, .name = "Anon::Enum#1", .fields = {
-                    UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")
-                }}))
+                UserTypeEntry::Member("Anon::Enum#2")
+            }},
+            {.kind = UserTypeKind::Enum, .name = "Anon::Enum#2", .fields = {
+                UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")
             }},
         };
 

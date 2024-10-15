@@ -197,6 +197,7 @@ fn createWorkerModule(
                 "duckdb_database.cpp",
                 "duckdb_params_collector.cpp",
                 "sql_statement/select_statement.cpp",
+                "sql_statement/delete_statement.cpp",
                 "resolver/resolve_params_type.cpp",
                 "resolver/resolve_select_list.cpp",
                 "resolver/resolve_column_binding.cpp",
@@ -204,6 +205,7 @@ fn createWorkerModule(
                 "resolver/resolve_user_type.cpp",
                 "supports/zmq_worker_support.cpp",
                 "supports/user_type_support.cpp",
+                "supports/statement_walker_support.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });
@@ -217,6 +219,14 @@ fn createWorkerModule(
     catch2_config: {
         if (config.use_catch2) {
             mod.addIncludePath(.{.cwd_relative = b.pathResolve(&.{config.catch2_prefix, "include"})});
+            mod.addCSourceFiles(.{
+                .root = b.path("src/c"),
+                .files = &.{
+                    "resolver.param_type/test_select_statement.cpp",
+                    "resolver.param_type/test_delete_statement.cpp",
+                },
+                .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+            });
         }
         else {
             mod.addCMacro("DISABLE_CATCH2_TEST", "1");

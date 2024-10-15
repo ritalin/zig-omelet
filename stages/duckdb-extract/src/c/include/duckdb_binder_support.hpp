@@ -40,7 +40,7 @@ public:
 using SampleNullableCache = GenericNullableLookup<std::shared_ptr<SampleNullabilityNode>>;
 
 enum class StatementParameterStyle {Positional, Named};
-enum class StatementType {Invalid, Select};
+enum class StatementType {Invalid, Select, Insert, Delete, Update};
 enum class ExampleKind {General, Path};
 
 struct ParamLookupEntry {

@@ -5,7 +5,7 @@
 
 using namespace worker;
 
-TEST_CASE("Placeholder in delete statement") {
+TEST_CASE("ResolveParam::Delete statement") {
     SECTION("basic") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql("delete from Foo where kind = $kind");
@@ -20,9 +20,6 @@ TEST_CASE("Placeholder in delete statement") {
 
         runResolveParamType(sql, {schema_1}, lookup, bound_types, user_type_names, anon_types);
     }
-    // SECTION("has returning") {
-    //     FAIL("Placeholder in delete statement/returning: not implemented");
-    // }
     SECTION("has using reference relation") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string schema_2("CREATE TABLE Bar (id int primary key, value VARCHAR not null)");

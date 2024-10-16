@@ -15,6 +15,7 @@
 #include <duckdb/planner/operator/logical_set_operation.hpp>
 #include <duckdb/planner/operator/logical_window.hpp>
 #include <duckdb/planner/operator/logical_unnest.hpp>
+#include <duckdb/planner/operator/logical_delete.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -487,6 +488,33 @@ static auto VisitOperatorRecursiveCte(duckdb::LogicalRecursiveCTE& op, ColumnNul
     }
 }
 
+static auto VisitOperatorDeleteStatementInternal(duckdb::LogicalOperator& op, duckdb::idx_t table_index, ZmqChannel& channel) -> ColumnNullableLookup {
+    if (op.children.size() > 0) {
+        return VisitOperatorDeleteStatementInternal(*op.children.front(), table_index, channel);
+    }
+
+    ColumnNullableLookup internal_join_types{};
+
+    if (op.type == duckdb::LogicalOperatorType::LOGICAL_GET) {
+        auto& op_get = op.Cast<duckdb::LogicalGet>();
+        auto constraints = getColumnRefNullabilities(op_get, channel);
+
+        for (duckdb::idx_t c = 0; c < op_get.names.size(); ++c) {
+            ColumnNullableLookup::Column binding{.table_index = table_index, .column_index = c };
+            internal_join_types[binding] = {
+                .from_field = (!constraints[c]),
+                .from_join = false,
+            };
+        }
+    }
+
+    return std::move(internal_join_types);
+}
+
+static auto VisitOperatorDeleteStatement(duckdb::LogicalDelete& op, ZmqChannel& channel) -> ColumnNullableLookup {
+    return VisitOperatorDeleteStatementInternal(op, op.table_index, channel);
+}
+
 auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
@@ -563,6 +591,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
         break;
     case duckdb::LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
         this->VisitOperatorJoinInternal(op, duckdb::JoinType::INNER, duckdb::JoinType::INNER, {});
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_DELETE:
+        {
+            auto lookup = VisitOperatorDeleteStatement(op.Cast<duckdb::LogicalDelete>(), this->channel);
+            this->join_type_lookup.insert(lookup.begin(), lookup.end());
+        }
         break;
     default:
         duckdb::LogicalOperatorVisitor::VisitOperatorChildren(op);

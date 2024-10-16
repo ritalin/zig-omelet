@@ -28,7 +28,7 @@ auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> 
     case duckdb::StatementType::SELECT_STATEMENT: return StatementType::Select;
     case duckdb::StatementType::INSERT_STATEMENT: return StatementType::Invalid; // TODO: Need supports
     case duckdb::StatementType::UPDATE_STATEMENT: return StatementType::Invalid; // TODO: Need supports
-    case duckdb::StatementType::DELETE_STATEMENT: return StatementType::Invalid; // TODO: Need supports
+    case duckdb::StatementType::DELETE_STATEMENT: return StatementType::Delete;
     default: return StatementType::Invalid;
     }
 }

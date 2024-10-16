@@ -2,6 +2,8 @@
 #include <iostream>
 
 #include <duckdb.hpp>
+#include <duckdb/parser/statement/select_statement.hpp>
+#include <duckdb/parser/statement/delete_statement.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
 #include <duckdb/parser/expression/list.hpp>
@@ -41,13 +43,20 @@ private:
 auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult {
     ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
-    if (stmt->type == duckdb::StatementType::SELECT_STATEMENT) {
-        return collector.walkSelectStatement(stmt->Cast<duckdb::SelectStatement>());
-    }
-    else {
-        collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
-
-        return {.type = StatementType::Invalid, .names{}};
+    switch (stmt->type) {
+    case duckdb::StatementType::SELECT_STATEMENT: 
+        {
+            return collector.walkSelectStatement(stmt->Cast<duckdb::SelectStatement>());
+        }
+    case duckdb::StatementType::DELETE_STATEMENT: 
+        {
+            return collector.walkDeleteStatement(stmt->Cast<duckdb::DeleteStatement>());
+        }
+    default: 
+        {
+            collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
+            return {.type = StatementType::Invalid, .names{}};
+        }
     }
 }
 

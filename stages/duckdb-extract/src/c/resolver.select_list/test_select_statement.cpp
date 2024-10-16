@@ -19,12 +19,6 @@ TEST_CASE("SelectList::Unsupported DML Statement") {
 
         runBindStatement(sql, {schema}, {}, {}, {});
     }
-    SECTION("Delete Statement") {
-        std::string sql("delete from Foo where id = 42");
-        std::string schema("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-
-        runBindStatement(sql, {schema}, {}, {}, {});
-    }
 }
 
 TEST_CASE("SelectList::basic") {
@@ -753,7 +747,6 @@ TEST_CASE("SelectList::user type (LIST)") {
         runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
     }
     SECTION("anonymous enum list") {
-        // SKIP("Anonymous enum list is bound as enum type !!!");
         std::string schema("CREATE TABLE Element (id INTEGER primary key, child_visibles ENUM('hide', 'visible')[] not null)");
         std::string sql("select child_visibles, id from Element");
 

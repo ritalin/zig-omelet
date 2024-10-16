@@ -81,7 +81,12 @@ auto pickStructUserType(const duckdb::LogicalType& ty, const std::string& type_n
     if (ext_info->type == duckdb::ExtraTypeInfoType::STRUCT_TYPE_INFO) {
         auto& struct_ext_info = ext_info->Cast<duckdb::StructTypeInfo>();
 
-        for (auto& [field_name, child_type]: struct_ext_info.child_types) {
+        int numeric_field = 0;
+
+        for (auto& child: struct_ext_info.child_types) {
+            auto field_name = (! child.first.empty()) ? child.first : std::format("{}", numeric_field++);
+            auto& child_type = child.second;
+
             fields.push_back(pickNestedUserTypeMember(field_name, child_type, nested_user_types, nested_anon_types, index));
         }
     }

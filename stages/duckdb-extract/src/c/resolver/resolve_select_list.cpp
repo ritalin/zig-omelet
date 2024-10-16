@@ -136,8 +136,13 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
     };
 }
 
+const std::unordered_set<StatementType> supprted_stmts{
+    StatementType::Select,
+    StatementType::Delete
+};
+
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {
-    if (stmt_type != StatementType::Select) return {};
+    if (!supprted_stmts.contains(stmt_type)) return {};
 
     auto join_types = resolveSelectListNullability(op, conn, channel);
 

@@ -226,6 +226,8 @@ fn createWorkerModule(
                     "resolver.param_type/test_delete_statement.cpp",
                     "resolver.select_statement_nullable/test_select_statement.cpp",
                     "resolver.select_statement_nullable/test_delete_statement.cpp",
+                    "resolver.select_list/test_select_statement.cpp",
+                    "resolver.select_list/test_delete_statement.cpp",
                 },
                 .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
             });

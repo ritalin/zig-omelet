@@ -163,7 +163,7 @@ auto resolveParamType(
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "duckdb_database.hpp"
-#include "test/resolver.param_type.hpp"
+#include "../resolver.param_type/run.hpp"
 
 using namespace worker;
 using namespace Catch::Matchers;

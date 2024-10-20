@@ -38,3 +38,9 @@ Note that if the schema includes user-defined types, all of them must be specifi
 ## Source/Schema file encoding
 
 Source/Schema file encoding is supported UTF8 only.
+
+## Supported statement
+
+* CREATE TYPE (Enum, List and Struct)
+* SELECT
+* DELETE

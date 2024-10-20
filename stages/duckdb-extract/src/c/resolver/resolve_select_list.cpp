@@ -124,6 +124,9 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
             }
         }
         break;
+    case duckdb::LogicalOperatorType::LOGICAL_DELETE:
+        // Top-level delete does not have returning field(s)
+        break;
     default:
         channel.warn(std::format("[TODO] Can not resolve column type: {}", magic_enum::enum_name(op->type)));
         break;
@@ -144,7 +147,7 @@ const std::unordered_set<StatementType> supprted_stmts{
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {
     if (!supprted_stmts.contains(stmt_type)) return {};
 
-    auto join_types = resolveSelectListNullability(op, conn, channel);
+    auto [join_types, _] = resolveSelectListNullability(op, conn, channel);
 
     return resolveColumnTypeInternal(op, join_types, channel);
 }

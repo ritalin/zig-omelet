@@ -20,6 +20,8 @@ using ParamExampleLookup = std::unordered_map<PositionalParam, ParamExample>;
 using CatalogLookup = std::unordered_map<duckdb::idx_t, duckdb::TableCatalogEntry*>;
 using BoundParamTypeHint = std::unordered_map<PositionalParam, duckdb::unique_ptr<duckdb::Expression>>;
 
+enum class ResolverStatus {Unhandled, Handled};
+
 struct Nullability {
     bool from_field;
     bool from_join;
@@ -28,6 +30,10 @@ public:
 };
 
 using ColumnNullableLookup = GenericNullableLookup<Nullability>;
+struct ColumnNullabilityResult {
+    ColumnNullableLookup nullabilities;
+    ResolverStatus status;
+};
 
 struct SampleNullabilityNode {
     std::string name;
@@ -110,7 +116,7 @@ auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duck
 
 auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints, ParamExampleLookup&& examples, ZmqChannel& channel) -> ParamResolveResult;
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult;
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnNullableLookup;
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnNullabilityResult;
 auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeResult>;
 
 }

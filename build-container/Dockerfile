@@ -17,7 +17,7 @@ FROM dev AS build_duckdb
 WORKDIR /home/linuxbrew
     
 # download duckdb source repository
-RUN git clone --depth=1 https://github.com/duckdb/duckdb.git
+RUN git clone --depth=1 --branch main https://github.com/duckdb/duckdb.git
 
 # add homebre prefix to env
 ENV BREW_PREFIX="/home/linuxbrew/.linuxbrew/opt"
@@ -32,8 +32,8 @@ RUN mkdir -p duckdb/_build \
         -DCMAKE_CXX_COMPILER=$BREW_PREFIX/llvm/bin/clang++ \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DCMAKE_CXX_FLAGS="-stdlib=libc++ -I$BREW_PREFIX/llvm/include/c++/v1" \
-        -DCMAKE_SHARED_LINKER_FLAGS="-stdlib=libc++ -L$BREW_PREFIX/llvm/lib -lc++abi" \
-        -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -L$BREW_PREFIX/llvm/lib -lc++abi" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/home/linuxbrew/.linuxbrew/opt/llvm/lib -Wl,-Bstatic -lc++ -lc++abi -lunwind -Wl,-Bdynamic" \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/home/linuxbrew/.linuxbrew/opt/llvm/lib -Wl,-Bstatic -lc++ -lc++abi -lunwind -Wl,-Bdynamic" \
         -DDUCKDB_EXPLICIT_PLATFORM="linux_amd64" \
         -DCMAKE_BUILD_TYPE=Release \
         -DINSTALL_LIB_DIR=duckdb/_install/lib \
@@ -43,6 +43,7 @@ RUN mkdir -p duckdb/_build \
         -DBUILD_EXTENSIONS='autocomplete;icu;parquet;json' \
         -DENABLE_EXTENSION_AUTOLOADING=1 \
         -DENABLE_EXTENSION_AUTOINSTALL=1 \
+        -DSTATIC_LIBCPP=1 \
         -S duckdb \
         -B duckdb/_build
 
@@ -64,7 +65,7 @@ FROM dev AS build_catch2
 
 WORKDIR /home/linuxbrew
 
-RUN git clone --depth=1 https://github.com/catchorg/Catch2.git catch2
+RUN git clone --depth=1 --branch devel https://github.com/catchorg/Catch2.git catch2
 
 # add homebre prefix to env
 ENV BREW_PREFIX="/home/linuxbrew/.linuxbrew/opt"

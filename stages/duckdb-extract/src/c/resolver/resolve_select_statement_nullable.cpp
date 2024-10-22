@@ -16,6 +16,7 @@
 #include <duckdb/planner/operator/logical_window.hpp>
 #include <duckdb/planner/operator/logical_unnest.hpp>
 #include <duckdb/planner/operator/logical_delete.hpp>
+#include <duckdb/planner/operator/logical_update.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -489,9 +490,9 @@ static auto VisitOperatorRecursiveCte(duckdb::LogicalRecursiveCTE& op, ColumnNul
     }
 }
 
-static auto VisitOperatorDeleteStatementInternal(duckdb::LogicalOperator& op, duckdb::idx_t table_index, ZmqChannel& channel) -> ColumnNullableLookup {
+static auto VisitOperatorDMLStatementInternal(duckdb::LogicalOperator& op, duckdb::idx_t table_index, ZmqChannel& channel) -> ColumnNullableLookup {
     if (op.children.size() > 0) {
-        return VisitOperatorDeleteStatementInternal(*op.children.front(), table_index, channel);
+        return VisitOperatorDMLStatementInternal(*op.children.front(), table_index, channel);
     }
 
     ColumnNullableLookup internal_join_types{};
@@ -513,7 +514,11 @@ static auto VisitOperatorDeleteStatementInternal(duckdb::LogicalOperator& op, du
 }
 
 static auto VisitOperatorDeleteStatement(duckdb::LogicalDelete& op, ZmqChannel& channel) -> ColumnNullableLookup {
-    return VisitOperatorDeleteStatementInternal(op, op.table_index, channel);
+    return VisitOperatorDMLStatementInternal(op, op.table_index, channel);
+}
+
+static auto VisitOperatorUpdateStatement(duckdb::LogicalUpdate& op, ZmqChannel& channel) -> ColumnNullableLookup {
+    return VisitOperatorDMLStatementInternal(op, op.table_index, channel);
 }
 
 auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
@@ -596,6 +601,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     case duckdb::LogicalOperatorType::LOGICAL_DELETE:
         {
             auto lookup = VisitOperatorDeleteStatement(op.Cast<duckdb::LogicalDelete>(), this->channel);
+            this->join_type_lookup.insert(lookup.begin(), lookup.end());
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
+        {
+            auto lookup = VisitOperatorUpdateStatement(op.Cast<duckdb::LogicalUpdate>(), this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -697,6 +708,15 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
             parent_join_types.insert(delete_lookup.begin(), delete_lookup.end());
 
             // Top-level delete does not have returning field(s)
+            lookup = ColumnNullableLookup{};
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
+        {
+            auto update_lookup = VisitOperatorUpdateStatement(op->Cast<duckdb::LogicalUpdate>(), channel);
+            parent_join_types.insert(update_lookup.begin(), update_lookup.end());
+
+            // Top-level update does not have returning field(s)
             lookup = ColumnNullableLookup{};
         }
         break;

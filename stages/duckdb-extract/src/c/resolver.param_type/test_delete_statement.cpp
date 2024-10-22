@@ -50,6 +50,7 @@ TEST_CASE("ResolveParam::Delete statement") {
         std::string sql(R"#(
             with X as (
                 from bar
+                where value = $value
             )
             delete from Foo 
             using X
@@ -59,17 +60,20 @@ TEST_CASE("ResolveParam::Delete statement") {
                 and X.value = $phrase
         )#");
         ParamNameLookup lookup{
-            { "1", ParamLookupEntry("kind") },
-            { "2", ParamLookupEntry("phrase") }
+            { "1", ParamLookupEntry("value") },
+            { "2", ParamLookupEntry("kind") },
+            { "3", ParamLookupEntry("phrase") }
         };
         ExpectParamLookup bound_types{
-            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
-            {"2", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "VARCHAR"} }, 
+            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "VARCHAR"} }, 
+            {"2", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
+            {"3", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "VARCHAR"} }, 
         };
         UserTypeExpects user_type_names{};
         AnonTypeExpects anon_types{};
 
-        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);    }
+        runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
+    }
 }
 
 #endif

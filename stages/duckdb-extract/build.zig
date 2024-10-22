@@ -198,6 +198,7 @@ fn createWorkerModule(
                 "duckdb_params_collector.cpp",
                 "statement_walker/select_statement.cpp",
                 "statement_walker/delete_statement.cpp",
+                "statement_walker/update_statement.cpp",
                 "resolver/resolve_params_type.cpp",
                 "resolver/resolve_select_list.cpp",
                 "resolver/resolve_column_binding.cpp",
@@ -224,10 +225,13 @@ fn createWorkerModule(
                 .files = &.{
                     "resolver.param_type/test_select_statement.cpp",
                     "resolver.param_type/test_delete_statement.cpp",
+                    "resolver.param_type/test_update_statement.cpp",
                     "resolver.select_statement_nullable/test_select_statement.cpp",
                     "resolver.select_statement_nullable/test_delete_statement.cpp",
+                    "resolver.select_statement_nullable/test_update_statement.cpp",
                     "resolver.select_list/test_select_statement.cpp",
                     "resolver.select_list/test_delete_statement.cpp",
+                    "resolver.select_list/test_update_statement.cpp",
                 },
                 .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
             });

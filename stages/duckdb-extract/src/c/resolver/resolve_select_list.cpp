@@ -125,7 +125,8 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
         }
         break;
     case duckdb::LogicalOperatorType::LOGICAL_DELETE:
-        // Top-level delete does not have returning field(s)
+    case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
+        // Top-level delete/update does not have returning field(s)
         break;
     default:
         channel.warn(std::format("[TODO] Can not resolve column type: {}", magic_enum::enum_name(op->type)));
@@ -141,7 +142,8 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
 
 const std::unordered_set<StatementType> supprted_stmts{
     StatementType::Select,
-    StatementType::Delete
+    StatementType::Delete,
+    StatementType::Update,
 };
 
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {

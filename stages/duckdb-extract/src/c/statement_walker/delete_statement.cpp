@@ -15,6 +15,11 @@ auto ParameterCollector::walkDeleteStatement(duckdb::DeleteStatement& stmt) -> P
     handle_where: if (stmt.condition) {
         walkExpression(*this, stmt.condition, 0);
     }
+    handle_returning: {
+        for (auto& expr: stmt.returning_list) {
+            walkReturningList(*this, stmt.returning_list);
+        }         
+    }
 
     return {
         .type = StatementType::Delete, 

@@ -1,16 +1,18 @@
 # zig-omelet
 
+Micro object Relation mapping for Zig.
+
 this tool has following fetues:
 
 * can extract named placeholder in SQL to convert into positional
 * can extract select list in SQL to convert result set type definition
 
-Currently, extracting is only from `duckdb`, code generationg is only `typescript`.
+Currently, extracting is only from `duckdb` and code generation is only `typescript`.
 
 ## Requirement
 
 * zig (https://ziglang.org) - 0.14.0 or latter
-* libduckdb (https://duckdb.org) - 1.1.0 or latter
+* libduckdb (https://duckdb.org) - 1.1.2 or latter
 * libzmq (https://zeromq.org) - 4.3.5 or latter
 * libcatch2 (https://github.com/catchorg/Catch2) 3.6.0 or latter
 
@@ -43,4 +45,11 @@ Source/Schema file encoding is supported UTF8 only.
 
 * CREATE TYPE (Enum, List and Struct)
 * SELECT
+* INSERT
+* UPDATE
 * DELETE
+
+## Limitation
+
+* When arguments for Table function contain correlective column, select list will be nullable.
+* Currently, an alias of `RETURNING` clause is not supported.

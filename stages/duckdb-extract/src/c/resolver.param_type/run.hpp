@@ -16,3 +16,5 @@ auto runResolveParamType(
     const std::string& sql, const std::vector<std::string>& schemas, 
     const worker::ParamNameLookup& expect_name_lookup, const ExpectParamLookup& expect_param_types, 
     UserTypeExpects expect_user_types, AnonTypeExpects expect_anon_types) -> void;
+
+auto runTransformQuery(std::string& sql, const std::vector<std::string>& schemas, std::string& expect_sql) -> void;

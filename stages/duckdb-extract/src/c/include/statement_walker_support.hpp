@@ -11,5 +11,6 @@ auto walkTableRef(ParameterCollector& collector, duckdb::unique_ptr<duckdb::Tabl
 auto walkExpression(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void;
 
 auto walkCTEStatement(ParameterCollector& collector, duckdb::CommonTableExpressionMap& cte) -> void;
+auto walkReturningList(ParameterCollector& collector, std::vector<duckdb::unique_ptr<duckdb::ParsedExpression>>& expressions) -> void;
 
 }

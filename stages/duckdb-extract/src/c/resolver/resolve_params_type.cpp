@@ -341,4 +341,24 @@ auto runResolveParamType(
     }
 }
 
+auto runTransformQuery(std::string& sql, const std::vector<std::string>& schemas, std::string& expect_sql) -> void {
+    auto db = Database();
+    auto conn = db.connect();
+
+    prepare_schema: {
+        for (auto& schema: schemas) {
+            conn.Query(schema);
+        }
+        db.retainUserTypeName(conn);
+    }
+
+    auto stmts = conn.ExtractStatements(sql);
+    auto& stmt = stmts[0];
+    walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
+
+    match_sql: {
+        REQUIRE_THAT(stmt->ToString(), Equals(expect_sql));
+    }
+}
+
 #endif

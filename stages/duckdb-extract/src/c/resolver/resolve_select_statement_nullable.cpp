@@ -17,6 +17,7 @@
 #include <duckdb/planner/operator/logical_unnest.hpp>
 #include <duckdb/planner/operator/logical_delete.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
+#include <duckdb/planner/operator/logical_insert.hpp>
 #include <duckdb/planner/bound_tableref.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
@@ -46,16 +47,9 @@ static auto EvaluateNullability(duckdb::JoinType rel_join_type, const JoinTypeVi
     return std::ranges::any_of(rel_map | std::views::values, [&](const auto& to) { return lookup[to].shouldNulls(); });
 }
 
-static auto getColumnRefNullabilities(const duckdb::LogicalGet& op, ZmqChannel& channel) -> ColumnRefNullabilityMap {
-    auto bind_info = op.function.get_bind_info(op.bind_data);
-    
-    if (! bind_info.table) {
-        channel.warn(std::format("[TODO] cannot find table catalog: (index: {})", op.table_index));
-        return {};
-    }
-
+static auto getColumnRefNullabilitiesInternal(const duckdb::TableCatalogEntry& table, ZmqChannel& channel) -> ColumnRefNullabilityMap {
     auto constraints = 
-        bind_info.table->GetConstraints()
+        table.GetConstraints()
         | std::views::filter([](const duckdb::unique_ptr<duckdb::Constraint>& c) {
             return c->type == duckdb::ConstraintType::NOT_NULL;
         })
@@ -69,6 +63,17 @@ static auto getColumnRefNullabilities(const duckdb::LogicalGet& op, ZmqChannel& 
         })
     ;
     return ColumnRefNullabilityMap(constraints.begin(), constraints.end());
+}
+
+static auto getColumnRefNullabilities(const duckdb::LogicalGet& op, ZmqChannel& channel) -> ColumnRefNullabilityMap {
+    auto bind_info = op.function.get_bind_info(op.bind_data);
+    
+    if (! bind_info.table) {
+        channel.warn(std::format("[TODO] cannot find table catalog: (index: {})", op.table_index));
+        return {};
+    }
+
+    return getColumnRefNullabilitiesInternal(*bind_info.table, channel);
 }
 
 static auto getSampleNullabilitiesInternal(const duckdb::Vector& vec, const duckdb::LogicalType& ty, const std::string& name, const size_t sampling_rows, ZmqChannel& channel) -> std::shared_ptr<SampleNullabilityNode> {
@@ -521,6 +526,22 @@ static auto VisitOperatorUpdateStatement(duckdb::LogicalUpdate& op, ZmqChannel& 
     return VisitOperatorDMLStatementInternal(op, op.table_index, channel);
 }
 
+static auto VisitOperatorInsertStatement(duckdb::LogicalInsert& op, ZmqChannel& channel) -> ColumnNullableLookup {
+    auto constraints = getColumnRefNullabilitiesInternal(op.table, channel);
+
+    ColumnNullableLookup internal_join_types{};
+
+    for (duckdb::idx_t c = 0; c < op.table.GetColumns().LogicalColumnCount(); ++c) {
+        ColumnNullableLookup::Column binding{.table_index = op.table_index, .column_index = c };
+        internal_join_types[binding] = {
+            .from_field = (!constraints[c]),
+            .from_join = false,
+        };
+    }
+
+    return std::move(internal_join_types);
+}
+
 auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     switch (op.type) {
     case duckdb::LogicalOperatorType::LOGICAL_PROJECTION:
@@ -607,6 +628,12 @@ auto JoinTypeVisitor::VisitOperator(duckdb::LogicalOperator &op) -> void {
     case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
         {
             auto lookup = VisitOperatorUpdateStatement(op.Cast<duckdb::LogicalUpdate>(), this->channel);
+            this->join_type_lookup.insert(lookup.begin(), lookup.end());
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_INSERT:
+        {
+            auto lookup = VisitOperatorInsertStatement(op.Cast<duckdb::LogicalInsert>(), this->channel);
             this->join_type_lookup.insert(lookup.begin(), lookup.end());
         }
         break;
@@ -714,6 +741,15 @@ static auto resolveSelectListNullabilityInternal(duckdb::unique_ptr<duckdb::Logi
     case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
         {
             auto update_lookup = VisitOperatorUpdateStatement(op->Cast<duckdb::LogicalUpdate>(), channel);
+            parent_join_types.insert(update_lookup.begin(), update_lookup.end());
+
+            // Top-level update does not have returning field(s)
+            lookup = ColumnNullableLookup{};
+        }
+        break;
+    case duckdb::LogicalOperatorType::LOGICAL_INSERT:
+        {
+            auto update_lookup = VisitOperatorInsertStatement(op->Cast<duckdb::LogicalInsert>(), channel);
             parent_join_types.insert(update_lookup.begin(), update_lookup.end());
 
             // Top-level update does not have returning field(s)

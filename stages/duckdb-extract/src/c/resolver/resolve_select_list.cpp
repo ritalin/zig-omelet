@@ -126,6 +126,7 @@ auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, 
         break;
     case duckdb::LogicalOperatorType::LOGICAL_DELETE:
     case duckdb::LogicalOperatorType::LOGICAL_UPDATE:
+    case duckdb::LogicalOperatorType::LOGICAL_INSERT:
         // Top-level delete/update does not have returning field(s)
         break;
     default:
@@ -144,6 +145,7 @@ const std::unordered_set<StatementType> supprted_stmts{
     StatementType::Select,
     StatementType::Delete,
     StatementType::Update,
+    StatementType::Insert,
 };
 
 auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {
@@ -227,12 +229,12 @@ auto runBindStatement(
     try {
         conn.BeginTransaction();
 
+        auto channel = ZmqChannel::unitTestChannel();
+        
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
-
-        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
-
-        auto channel = ZmqChannel::unitTestChannel();
+        auto walk_result = walkSQLStatement(stmts[0], ZmqChannel::unitTestChannel());
+        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names, {});
         column_result = resolveColumnType(bound_result.stmt.plan, stmt_type, conn, channel);
         conn.Commit();
     }

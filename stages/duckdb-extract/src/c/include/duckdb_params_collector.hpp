@@ -23,6 +23,7 @@ public:
     auto walkSelectStatement(duckdb::SelectStatement& stmt) -> Result;
     auto walkDeleteStatement(duckdb::DeleteStatement& stmt) -> Result;
     auto walkUpdateStatement(duckdb::UpdateStatement& stmt) -> Result;
+    auto walkInsertStatement(duckdb::InsertStatement& stmt) -> Result;
 public:
     auto ofPosition(std::string old_name) -> std::string;
     auto attachTypeHint(PositionalParam name, std::unique_ptr<duckdb::ParsedExpression>&& type_hint) -> void;

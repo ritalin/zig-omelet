@@ -20,6 +20,11 @@ auto ParameterCollector::walkUpdateStatement(duckdb::UpdateStatement& stmt) -> P
     handle_where: if (stmt.set_info && stmt.set_info->condition) {
         walkExpression(*this, stmt.set_info->condition, 0);
     }
+    handle_returning: {
+        for (auto& expr: stmt.returning_list) {
+            walkReturningList(*this, stmt.returning_list);
+        }         
+    }
 
     return {
         .type = StatementType::Update, 

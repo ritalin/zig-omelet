@@ -5,6 +5,7 @@
 #include <duckdb/parser/statement/select_statement.hpp>
 #include <duckdb/parser/statement/delete_statement.hpp>
 #include <duckdb/parser/statement/update_statement.hpp>
+#include <duckdb/parser/statement/insert_statement.hpp>
 #include <duckdb/parser/query_node/list.hpp>
 #include <duckdb/parser/tableref/list.hpp>
 #include <duckdb/parser/expression/list.hpp>
@@ -56,6 +57,10 @@ auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel
     case duckdb::StatementType::UPDATE_STATEMENT: 
         {
             return collector.walkUpdateStatement(stmt->Cast<duckdb::UpdateStatement>());
+        }
+    case duckdb::StatementType::INSERT_STATEMENT: 
+        {
+            return collector.walkInsertStatement(stmt->Cast<duckdb::InsertStatement>());
         }
     default: 
         {

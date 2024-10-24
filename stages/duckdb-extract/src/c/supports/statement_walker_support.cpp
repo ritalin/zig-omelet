@@ -157,6 +157,28 @@ auto walkExpression(ParameterCollector& collector, duckdb::unique_ptr<duckdb::Pa
         // no conversion
         break;
     case duckdb::ExpressionClass::OPERATOR:
+        {
+            auto& op_expr = expr->Cast<duckdb::OperatorExpression>();
+
+            for (auto& child: op_expr.children) {
+                walkExpression(collector, child, depth+1);
+            }
+        }
+        break;
+    case duckdb::ExpressionClass::STAR:
+        {
+            auto& star_expr = expr->Cast<duckdb::StarExpression>();
+
+            if (star_expr.expr) {
+                // handle COLUMNS
+                walkExpression(collector, star_expr.expr, depth+1);
+            }
+            for (auto& rep_expr: star_expr.replace_list | std::views::values) {
+                // handle replace list
+                walkExpression(collector, rep_expr, depth+1);
+            }
+        }
+        break;
     default: 
         collector.channel.warn(std::format("[TODO] Unsupported expression class: {} (depth: {})", magic_enum::enum_name(expr->expression_class), depth));
         break;
@@ -169,8 +191,8 @@ static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::Orde
     }
 }
 
-static auto walkSelectListItem(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, duckdb::idx_t index, uint32_t depth) -> void {
-    if (expr->HasParameter() || expr->HasSubquery()) {
+static auto walkSelectListItem(ParameterCollector& collector, duckdb::unique_ptr<duckdb::ParsedExpression>& expr, uint32_t depth) -> void {
+    if (expr->HasParameter() || expr->HasSubquery() || (expr->expression_class == duckdb::ExpressionClass::STAR)) {
         if (depth > 0) {
             walkExpression(collector, expr, depth);
         }
@@ -182,13 +204,14 @@ static auto walkSelectListItem(ParameterCollector& collector, duckdb::unique_ptr
             if (expr->ToString() != new_alias) {
                 expr->alias = new_alias;
             }
+        }
+    }
+}
 
-            if (expr->expression_class == duckdb::ExpressionClass::CAST) {
-                auto user_type_name = pickUserTypeName(expr->Cast<duckdb::CastExpression>());
-                if (user_type_name) {
-
-                }
-            }
+auto walkReturningList(ParameterCollector& collector, std::vector<duckdb::unique_ptr<duckdb::ParsedExpression>>& expressions) -> void {
+    for (auto& expr: expressions) {
+        if ((expr->alias == "") && (expr->expression_class != duckdb::ExpressionClass::COLUMN_REF)) {
+            expr->alias = expr->ToString();
         }
     }
 }
@@ -337,10 +360,10 @@ static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duck
             cte: {
                 walkCTEStatement(collector, node->cte_map);
             }
-            
-            for (duckdb::idx_t i = 0; auto& expr: select_node.select_list) {
-                walkSelectListItem(collector, expr, i, depth);
-                ++i;
+            select_list: {
+                for (auto& expr: select_node.select_list) {
+                    walkSelectListItem(collector, expr, depth);
+                }
             }
             form_clause: {
                 walkTableRef(collector, select_node.from_table, depth+1);

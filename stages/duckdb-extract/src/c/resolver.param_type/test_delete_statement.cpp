@@ -76,4 +76,15 @@ TEST_CASE("ResolveParam::Delete statement") {
     }
 }
 
+TEST_CASE("TransformeSQL: Delete statement") {
+    SECTION("insert with returning w/o alias") {
+        SKIP("alias of returning clause is not supported");
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("delete from Foo where kind = $kind");
+        std::string expect_sql(R"(#(DELETE FROM Foo WHERE (kind = $1) RETURNING id AS deletted)#)");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+}
+
 #endif

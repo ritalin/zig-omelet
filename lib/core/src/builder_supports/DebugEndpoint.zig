@@ -14,6 +14,16 @@ const StageChannel = std.StaticStringMap(types.Symbol).initComptime(.{
     .{"--subscribe-channel", std.fmt.comptimePrint("--subscribe-channel={s}", .{CMD_S2C_CONN_PORT})},
 });
 
+pub const RunnerEndpoint: types.Endpoints = .{
+    .req_rep = REQ_C2S_BIND_PORT,
+    .pub_sub = CMD_S2C_BIND_PORT,
+};
+
+pub const StageEndpoint: types.Endpoints = .{
+    .req_rep = REQ_C2S_CONN_PORT,
+    .pub_sub = CMD_S2C_CONN_PORT,
+};
+
 pub fn applyStageChannel(runner: *std.Build.Step.Run) !void {
     for (StageChannel.keys()) |k| {
         arg: {

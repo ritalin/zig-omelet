@@ -59,17 +59,18 @@ fn encodeEventInternal(allocator: std.mem.Allocator, writer: *CborStream.Writer,
         },
         .skip_topic_body => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.header.values());
-            _ = try writer.writeTuple(StructView(Event.Payload.Log), payload.log.values());
+            _ = try writer.writeUInt(usize, payload.index);
         },
         .pending_finish_topic_body => {},
         .finish_topic_body => {},
         // Generate event
         .ready_generate => {},
         .finish_generate => {},
-        // Other event
-        .worker_result => |payload| {
+        // Worker event
+        .worker_response => |payload| {
             _ = try writer.writeString(payload.content);
         },
+        // Other event
         .quit_all => {},
         .quit_accept => {},
         .quit => {},
@@ -135,10 +136,10 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         },
         .skip_topic_body => {
             const header = try reader.readTuple(StructView(Event.Payload.SourcePath));
-            const log = try reader.readTuple(StructView(Event.Payload.Log));
+            const item_index = try reader.readUInt(usize);
 
             return .{
-                .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, header, log),
+                .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, header, item_index),
             };
         },
         .pending_finish_topic_body => return .pending_finish_topic_body,
@@ -146,14 +147,15 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         // Generation event
         .ready_generate => return .ready_generate,
         .finish_generate => return .finish_generate,
-        // Other event
-        .worker_result => {
+        // Worker event
+        .worker_response, => {
             const content = try reader.readString();
 
             return .{
-                .worker_result = try Event.Payload.WorkerResult.init(allocator, .{content}),
+                .worker_response = try Event.Payload.WorkerResponse.init(allocator, .{content}),
             };
         },
+        // Other event
         .quit_all => return .quit_all,
         .quit => return .quit,
         .quit_accept => return .quit_accept,
@@ -201,11 +203,11 @@ test "Encode/Decode event" {
     defer topic_body.deinit();
     const skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator,
         .{ source_path.category, source_path.name, source_path.path, source_path.hash, 3 }, 
-        .{.err, "SQL syntax error"}
+        0,
     );
     defer skip_topic_body.deinit();
-    const worker_result = try Event.Payload.WorkerResult.init(allocator, .{"some-result-text"});
-    defer worker_result.deinit();
+    const worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"});
+    defer worker_response.deinit();
     const log = try Event.Payload.Log.init(allocator, .{.debug, "Test message😃"});
     defer log.deinit();
 
@@ -228,7 +230,7 @@ test "Encode/Decode event" {
     try encodeEventInternal(allocator, &writer, .pending_finish_topic_body);
     try encodeEventInternal(allocator, &writer, .ready_generate);
     try encodeEventInternal(allocator, &writer, .finish_generate);
-    try encodeEventInternal(allocator, &writer, .{.worker_result = worker_result});
+    try encodeEventInternal(allocator, &writer, .{.worker_response = worker_response});
     try encodeEventInternal(allocator, &writer, .quit_all);
     try encodeEventInternal(allocator, &writer, .quit);
     try encodeEventInternal(allocator, &writer, .quit_accept);
@@ -353,11 +355,11 @@ test "Encode/Decode event" {
         try std.testing.expectEqual(.finish_generate, event);
         break:finish_generate;
     }
-    worker_result: {
-        const event = try decodeEventInternal(allocator, .worker_result, &reader);
+    worker_response: {
+        const event = try decodeEventInternal(allocator, .worker_response, &reader);
         defer event.deinit();
-        try std.testing.expectEqualDeep(worker_result.values(), event.worker_result.values());
-        break:worker_result;
+        try std.testing.expectEqualDeep(worker_response.values(), event.worker_response.values());
+        break:worker_response;
     }
     quit_all: {
         const event = try decodeEventInternal(allocator, .quit_all, &reader);

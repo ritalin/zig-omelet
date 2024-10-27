@@ -25,6 +25,8 @@ pub const configs = struct {
     pub usingnamespace @import("./configs/supports.zig");
 };
 
+pub const DebugEndPoint = @import("./builder_supports/DebugEndpoint.zig");
+
 test "All tests" {
     testing.refAllDecls(@This());
 }

@@ -7,12 +7,12 @@ const FilePath = core_types.FilePath;
 
 const c = @import("../omelet_c/interop.zig");
 
-pub const LogLevel = enum {
-    err,
-    warn,
-    info,
-    debug,
-    trace,
+pub const LogLevel = enum(u8) {
+    err = c.log_level_err,
+    warn = c.log_level_warn,
+    info = c.log_level_info,
+    debug = c.log_level_debug,
+    trace = c.log_level_trace,
 
     pub fn toStdLevel(self: LogLevel) std.log.Level {
         return switch (self) {
@@ -76,8 +76,9 @@ pub const EventType = enum (u8) {
     // Generate event
     ready_generate,
     finish_generate,
+    // Worker event
+    worker_response,
     // Other event
-    worker_result,
     quit_all,
     quit,
     quit_accept,
@@ -228,26 +229,24 @@ const EventPayload = struct {
 
     pub const SkipTopicBody = struct {
         header: SourcePath, 
-        log: Log,
+        index: usize,
 
-        pub fn init(allocator: std.mem.Allocator, header: StructView(SourcePath), log: StructView(Log)) !@This() {
+        pub fn init(allocator: std.mem.Allocator, header: StructView(SourcePath), index: usize) !@This() {
             return .{
                 .header = try SourcePath.init(allocator, header),
-                .log = try Log.init(allocator, log),
+                .index = index,
             };
         }
         pub fn deinit(self: @This()) void {
             self.header.deinit();
-            self.log.deinit();
         }
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.header.values(), self.log.values());
+            return init(allocator, self.header.values(), self.index);
         }
-        pub fn values(self: @This()) struct{StructView(SourcePath), StructView(Log)} {
-            return .{ self.header.values(), self.log.values() };
+        pub fn values(self: @This()) struct{StructView(SourcePath), usize} {
+            return .{ self.header.values(), self.index };
         }
     };
-
 
     pub const SourcePath = struct {
         allocator: std.mem.Allocator,
@@ -280,11 +279,11 @@ const EventPayload = struct {
         }
     };
 
-    pub const WorkerResult = struct {
+    pub const WorkerResponse = struct {
         allocator: std.mem.Allocator,
         content: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, view: StructView(WorkerResult)) !@This() {
+        pub fn init(allocator: std.mem.Allocator, view: StructView(WorkerResponse)) !@This() {
             return .{
                 .allocator = allocator,
                 .content = try allocator.dupe(u8, view[0]),
@@ -361,8 +360,9 @@ pub const Event = union(EventType) {
     // Generate events
     ready_generate: void,
     finish_generate: void,
+    // Worker event
+    worker_response: Payload.WorkerResponse,
     // Other event
-    worker_result: Payload.WorkerResult,
     quit_all: void,
     quit: void,
     quit_accept: void,
@@ -401,8 +401,9 @@ fn deinitEvent(event: Event) void {
         // Generate events
         .ready_generate => {},
         .finish_generate => {},
+        // Worker event
+        .worker_response => |data| data.deinit(),
         // Other events
-        .worker_result => |data| data.deinit(),
         .quit_all => {},
         .quit => {},
         .quit_accept => {},
@@ -438,8 +439,9 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
         // Generate events
         .ready_generate => .ready_generate,
         .finish_generate => .finish_generate,
+        // Worker event
+        .worker_response => |payload| .{.worker_response = try payload.clone(allocator)}, 
         // Other events
-        .worker_result => |payload| .{.worker_result = try payload.clone(allocator)},
         .quit => .quit,
         .quit_all => .quit_all,
         .quit_accept => .quit_accept,
@@ -486,7 +488,7 @@ test "Clone events" {
     skip_topic_body: {
         const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, 
             .{.schema, "header/name_i", "header/path_i", "header/hash_i", 3},
-            .{.err, "error message"}
+            0,
         ) };
         defer expect_event.deinit();
         const event = try expect_event.clone(std.heap.page_allocator);
@@ -494,13 +496,13 @@ test "Clone events" {
         try std.testing.expectEqualDeep(expect_event.skip_topic_body.values(), event.skip_topic_body.values());
         break:skip_topic_body;
     }
-    worker_result: {
-        const expect_event: Event = .{ .worker_result = try Event.Payload.WorkerResult.init(allocator, .{"some-result-text"}) };
+    worker_response: {
+        const expect_event: Event = .{ .worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"}) };
         defer expect_event.deinit();
         const event = try expect_event.clone(std.heap.page_allocator);
         defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.worker_result.values(), event.worker_result.values());
-        break:worker_result;
+        try std.testing.expectEqualDeep(expect_event.worker_response.values(), event.worker_response.values());
+        break:worker_response;
     }
     log: {
         const expect_event: Event = .{ .log = try Event.Payload.Log.init(allocator, .{.info, "log message"}) };

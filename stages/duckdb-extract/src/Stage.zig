@@ -575,9 +575,75 @@ test "worker workflow/multiple (partially unssuported query flow)" {
 }
 
 test "worker workflow/empty" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.source, "");
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectLog(path, item.from, item.event, .warn);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectSkipResult(path, item.from, item.event, 0);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
 }
 
 test "worker workflow/invalid" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.source,
+        \\ SELCT 1
+    );
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectLog(path, item.from, item.event, .err);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectSkipResult(path, item.from, item.event, 0);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
 }

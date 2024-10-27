@@ -24,6 +24,7 @@
 #include "duckdb_binder_support.hpp"
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
+#include "response_encode_support.hpp"
 
 namespace worker {
 
@@ -36,36 +37,36 @@ public:
 public:
     auto execute(std::string query) -> WorkerResultCode;
 public:
-    auto messageChannel(const std::string& from) -> ZmqChannel;
+    auto messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel;
 private:
     std::string id;
     std::optional<void *> socket;
 };
 
-auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult {
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ResolveResult<ParamCollectionResult> {
     ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
 
     switch (stmt->type) {
     case duckdb::StatementType::SELECT_STATEMENT: 
         {
-            return collector.walkSelectStatement(stmt->Cast<duckdb::SelectStatement>());
+            return {.data = collector.walkSelectStatement(stmt->Cast<duckdb::SelectStatement>()), .handled = ResolveStatus::Handled};
         }
     case duckdb::StatementType::DELETE_STATEMENT: 
         {
-            return collector.walkDeleteStatement(stmt->Cast<duckdb::DeleteStatement>());
+            return {.data = collector.walkDeleteStatement(stmt->Cast<duckdb::DeleteStatement>()), .handled = ResolveStatus::Handled};
         }
     case duckdb::StatementType::UPDATE_STATEMENT: 
         {
-            return collector.walkUpdateStatement(stmt->Cast<duckdb::UpdateStatement>());
+            return {.data = collector.walkUpdateStatement(stmt->Cast<duckdb::UpdateStatement>()), .handled = ResolveStatus::Handled};
         }
     case duckdb::StatementType::INSERT_STATEMENT: 
         {
-            return collector.walkInsertStatement(stmt->Cast<duckdb::InsertStatement>());
+            return {.data = collector.walkInsertStatement(stmt->Cast<duckdb::InsertStatement>()), .handled = ResolveStatus::Handled};
         }
     default: 
         {
             collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
-            return {.type = StatementType::Invalid, .names{}};
+            return {.data = {.type = StatementType::Invalid, .names{}}, .handled = ResolveStatus::Unhandled};
         }
     }
 }
@@ -188,61 +189,75 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_type
     return std::move(encoder.rawBuffer());
 }
 
-auto DescribeWorker::messageChannel(const std::string& from) -> ZmqChannel {
-    return ZmqChannel(this->socket, this->id, from);
+auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel {
+    return ZmqChannel(this->socket, offset, this->id, from);
 }
 
-auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
+static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
     std::string message;
+
     try {
-        auto stmts = this->conn.ExtractStatements(query);
+        auto stmts = conn.ExtractStatements(query);
 
-        // for (auto& stmt: stmts) {
-        if (stmts.size() > 0) {
-            auto& stmt = stmts[0];
-            const int32_t stmt_offset = 1;
-            const int32_t stmt_size = 1;
-            
-            auto walk_result = walkSQLStatement(stmt, this->messageChannel("worker.parse"));
-            auto q = stmt->ToString();
-            
-            ParamResolveResult param_type_result;
-            ColumnResolveResult column_type_result;
-            try {
-                this->conn.BeginTransaction();
+        channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
 
-                auto bound_result = bindTypeToStatement(*this->conn.context, stmt->Copy(), walk_result.names, walk_result.examples);
-
-                auto channel = this->messageChannel("worker.parse");
-                param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.names), std::move(bound_result.type_hints), std::move(walk_result.examples), channel);
-                column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.type, this->conn, channel);
-
-                this->conn.Commit();
-            }
-            catch (...) {
-                this->conn.Rollback();
-                throw;
-            }
-
-            auto zmq_channel = this->messageChannel("worker.extract");
-
-            std::ranges::sort(param_type_result.params, {}, &ParamEntry::sort_order);
-
-            std::unordered_map<std::string, std::vector<char>> topic_bodies({
-                {topic_query, std::vector<char>(q.cbegin(), q.cend())},
-                {topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))},
-                {topic_placeholder, encodePlaceholder(param_type_result.params)},
-                {topic_placeholder_order, encodePlaceholderOrder(param_type_result.params)},
-                {topic_select_list, encodeSelectList(std::move(column_type_result.columns))},
-                {topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
-            });
-            zmq_channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
-        }
-
-        return no_error;
+        return std::move(stmts);
     }
     catch (const duckdb::ParserException& ex) {
         message = ex.what();
+    }
+
+    channel.err(message);
+    channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+
+    return {};
+}
+
+static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> void {
+    std::string message;
+    try {
+        auto walk_result = walkSQLStatement(stmt, channel.clone());
+        if (walk_result.handled == ResolveStatus::Unhandled) {
+            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(stmt_offset));
+            return;
+        }
+
+        auto q = stmt->ToString();
+        
+        ParamResolveResult param_type_result;
+        ColumnResolveResult column_type_result;
+        try {
+            conn.BeginTransaction();
+
+            auto bound_result = bindTypeToStatement(*conn.context, stmt->Copy(), walk_result.data.names, walk_result.data.examples);
+
+            auto channel_extract = channel.clone();
+            param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.data.names), std::move(bound_result.type_hints), std::move(walk_result.data.examples), channel);
+            column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.data.type, conn, channel);
+
+            conn.Commit();
+        }
+        catch (...) {
+            conn.Rollback();
+            throw;
+        }
+
+        std::ranges::sort(param_type_result.params, {}, &ParamEntry::sort_order);
+
+        std::unordered_map<std::string, std::vector<char>> topic_bodies({
+            {topic_query, std::vector<char>(q.cbegin(), q.cend())},
+            {topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))},
+            {topic_placeholder, encodePlaceholder(param_type_result.params)},
+            {topic_placeholder_order, encodePlaceholderOrder(param_type_result.params)},
+            {topic_select_list, encodeSelectList(std::move(column_type_result.columns))},
+            {topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
+        });
+        channel.clone().sendWorkerResponse(
+            ::worker_result, 
+            encodeTopicBody(stmt_offset, topic_bodies)
+        );
+
+        return;
     }
     catch (const duckdb::Exception& ex) {
         message = ex.what();
@@ -251,8 +266,22 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
         message = "Unexpected error";
     }
     
-    this->messageChannel("worker").err(message);
-    return invalid_sql;
+    channel.err(message);
+}
+
+auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
+    auto stmts = parseQuery(this->conn, query, this->messageChannel(std::nullopt, "worker.phase.parse"));
+
+    const size_t stmt_offset = 0;
+
+    // for (auto& stmt: stmts) {
+    if (stmts.size() > 0) {
+        executeInternal(this->conn, stmt_offset, stmts[stmt_offset], this->messageChannel(stmt_offset, "worker.phase.extract"));
+    }
+
+    this->messageChannel(std::nullopt, "worker.phase.done").sendWorkerResponse(::worker_finished, {});
+
+    return no_error;
 }
 
 extern "C" {

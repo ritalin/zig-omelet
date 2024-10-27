@@ -234,7 +234,7 @@ auto runBindStatement(
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
         auto walk_result = walkSQLStatement(stmts[0], ZmqChannel::unitTestChannel());
-        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names, {});
+        auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.data.names, {});
         column_result = resolveColumnType(bound_result.stmt.plan, stmt_type, conn, channel);
         conn.Commit();
     }

@@ -100,6 +100,14 @@ struct UserTypeResult {
     std::vector<UserTypeEntry> anon_types;
 };
 
+enum class ResolveStatus {Unhandled, Handled};
+
+template<typename ResultData>
+struct ResolveResult {
+    ResultData data;
+    ResolveStatus handled;
+};
+
 class DummyExpression: public duckdb::Expression {
 public:
     DummyExpression(): duckdb::Expression(duckdb::ExpressionType::INVALID, duckdb::ExpressionClass::INVALID, duckdb::LogicalType::SQLNULL) {}
@@ -110,7 +118,7 @@ public:
 auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle;
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
 auto swapMapEntry(const std::unordered_map<std::string, ParamLookupEntry>& map) -> std::unordered_map<std::string, ParamLookupEntry>;
-auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ParamCollectionResult;
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ResolveResult<ParamCollectionResult>;
 
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names, const ParamExampleLookup& examples) -> BoundResult;
 

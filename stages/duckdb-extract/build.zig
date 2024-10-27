@@ -208,6 +208,7 @@ fn createWorkerModule(
                 "supports/zmq_worker_support.cpp",
                 "supports/user_type_support.cpp",
                 "supports/statement_walker_support.cpp",
+                "supports/response_encode_support.cpp",
             },
             .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
         });

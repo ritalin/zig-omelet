@@ -5,6 +5,7 @@
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "duckdb_binder_support.hpp"
+#include "response_encode_support.hpp"
 
 namespace worker {
 
@@ -13,7 +14,7 @@ public:
     UserTypeWorker(worker::Database *db, std::string&& id, std::optional<void*>&& socket): conn(db->connect()), id(id), socket(socket) {}
 public:
     auto execute(std::string&& query) -> WorkerResultCode;
-    auto messageChannel(const std::string& from) -> ZmqChannel;
+    auto messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel;
 private:
     duckdb::Connection conn;
     std::string id;
@@ -51,61 +52,83 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> 
     return std::move(encoder.rawBuffer());
 }
 
-static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, int32_t stmt_offset, int32_t stmt_size, ZmqChannel&& channel) -> void {
-    std::optional<UserTypeResult> result;
+static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
+    std::string message;
+
     try {
-        conn.BeginTransaction();
-        extract: {
-            auto bound_result = bindTypeToStatement(*conn.context, std::move(stmt->Copy()), {}, {});
+        auto stmts = conn.ExtractStatements(query);
 
-            result = resolveUserType(bound_result.stmt.plan, channel);
-        }
-        conn.Commit();
+        channel.sendWorkerResponse(
+            ::worker_progress, 
+            encodeStatementCount(stmts.size())
+        );
+
+        return std::move(stmts);
     }
-    catch (...) {
-        conn.Rollback();
-        throw;
+    catch (const duckdb::ParserException& ex) {
+        message = ex.what();
     }
 
-    send: {
-        if (result) {
-            send_user_type: {
-                std::unordered_map<std::string, std::vector<char>> topic_bodies({
-                    {topic_user_type, encodeUserType(result.value().entry)},
-                    {topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types))},
-                    {topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names))}
-                });
-
-                channel.sendWorkerResult(stmt_offset, stmt_size, topic_bodies);
-            }
-        }
-    }
+    channel.err(message);
+    return {};
 }
 
-auto UserTypeWorker::messageChannel(const std::string& from) -> ZmqChannel {
-    return ZmqChannel(this->socket, this->id, from);
-}
-
-auto UserTypeWorker::execute(std::string&& query) -> WorkerResultCode {
+static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> void {
     std::string message;
     try {
-        auto stmts = this->conn.ExtractStatements(query);
+        std::optional<UserTypeResult> result;
+        try {
+            conn.BeginTransaction();
+            extract: {
+                auto bound_result = bindTypeToStatement(*conn.context, std::move(stmt->Copy()), {}, {});
 
-        if (stmts.size() > 0) {
-            const int32_t stmt_offset = 1;
-            const int32_t stmt_size = 1;
-
-            executeInternal(this->conn, stmts[0], stmt_offset, stmt_size, this->messageChannel("worker.user_type"));
+                result = resolveUserType(bound_result.stmt.plan, channel);
+            }
+            conn.Commit();
+        }
+        catch (...) {
+            conn.Rollback();
+            throw;
         }
 
-        return no_error;
+        send: {
+            if (result) {
+                send_user_type: {
+                    std::unordered_map<std::string, std::vector<char>> topic_bodies({
+                        {topic_user_type, encodeUserType(result.value().entry)},
+                        {topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types))},
+                        {topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names))}
+                    });
+
+                    channel.sendWorkerResponse(::worker_result, encodeTopicBody(stmt_offset, topic_bodies));
+                }
+            }
+        }
+
+        return;
     }
     catch (const duckdb::Exception& ex) {
         message = ex.what();
     }
     
-    this->messageChannel("worker").err(message);
-    return invalid_sql;
+    channel.err(message);
+}
+
+auto UserTypeWorker::messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel {
+    return ZmqChannel(this->socket, offset, this->id, from);
+}
+
+auto UserTypeWorker::execute(std::string&& query) -> WorkerResultCode {
+    auto stmts = parseQuery(this->conn, query, this->messageChannel(std::nullopt, "worker.phase.parse"));
+
+    const int32_t stmt_offset = 0;
+    if (stmts.size() > 0) {
+        executeInternal(this->conn, stmt_offset, stmts[stmt_offset], this->messageChannel(stmt_offset, "worker.phase.user_type"));
+    }
+
+    this->messageChannel(std::nullopt, "worker.phase.done").sendWorkerResponse(::worker_finished, {});
+
+    return no_error;
 }
 
 }

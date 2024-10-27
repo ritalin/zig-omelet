@@ -251,11 +251,11 @@ auto runResolveParamType(
 
 
     BoundResult bound_result;
-    ParamCollectionResult walk_result;
+    ResolveResult<ParamCollectionResult> walk_result;
     try {
         conn.BeginTransaction();
         walk_result = walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
-        bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.names, walk_result.examples);
+        bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.data.names, walk_result.data.examples);
         conn.Commit();
     }
     catch (...) {
@@ -266,9 +266,9 @@ auto runResolveParamType(
     auto channel = ZmqChannel::unitTestChannel();
     auto [resolve_result, user_type_names, anon_types] = resolveParamType(
         bound_result.stmt.plan, 
-        std::move(walk_result.names), 
+        std::move(walk_result.data.names), 
         std::move(bound_result.type_hints),
-        std::move(walk_result.examples),
+        std::move(walk_result.data.examples),
         channel
     );
 

@@ -1,105 +1,70 @@
 #include <iostream>
 #include <zmq.h>
 
+#include <magic_enum/magic_enum.hpp>
+
 #include "duckdb_worker.h"
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
+#include "response_encode_support.hpp"
 
 namespace worker {
 
-ZmqChannel::ZmqChannel(std::optional<void *> socket, const std::string& id, const std::string& from): socket(socket), id(id), from(from) {}
+ZmqChannel::ZmqChannel(std::optional<void *> socket, const std::optional<size_t>& offset, const std::string& id, const std::string& from)
+    : socket(socket), stmt_offset(offset), id(id), from(from)
+{
 
-static auto sendWorkerLog(void *socket, const std::string& id, const std::string& from, const std::string& log_level, const std::string& message) -> void;
+}
+
+static auto sendInternal(void *socket, const CWorkerResponseTag event_tag, const std::string& id, const std::string& from, const std::vector<char>& content) -> void;
 
 auto ZmqChannel::unitTestChannel() -> ZmqChannel {
-    return ZmqChannel(std::nullopt, "", "unittest");
+    return ZmqChannel(std::nullopt, std::nullopt, "", "unittest");
 }
 
 auto ZmqChannel::clone() -> ZmqChannel {
-    return ZmqChannel(this->socket, this->id, this->from);
+    return ZmqChannel(this->socket, this->stmt_offset, this->id, this->from);
 }
 
-auto ZmqChannel::info(std::string message) -> void {
+auto ZmqChannel::info(const std::string& message) -> void {
     if (! this->socket) {
-        std::cout << std::format("log/level: info, message: {}", message) << std::endl;
-        return;
+        std::cout << std::format("log/level: info, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
     }
     else {
-        sendWorkerLog(this->socket.value(), this->id, this->from, "info", message);
+        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::info, this->id, this->stmt_offset.value_or(0), message));
     }
 }
 
-auto ZmqChannel::warn(std::string message) -> void {
+auto ZmqChannel::warn(const std::string& message) -> void {
     if (! this->socket) {
-        std::cout << std::format("log/level: warn, message: {}", message) << std::endl;
-        return;
+        std::cout << std::format("log/level: warn, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
     }
     else {
-        sendWorkerLog(this->socket.value(), this->id, this->from, "warn", message);
+        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::warn, this->id, this->stmt_offset.value_or(0), message));
     }
 }
 
-auto ZmqChannel::err(std::string message) -> void {
+auto ZmqChannel::err(const std::string& message) -> void {
     if (! this->socket) {
-        std::cout << std::format("log/level: err, message: {}", message) << std::endl;
-        return;
+        std::cout << std::format("log/level: err, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
     }
     else {
-        sendWorkerLog(this->socket.value(), this->id, this->from, "err", message);
+        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::err, this->id, this->stmt_offset.value_or(0), message));
     }
 }
 
-auto ZmqChannel::sendWorkerResult(size_t stmt_offset, size_t stmt_count, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> void {
+auto ZmqChannel::sendWorkerResponse(CWorkerResponseTag event_tag, std::vector<char>&& content) -> void {
     if (! this->socket) {
-        for (auto [topic, payload]: topic_bodies) {
-            std::cout << std::format("worker_result/topic: {}, payload: {}", topic, std::string(payload.begin(), payload.end())) << std::endl;
-        }
-        return;
+        std::cout << std::format("worker_result/payload: `{}`", std::string(content.begin(), content.end())) << std::endl;
     }
+    else {
+        sendInternal(this->socket.value(), event_tag, this->id, this->from, content);
+    }
+}
 
-    auto socket = this->socket.value();
-
+static auto sendInternal(void *socket, const CWorkerResponseTag event_tag, const std::string& id, const std::string& from, const std::vector<char>& content) -> void {
     event_type: {
-        auto event_type = std::string("worker_result");
-        ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
-    }
-    from: {
-        ::zmq_send(socket, this->from.data(), this->from.length(), ZMQ_SNDMORE);    
-    }
-    payload: {
-        std::vector<char> buf;
-
-        CborEncoder payload_encoder;
-        result_tag: {
-            payload_encoder.addString("topic_body");
-        }
-        work_id: {
-            payload_encoder.addString(this->id);
-        }
-        stmt_count: {
-            payload_encoder.addUInt(stmt_count);
-        }
-        stmt_offset: {
-            payload_encoder.addUInt(stmt_offset);
-        }
-        topic_body: {
-            payload_encoder.addUInt(topic_bodies.size());
-
-            for (auto [topic, payload]: topic_bodies) {
-                payload_encoder.addBinaryPair(topic, payload);
-            }
-        }
-
-        auto encode_result = payload_encoder.build();
-
-        ::zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);
-        ::zmq_send(socket, "", 0, 0);    
-    }
-}
-
-static auto sendWorkerLog(void *socket, const std::string& id, const std::string& from, const std::string& log_level, const std::string& message) -> void {
-    event_type: {
-        auto event_type = std::string("worker_result");
+        auto event_type = std::string("worker_response");
         ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
     }
     from: {
@@ -109,16 +74,13 @@ static auto sendWorkerLog(void *socket, const std::string& id, const std::string
         CborEncoder payload_encoder;
 
         event_tag: {
-            payload_encoder.addString("log");
+            payload_encoder.addString(magic_enum::enum_name(event_tag));
         }
-        source_path: {
+        work_id: {
             payload_encoder.addString(id);
         }
-        log_level: {
-            payload_encoder.addString(log_level);
-        }
-        log_content: {
-            payload_encoder.addString(std::format("{} ({})", message, id));
+        content: {
+            payload_encoder.concatBinary(content);
         }
 
         auto encode_result = payload_encoder.build();

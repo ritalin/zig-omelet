@@ -1,4 +1,7 @@
 #include <duckdb.hpp>
+#include <duckdb/parser/statement/create_statement.hpp>
+
+#include <magic_enum/magic_enum.hpp>
 
 #include "duckdb_worker.h"
 #include "duckdb_database.hpp"
@@ -53,15 +56,18 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> 
 }
 
 static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
+    if (query == "") {
+        channel.warn("Cannot handle an empty schema");
+        channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+        return {};
+    }
+    
     std::string message;
 
     try {
         auto stmts = conn.ExtractStatements(query);
 
-        channel.sendWorkerResponse(
-            ::worker_progress, 
-            encodeStatementCount(stmts.size())
-        );
+        channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
 
         return std::move(stmts);
     }
@@ -70,10 +76,36 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&&
     }
 
     channel.err(message);
+    channel.sendWorkerResponse(::worker_skipped, encodeStatementCount(0));
+
     return {};
 }
 
+static auto isSupportedStatements(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel& channel) -> bool {
+    if (stmt->type != duckdb::StatementType::CREATE_STATEMENT) {
+        channel.warn(std::format("Unsupported schema statement: {}", magic_enum::enum_name(stmt->type)));
+        return false;
+    }
+
+    auto& create_stmt = stmt->Cast<duckdb::CreateStatement>();
+    
+    switch (create_stmt.info->type) {
+    case duckdb::CatalogType::TYPE_ENTRY: 
+        return true;
+    default:
+        {
+            channel.warn(std::format("Unsupported schema statement: {}/{}", magic_enum::enum_name(stmt->type), magic_enum::enum_name(create_stmt.info->type)));
+            return false;
+        }
+    }
+}
+
 static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> void {
+    if (! isSupportedStatements(stmt, channel)) {
+        channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(stmt_offset));
+        return;
+    }
+    
     std::string message;
     try {
         std::optional<UserTypeResult> result;

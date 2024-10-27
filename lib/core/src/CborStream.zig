@@ -236,6 +236,8 @@ pub const Reader = struct {
         comptime std.debug.assert(@typeInfo(T).Int.signedness == .signed);
 
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_INTEGER);
+
         return self.readIntInternal(T, result);
     }
 
@@ -243,6 +245,8 @@ pub const Reader = struct {
         comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
 
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_INTEGER);
+
         return self.readIntInternal(T, result);
     }
 
@@ -294,7 +298,9 @@ pub const Reader = struct {
     }
 
     pub fn readNull(self: *Self, comptime T: type) !?T {
-        _ = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_SIMPLE_VALUE);
+
         self.offset += self.raw_reader.msgidx;
         
         return null;
@@ -318,6 +324,7 @@ pub const Reader = struct {
 
     pub fn readBytes(self: *Self) ![]const u8 {
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_STRING);
 
         const value = self.data[self.offset..][result.offset..][0..result.size];
         self.offset += self.raw_reader.msgidx;
@@ -327,6 +334,7 @@ pub const Reader = struct {
 
     pub fn readString(self: *Self) ![]const u8 {
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_STRING);
 
         const value = self.data[self.offset..][result.offset..][0..result.size];
         self.offset += self.raw_reader.msgidx;
@@ -336,6 +344,7 @@ pub const Reader = struct {
 
     pub fn readCString(self: *Self) ![:0]const u8 {
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
+        std.debug.assert(result.type == c.CBOR_ITEM_STRING);
 
         const value = self.data[self.offset..][result.offset..][0..result.size-1 :0];
         self.offset += self.raw_reader.msgidx;

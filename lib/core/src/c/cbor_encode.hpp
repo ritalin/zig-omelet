@@ -8,7 +8,7 @@ public:
     CborEncoder(): buf() {}
 public:
     auto addUInt(uint64_t value) -> void;
-    auto addString(std::string value) -> void;
+    auto addString(std::string_view value) -> void;
     auto addBool(bool value) -> void;
     auto addNull() -> void;
     auto addArrayHeader(size_t len) -> void;

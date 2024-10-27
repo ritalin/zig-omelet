@@ -62,7 +62,7 @@ auto CborEncoder::addUInt(uint64_t value) -> void {
     std::move(data.begin(), data.end(), std::back_inserter(this->buf));
 }
 
-auto CborEncoder::addString(std::string value) -> void {
+auto CborEncoder::addString(std::string_view value) -> void {
     auto inserter = std::back_inserter(this->buf);
     header: {
         auto header = std::move(cborHeader(CborTypes::STRING, value.size()));

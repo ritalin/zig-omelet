@@ -194,16 +194,16 @@ auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, const s
 }
 
 static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
-    if (query == "") {
-        channel.warn("Cannot handle an empty query");
-        channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
-        return {};
-    }
-    
     std::string message;
 
     try {
         auto stmts = conn.ExtractStatements(query);
+        if (stmts.size() == 0) {
+            channel.warn("Cannot handle an empty query");
+            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+            return {};
+        }
+    
 
         channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
 

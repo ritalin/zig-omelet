@@ -610,6 +610,42 @@ test "worker workflow/empty query" {
     }
 }
 
+test "worker workflow/empty query#2" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.source, "  \n\n ");
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectLog(path, item.from, item.event, .warn);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectSkipResult(path, item.from, item.event, 0);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
+}
+
 test "worker workflow/invalid query" {
     const allocator = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -748,6 +784,42 @@ test "worker workflow/empty schema" {
     defer ctx.deinit();
 
     const path = try ctx.pushTestQuery(.schema, "");
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectLog(path, item.from, item.event, .warn);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectSkipResult(path, item.from, item.event, 0);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
+}
+
+test "worker workflow/empty schema#2" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.schema, "  \n\n ");
     defer path.deinit();
 
     try ctx.stage.spawnWorker(path);

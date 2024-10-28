@@ -55,17 +55,16 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> 
     return std::move(encoder.rawBuffer());
 }
 
-static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
-    if (query == "") {
-        channel.warn("Cannot handle an empty schema");
-        channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
-        return {};
-    }
-    
+static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {    
     std::string message;
 
     try {
         auto stmts = conn.ExtractStatements(query);
+        if (stmts.size() == 0) {
+            channel.warn("Cannot handle an empty schema");
+            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+            return {};
+        }
 
         channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
 

@@ -167,7 +167,7 @@ const EventPayload = struct {
             return .{
                 .allocator = allocator,
                 .header = try SourcePath.init(allocator, header),
-                .index = 1,
+                .index = 0,
                 .bodies = new_bodies,
             };
         }
@@ -196,7 +196,7 @@ const EventPayload = struct {
             return .{
                 .allocator = allocator,
                 .header = try SourcePath.init(allocator, self.header.values()),
-                .index = 1,
+                .index = self.index,
                 .bodies = new_bodies,
             };
         }

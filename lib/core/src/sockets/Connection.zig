@@ -27,7 +27,8 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
         dispatcher: *EventDispatcher(stage_name),
 
         pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
-            var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
+            var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Dealer, context);
+            // var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
             request_socket_opt: {
                 const opt:zmq.ZSocketOption = .{.RoutingId = @constCast(stage_name)}; 
                 try request_socket.setSocketOption(opt);
@@ -73,83 +74,110 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
 
         fn onDispatch(dispatcher: *EventDispatcher(stage_name)) !?EventDispatcher(stage_name).Entry {
             while (true) {
-                while (dispatcher.receive_queue.dequeue()) |*entry| {
-                    switch (entry.event) {
-                        .ack => {
-                            defer entry.deinit();
-                            try dispatcher.approve();
-                        },
-                        .nack => {
-                            defer entry.deinit();
-                            try dispatcher.revertFromPending();
-                        },
-                        else => {
-                            if (dispatcher.state.level.done) {
-                                continue;
-                            }
-                            else {
-                                try dispatcher.tryReadyQuit(entry.event);
-                            }
-
-                            return .{ 
-                                .allocator = entry.allocator,
-                                .socket = entry.socket, 
-                                .kind = .post,
-                                .from = entry.from,
-                                .event = entry.event
-                            };
-                        }
-                    }
-                }
-
-                if (!dispatcher.receive_pending.hasMore()) {
-                    if (dispatcher.send_queue.dequeue()) |entry| {
-                        const socket_state = try dispatcher.polling.socketState(entry.socket);
-                        if (socket_state.PollIn) {
-                            try dispatcher.send_queue.prepend(entry);
-                            const x = 0;
-                            _ = x;
+                dispatch_loop: {
+                    while (dispatcher.receive_queue.dequeue()) |*entry| {
+                        if (dispatcher.state.level.done) {
+                            continue;
                         }
                         else {
-                            if (dispatcher.state.level.done) {
-                                defer entry.deinit();
-                                continue;
+                            try dispatcher.tryReadyQuit(entry.event);
+                        }
+
+                        return .{ 
+                            .allocator = entry.allocator,
+                            .socket = entry.socket, 
+                            .kind = .post,
+                            .from = entry.from,
+                            .event = entry.event,
+                            .routing_id = entry.routing_id,
+                        };
+                    }
+
+                    while (true) {
+                        send_event: {
+                        if (dispatcher.send_queue.dequeue()) |entry| {
+                            const socket_state = try dispatcher.polling.socketState(entry.socket);
+                            if (socket_state.PollIn) {
+                                try dispatcher.send_queue.prepend(entry);
+                            }
+                            else {
+                                if (dispatcher.state.level.done) {
+                                    defer entry.deinit();
+                                    continue;
+                                }
+
+                                Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
+                                try dispatcher.receive_pending.enqueue(entry);
+
+                                events.sendEvent(
+                                    dispatcher.allocator, entry.socket, 
+                                    .{ .kind = entry.kind, .from = stage_name, .event = entry.event }
+                                ) 
+                                catch |err| switch (err) {
+                                    error.SocketStateInvalid => {
+                                        Trace.debug("Cannot send REQ -> REQ", .{});
+                                        try dispatcher.revertFromPending();
+                                    },
+                                    else => {
+                                        Trace.debug("Unexpected error on sending: {}", .{err});
+                                        return err;
+                                    }
+                                };
+                            }
+                        }
+                        else if (dispatcher.receive_queue.hasMore()) {
+                            break:dispatch_loop;
+                        }
+                        else if (dispatcher.state.level.done) {
+                            return null;
+                        }
+
+                        while (true) {
+                            var it = try dispatcher.polling.poll();
+                            defer it.deinit();
+
+                            while (it.next()) |item| {
+                                // discard routing id
+                                _ = try events.receiveRoutingId(dispatcher.allocator, item.socket);
+                                
+                                const packet = try events.receiveEventWithPayload(dispatcher.allocator, item.socket);
+
+                                Trace.debug("Received command: {} ({})", .{packet.event.tag(), dispatcher.receive_queue.count()});
+
+                                if (packet.kind == .reply) {
+                                    switch (packet.event) {
+                                        .nack => {
+                                            try dispatcher.revertFromPending();
+                                        },
+                                        else => {
+                                            try dispatcher.approve();
+                                        }
+                                    }
+                                }
+
+                                switch (packet.event) {
+                                    .ack, .nack => {
+                                        defer packet.deinit(dispatcher.allocator);
+                                        continue;
+                                    },
+                                    else => {
+                                        try dispatcher.receive_queue.enqueue(.{
+                                            .allocator = dispatcher.allocator, 
+                                            .kind = .response,
+                                            .from = packet.from,
+                                            .socket = item.socket, 
+                                            .event = packet.event,
+                                            .routing_id = null,
+                                        });
+                                    }
+                                }
                             }
 
-                            Trace.debug("Sending: {} ({})", .{std.meta.activeTag(entry.event), dispatcher.send_queue.count()});
-                            try dispatcher.receive_pending.enqueue(entry);
-
-                            events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
-                                else => {
-                                    Trace.debug("Unexpected error on sending: {}", .{err});
-                                    return err;
-                                }
-                            };
+                            if (dispatcher.receive_pending.count() == 0) break:send_event;
                         }
                     }
-                    else if (dispatcher.receive_queue.hasMore()) {
-                        continue;
-                    }
-                    else if (dispatcher.state.level.done) {
-                        break;
-                    }
                 }
-
-                var it = try dispatcher.polling.poll();
-                defer it.deinit();
-
-                while (it.next()) |item| {
-                    const event = try events.receiveEventWithPayload(dispatcher.allocator, item.socket);
-
-                    Trace.debug("Received command: {} ({})", .{std.meta.activeTag(event[1]), dispatcher.receive_queue.count()});
-
-                    try dispatcher.receive_queue.enqueue(.{
-                        .allocator = dispatcher.allocator, 
-                        .kind = .response,
-                        .from = event[0],
-                        .socket = item.socket, .event = event[1]
-                    });
-                }
+            }
             }
 
             return null;
@@ -171,7 +199,8 @@ pub fn Server(comptime stage_name: types.Symbol) type {
         pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
             const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
             errdefer send_socket.deinit();
-            const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
+            const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Router, context);
+            // const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
             errdefer reply_socket.deinit();
 
             const self = try allocator.create(Self);
@@ -205,62 +234,76 @@ pub fn Server(comptime stage_name: types.Symbol) type {
                     return entry;
                 }
 
-                if (dispatcher.send_queue.dequeue()) |*entry| {
-                    defer entry.deinit();
+                send_event: {
+                    while (dispatcher.send_queue.dequeue()) |entry| {
+                        defer entry.deinit();
 
-                    Trace.debug("{s}: {} from [{s}] ({}) ", .{
-                        if (entry.kind == .reply) "Reply" else "Post",
-                        std.meta.activeTag(entry.event), 
-                        entry.from,
-                        dispatcher.send_queue.count()
-                    });
+                        Trace.debug("{s}: {} from [{s}] to [{s}] ({}) ", .{
+                            if (entry.kind == .reply) "Reply" else "Post",
+                            std.meta.activeTag(entry.event), 
+                            entry.from,
+                            if (entry.routing_id) |routing_id| routing_id else "all",
+                            dispatcher.send_queue.count()
+                        });
 
-                    events.sendEvent(dispatcher.allocator, entry.socket, stage_name, entry.event) catch |err| switch (err) {
-                        else => {
-                            // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
-                            return err;
+                        if (entry.routing_id) |routing_id| {
+                            try events.sendRoutingId(dispatcher.allocator, entry.socket, routing_id);
                         }
-                    };
 
-                    if (entry.kind == .reply) {
-                        continue;
+                        events.sendEvent(
+                            dispatcher.allocator, entry.socket, 
+                            .{ .kind = entry.kind, .from = stage_name, .event = entry.event }
+                        ) 
+                        catch |err| switch (err) {
+                            else => {
+                                // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
+                                return err;
+                            }
+                        };
                     }
-                }
-                else if (dispatcher.receive_queue.hasMore()) {
-                    continue;
-                }
-                else if (dispatcher.state.level.done) {
-                    break;
+                    else if (dispatcher.state.level.done) {
+                        return null;
+                    }
+                    break:send_event;
                 }
 
-                var it = try dispatcher.polling.poll();
-                defer it.deinit();
+                receive_event: {
+                    while (true) {
+                        var it = try dispatcher.polling.poll();
+                        defer it.deinit();
 
-                while (it.next()) |item| {
-                    const event = events.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
-                        // error.InvalidResponse => {
-                        //     try events.sendEvent(dispatcher.allocator, item.socket, .nack);
-                        //     continue;
-                        // },
-                        else => return err,
-                    };
+                        while (it.next()) |item| {
+                            const routing_id = try events.receiveRoutingId(dispatcher.allocator, item.socket);
 
-                    Trace.debug("Received command: {} from [{s}]", .{
-                        event[1].tag(), 
-                        std.mem.sliceTo(event[0], 0),
-                    });
+                            const packet = events.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
+                                // error.InvalidResponse => {
+                                //     try events.sendEvent(dispatcher.allocator, item.socket, .nack);
+                                //     continue;
+                                // },
+                                else => return err,
+                            };
 
-                    try dispatcher.receive_queue.enqueue(.{
-                        .allocator = dispatcher.allocator,
-                        .kind = .response,
-                        .socket = item.socket, 
-                        .from = event[0],
-                        .event = event[1]
-                    });
+                            Trace.debug("Received command: {} from [{s}]", .{
+                                packet.event.tag(), 
+                                std.mem.sliceTo(packet.from, 0),
+                            });
+
+                            try dispatcher.receive_queue.enqueue(.{
+                                .allocator = dispatcher.allocator,
+                                .kind = .response,
+                                .socket = item.socket, 
+                                .from = packet.from,
+                                .event = packet.event,
+                                .routing_id = routing_id,
+                            });
+                        }
+
+                        if (dispatcher.receive_queue.count() > 0) break:receive_event;
+                    }
                 }
             }
 
-            return null;     
+            return null;
         }
     };
 }
@@ -339,26 +382,29 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
                 .socket = self.send_socket, 
                 .from = try self.allocator.dupe(u8, stage_name), 
                 .event = event,
+                .routing_id = null,
             });
         }
 
-        pub fn reply(self: *Self, socket: *zmq.ZSocket, event: events.Event) !void {
+        pub fn reply(self: *Self, socket: *zmq.ZSocket, event: events.Event, routing_id: ?types.Symbol) !void {
             try self.send_queue.prepend(.{ 
                 .allocator = self.allocator,
                 .kind = .reply,
                 .socket = socket, 
                 .from = try self.allocator.dupe(u8, stage_name), 
                 .event = event,
+                .routing_id = if (routing_id) |x| try self.allocator.dupe(u8, x) else null,
             });
         }
 
-        pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: events.Event) !void {
+        pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: events.Event, routing_id: ?types.Symbol) !void {
             try self.receive_queue.prepend(.{
                 .allocator = self.allocator,
                 .kind = .response,
                 .socket = socket, 
                 .from = try self.allocator.dupe(u8, from), 
-                .event = try event.clone(self.allocator)
+                .event = try event.clone(self.allocator),
+                .routing_id = if (routing_id) |x| try self.allocator.dupe(u8, x) else null,
             });
         }
 
@@ -385,6 +431,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
                 .socket = self.send_socket, 
                 .from = try self.allocator.dupe(u8, stage_name),
                 .event = .{.report_fatal = try events.Event.Payload.Log.init(self.allocator, .{.err, message})},
+                .routing_id = null,
             });
         }
 
@@ -405,6 +452,7 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
                 .socket = self.send_socket, 
                 .from = try self.allocator.dupe(u8, stage_name),
                 .event = .quit_accept,
+                .routing_id = null,
             });
         }
 
@@ -438,13 +486,15 @@ pub fn EventDispatcher(comptime stage_name: types.Symbol) type {
         pub const Entry = struct {
             allocator: std.mem.Allocator,
             socket: *zmq.ZSocket,
-            kind: enum { post, reply, response},
+            kind: events.DataPacket.Kind,
             from: types.Symbol,
             event: events.Event,
+            routing_id: ?types.Symbol,
 
             pub fn deinit(self: @This()) void {
                 self.allocator.free(self.from);
                 self.event.deinit();
+                if (self.routing_id) |x| self.allocator.free(x);
             }
         };
     };

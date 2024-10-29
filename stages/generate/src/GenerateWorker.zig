@@ -72,11 +72,11 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     defer self.allocator.free(payload);
 
     const event: core.Event = .{
-        .worker_result = try core.Event.Payload.WorkerResult.init(self.allocator, .{payload}),
+        .worker_response = try core.Event.Payload.WorkerResponse.init(self.allocator, .{payload}),
     };
     defer event.deinit();
 
-    try core.sendEvent(self.allocator, socket, "task", event);
+    try core.sendEvent(self.allocator, socket, .{ .kind = .post, .from = "task", .event = event });
 }
 
 fn writeLogPayload(self: *Self, writer: *core.CborStream.Writer, name: core.Symbol, message: core.Symbol, status: ResultStatus) !void {
@@ -161,7 +161,7 @@ fn sendLog(allocator: std.mem.Allocator, socket: *zmq.ZSocket, log_level: core.L
         .log = try core.Event.Payload.Log.init(allocator, .{log_level, message}),
     };
     defer log.deinit();
-    try core.sendEvent(allocator, socket, "task", log);
+    try core.sendEvent(allocator, socket, .{ .kind = .post, .from = "task", .event = log });
 }
 
 fn trimExtension(name: core.Symbol) core.Symbol {

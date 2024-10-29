@@ -101,8 +101,8 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(co
                 try self.connection.pull_sink_socket.spawn(worker);
                 try self.connection.dispatcher.post(.ready_generate);
             },
-            .worker_result => |result| {
-                try self.processWorkResult(result.content, lookup);
+            .worker_response => |res| {
+                try self.processWorkResult(res.content, lookup);
 
                 if (self.connection.dispatcher.state.level.terminating) {
                     if (lookup.count() == 0) {

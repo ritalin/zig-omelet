@@ -45,7 +45,7 @@ pub const ZPolling = struct {
     options: Options,
 
     pub const Options = struct {
-        n_retry: usize = 1,
+        n_retry: usize = 5,
     };
 
     pub fn init(allocator: std.mem.Allocator, items: []const Item, options: Options) !ZPolling {

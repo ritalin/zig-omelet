@@ -1,3 +1,3 @@
 insert into Toto (id, numbers) 
-values ($id, $bumbers)
+values ($id, $numbers)
 returning id

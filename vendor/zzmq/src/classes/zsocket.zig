@@ -272,6 +272,10 @@ pub const ZSocketOption = union(enum) {
     /// For more details, see https://libzmq.readthedocs.io/en/latest/zmq_setsockopt.html
     RouterHandover: bool,
 
+    /// ZMQ_TYPE: shall retrieve the socket type for the specified 'socket'. 
+    /// The socket type is specified at socket creation time and cannot be modified afterwards.
+    SocketType: ZSocketType,
+
     /// ZMQ_SUBSCRIBE: establish a new message filter on a 'ZMQ_SUB' socket.
     /// 
     /// Newly created 'ZMQ_SUB' sockets shall filter out all incoming messages, 
@@ -324,7 +328,7 @@ pub const ZSocket = struct {
         r.socket_ = s;
         r.endpoint_ = null;
 
-        // set docket defaults
+        // set socket defaults
         try r.setSocketOption(.{ .SendHighWaterMark = 1000 });
         try r.setSocketOption(.{ .ReceiveHighWaterMark = 1000 });
         try r.setSocketOption(.{ .LingerTimeout = 0 });
@@ -437,6 +441,37 @@ pub const ZSocket = struct {
         self.endpoint_ = try selfAllocator.dupe(u8, ep); // copy to managed memory
     }
 
+    pub fn reconnect(self: *ZSocket) !void {
+        if (self.endpoint_ == null) {
+            return error.SocketNotConnected;
+        }
+
+        const epZ = try self.allocator_.dupeZ(u8, self.endpoint_.?);
+        defer self.allocator_.free(epZ);
+
+        var result = c.zmq_disconnect(self.socket_, &epZ[0]);
+        if (result < 0) {
+            return switch (c.zmq_errno()) {
+                c.EINVAL => error.EndpointInvalid,
+                c.ETERM => error.SocketTerminated,
+                c.ENOTSOCK => error.InvalidSocket,
+                c.ENOENT => error.EndpointInvalid,
+                else => error.SocketDisconnectFailed,
+            };
+        }
+
+        result = c.zmq_connect(self.socket_, &epZ[0]);
+        if (result < 0) {
+            switch (c.zmq_errno()) {
+                c.EINVAL => return error.EndpointInvalid,
+                c.EPROTONOSUPPORT => return error.TransportUnsupported,
+                c.ENOCOMPATPROTO => return error.TransportIncompatible,
+                c.EMTHREAD => return error.IOThreadsExceeded,
+                else => return error.SocketConnectFailed,
+            }
+        }
+    }
+
     /// Send a message to a socket.
     ///
     /// Note: The message can lose ownership and become invalid, even on failures!
@@ -467,7 +502,8 @@ pub const ZSocket = struct {
         if (result < 0) {
             messageExt.unmove(); // re-transfer ownership, because `zmq_msg_send()` failed
 
-            switch (c.zmq_errno()) {
+            const errno = c.zmq_errno();
+            switch (errno) {
                 c.EAGAIN => return error.NonBlockingQueueFull,
                 c.ENOTSUP => return error.SocketTypeUnsupported,
                 c.EFSM => return error.SocketStateInvalid,
@@ -621,7 +657,9 @@ pub const ZSocket = struct {
             .Unsubscribe => |v| {
                 result = c.zmq_setsockopt(self.socket_, c.ZMQ_UNSUBSCRIBE, v.ptr, v.len);
             },
-
+            .SocketType => {
+                return error.UnknownOption;
+            },
             //else => return error.UnknownOption,
         }
 
@@ -685,11 +723,19 @@ pub const ZSocket = struct {
             .RouterHandover => {
                 return error.UnknownOption; // ZMQ_ROUTER_HANDOVER cannot be retrieved
             },
+            .SocketType => {
+                var socket_type: c_int = undefined;
+                var length: usize = @sizeOf(@TypeOf(socket_type));
+                result = c.zmq_getsockopt(self.socket_, c.ZMQ_TYPE, &socket_type, &length);
+                if (result == 0) {
+                    opt.*.SocketType = @enumFromInt(socket_type);
+                }
+            },
             .Subscribe => {
-                result = c.zmq_getsockopt(self.socket_, c.ZMQ_SUBSCRIBE, opt.Subscribe.ptr, &opt.Subscribe.len);
+                return error.UnknownOption;
             },
             .Unsubscribe => {
-                result = c.zmq_getsockopt(self.socket_, c.ZMQ_UNSUBSCRIBE, opt.Unsubscribe.ptr, &opt.Unsubscribe.len);
+                return error.UnknownOption;
             },
 
             //else => return error.UnknownOption,

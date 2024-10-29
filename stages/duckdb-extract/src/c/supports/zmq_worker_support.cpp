@@ -7,6 +7,7 @@
 #include "zmq_worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "response_encode_support.hpp"
+#include "omelet_c_types.h"
 
 namespace worker {
 
@@ -66,6 +67,9 @@ static auto sendInternal(void *socket, const CWorkerResponseTag event_tag, const
     event_type: {
         auto event_type = std::string("worker_response");
         ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
+    }
+    packet_kind: {
+        ::zmq_send(socket, &::CPostPacketKind, 1, ZMQ_SNDMORE);    
     }
     from: {
         ::zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    

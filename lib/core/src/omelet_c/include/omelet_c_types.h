@@ -21,6 +21,8 @@ typedef enum {
     Alias, 
 } CUserTypeKind;
 
+const unsigned char CPostPacketKind = 1;
+
 #ifdef __cplusplus
 }
 #endif

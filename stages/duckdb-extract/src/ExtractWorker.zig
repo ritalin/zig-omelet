@@ -41,7 +41,7 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
             .log = try core.Event.Payload.Log.init(self.allocator, .{.err, message}),
         };
         defer log.deinit();
-        try core.sendEvent(self.allocator, socket, "task", log);
+        try core.sendEvent(self.allocator, socket, .{ .kind = .post, .from = "task", .event = log });
         return;
     };
     defer file.close();

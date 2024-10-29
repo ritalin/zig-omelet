@@ -10,6 +10,7 @@ const ExtractWorker = @import("./ExtractWorker.zig");
 const Symbol = core.Symbol;
 const Connection = core.sockets.Connection.Client(app_context, ExtractWorker);
 const Logger = core.Logger.withAppContext(app_context);
+const Trace = core.Logger.SystemDirect(app_context);
 
 const Self = @This();
 
@@ -124,7 +125,7 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(Lo
                 }
             },
             .source_path => |path| {
-                try self.logger.log(.debug, "Accept source path: {s}", .{path.path});
+                try self.logger.log(.debug, "Accept source path: `{s}`", .{path.path});
                 try self.logger.log(.trace, "Begin worker process", .{});
 
                 const p1 = try path.clone(self.allocator);
@@ -137,9 +138,11 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(Lo
                 try self.connection.pull_sink_socket.spawn(worker);
             },
             .worker_response => |res| {
+                try self.logger.log(.trace, "Receive worker respnse", .{});
+
                 if (try self.processWorkerResponse(item.from, res.content, lookup)) |event| {
+                    try self.logger.log(.debug, "Redirect worker response (event: {})", .{event.tag()});
                     try self.connection.dispatcher.post(event);
-                    try self.logger.log(.trace, "Redirect worker response", .{});
                 }
             },
             .finish_source_path => {
@@ -232,14 +235,22 @@ fn processWorkerResponse(self: *Self, from: Symbol, result_content: Symbol, look
                 return null;
             },
             .worker_result => {
+                defer Trace.info("Worker processed: `{s}`", .{source_path});
                 return try processExtractResult(self.allocator, from, &reader, entry);
             },
             .worker_finished => {
+                defer Trace.info("Worker finished: `{s}` (left: {})", .{source_path, lookup.count()});
                 var path = entry.path;
                 defer path.deinit();
 
                 _ = lookup.remove(source_path);
-                return null;
+
+                if (self.connection.dispatcher.state.level.terminating and (lookup.count() == 0)) {
+                    return .finish_topic_body;
+                }
+                else {
+                    return null;
+                }
             },
             .worker_log => {
                 return try processLogResult(self.allocator, from, &reader, entry);
@@ -250,8 +261,11 @@ fn processWorkerResponse(self: *Self, from: Symbol, result_content: Symbol, look
         }
     }
 
+    const log_msg = try std.fmt.allocPrint(self.allocator, "Already processed: `{s}`", .{source_path});
+    defer self.allocator.free(log_msg);
+
     return .{
-        .log = try core.Event.Payload.Log.init(self.allocator, .{.warn, "Unknown worker result"}),
+        .log = try core.Event.Payload.Log.init(self.allocator, .{.warn, log_msg}),
     };
 }
 

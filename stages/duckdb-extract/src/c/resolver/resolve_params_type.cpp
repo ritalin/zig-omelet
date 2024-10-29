@@ -107,11 +107,19 @@ auto LogicalParameterVisitor::VisitReplace(duckdb::BoundParameterExpression &exp
             this->anon_types.push_back(pickEnumUserType(ret_type, type_name));
         }
     }
-    else {
-        if (isArrayUserType(ret_type) || isStructUserType(ret_type)) {
-            this->channel.warn(std::format("Unsupported placeholder type: {}", magic_enum::enum_name(ret_type.id())));
-        }
+    else if (isArrayUserType(ret_type)) {
+        this->channel.warn(std::format("[TODO] Notimplemented array/list placeholder type: {} (duckdb-wasm is not supported)", magic_enum::enum_name(ret_type.id())));
 
+        type_kind = UserTypeKind::Primitive;
+        type_name = "ANY";
+    }
+    else if (isStructUserType(ret_type)) {
+        this->channel.warn(std::format("Unsupported placeholder type: {} (duckdb-wasm is not supported)", magic_enum::enum_name(ret_type.id())));
+
+        type_kind = UserTypeKind::Primitive;
+        type_name = "ANY";
+    }
+    else {
         type_kind = UserTypeKind::Primitive;
         type_name = ret_type.ToString();
     }

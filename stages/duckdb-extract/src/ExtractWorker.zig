@@ -7,14 +7,16 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 path: [:0]const u8,
+name: core.Symbol,
 database: c.DatabaseRef,
-on_handle: *const fn (database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void,
+on_handle: *const fn (database: c.DatabaseRef, file_path: core.FilePath, query_name: core.Symbol, query: core.Symbol, socket: *zmq.ZSocket) void,
 
-pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory, database: c.DatabaseRef, file_path: core.Symbol) !*Self {
+pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory, database: c.DatabaseRef, source_path: core.Event.Payload.SourcePath) !*Self {
     const self = try allocator.create(Self);
     self.* = .{
         .allocator = allocator,
-        .path = try allocator.dupeZ(u8, file_path),
+        .path = try allocator.dupeZ(u8, source_path.path),
+        .name = try allocator.dupe(u8, source_path.name),
         .database = database,
         .on_handle = if (category == .source) SourceHandler.run else SchemaHandler.run,
     };
@@ -24,6 +26,7 @@ pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory, database
 
 pub fn deinit(self: *Self) void {
     self.allocator.free(self.path);
+    self.allocator.free(self.name);
     self.allocator.destroy(self);
 }
 
@@ -50,13 +53,13 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     const query = try file.readToEndAlloc(self.allocator, meta.size());
     defer self.allocator.free(query);
 
-    self.on_handle(self.database, self.path, query, socket);
+    self.on_handle(self.database, self.path, self.name, query, socket);
 }
 
 pub const SourceHandler = struct {
-    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void {
+    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query_name: core.Symbol, query: core.Symbol, socket: *zmq.ZSocket) void {
         var collector: c.CollectorRef = undefined;
-        _ = c.initSourceCollector(database, file_path.ptr, file_path.len, socket.socket_, &collector);
+        _ = c.initSourceCollector(database, file_path.ptr, file_path.len, query_name.ptr, query_name.len, socket.socket_, &collector);
         defer c.deinitSourceCollector(collector);
 
         _ = c.executeDescribe(collector, query.ptr, query.len);
@@ -64,9 +67,9 @@ pub const SourceHandler = struct {
 };
 
 pub const SchemaHandler = struct {
-    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query: core.Symbol, socket: *zmq.ZSocket) void {
+    pub fn run(database: c.DatabaseRef, file_path: core.FilePath, query_name: core.Symbol, query: core.Symbol, socket: *zmq.ZSocket) void {
         var collector: c.CollectorRef = undefined;
-        _ = c.initUserTypeCollector(database, file_path.ptr, file_path.len, socket.socket_, &collector);
+        _ = c.initUserTypeCollector(database, file_path.ptr, file_path.len, query_name.ptr, query_name.len, socket.socket_, &collector);
         defer c.deinitUserTypeCollector(collector);
 
         _ = c.describeUserType(collector, query.ptr, query.len);

@@ -131,11 +131,7 @@ fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(Lo
                 const p1 = try path.clone(self.allocator);
                 try lookup.put(p1.path, .{.path = p1, .item_count = 1});
 
-                const worker = try ExtractWorker.init(
-                    self.allocator, 
-                    path.category, self.database, path.path
-                );
-                try self.connection.pull_sink_socket.spawn(worker);
+                try self.spawnWorker(path);
             },
             .worker_response => |res| {
                 try self.logger.log(.trace, "Receive worker respnse", .{});
@@ -200,7 +196,7 @@ fn tryLoadSchema(self: *Self, schema_dir_set: []const core.FilePath) !bool {
 fn spawnWorker(self: *Self, path: core.Event.Payload.SourcePath) !void {
     const worker = try ExtractWorker.init(
         self.allocator, 
-        path.category, self.database, path.path
+        path.category, self.database, path
     );
     try self.connection.pull_sink_socket.spawn(worker);
 }
@@ -272,11 +268,19 @@ fn processWorkerResponse(self: *Self, from: Symbol, result_content: Symbol, look
 fn processExtractResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
     _ = from;
     const item_index = try reader.readUInt(u32);
+    const name_alt = try reader.readOptional(Symbol);
 
     const items = try reader.readSlice(allocator, core.StructView(core.Event.Payload.TopicBody.Item));
     defer allocator.free(items);
 
     var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), items);
+
+    if (name_alt) |name| {
+        var new_name = try allocator.dupe(u8, name);
+        defer allocator.free(new_name);
+        std.mem.swap(Symbol, &topic_body.header.name, &new_name);
+    }
+
     return .{
         .topic_body = topic_body.withNewIndex(item_index, entry.item_count),
     };
@@ -380,19 +384,26 @@ const WorkerTestContext = struct {
             const next_event = try self.stage.processWorkerResponse(from, event.worker_response.content, &self.lookup);
             try std.testing.expect(next_event == null);
             try std.testing.expectEqual(true, self.lookup.contains(path.path));
-            try std.testing.expectEqual(1, self.lookup.get(path.path).?.item_count);
+            try std.testing.expectEqual(expect_count, self.lookup.get(path.path).?.item_count);
             break:decode;
         }
     }
 
-    pub fn expectResult(self: *WorkerTestContext, path: core.Event.Payload.SourcePath, from: Symbol, event: core.Event, expect_topcs: []const Symbol) !void {
+    pub fn expectResult(
+        self: *WorkerTestContext, path: core.Event.Payload.SourcePath, from: Symbol, event: core.Event, 
+        expect_result: struct { name: Symbol, offset: usize, count: usize }, 
+        expect_topcs: []const Symbol) !void 
+    {
         validate: {
             try std.testing.expectEqual(event.tag(), .worker_response);
                 
             var decoder = core.CborStream.Reader.init(event.worker_response.content);
             try std.testing.expectEqualStrings(@tagName(.worker_result), try decoder.readString());
             try std.testing.expectEqualStrings(path.path, try decoder.readString());
-            try std.testing.expectEqual(0, try decoder.readUInt(usize));
+            try std.testing.expectEqual(expect_result.offset, try decoder.readUInt(usize));
+
+            const name_alt = try decoder.readOptional(Symbol);
+            try std.testing.expectEqual(expect_result.count > 1, name_alt != null);
 
             const topic_bodies = try decoder.readSlice(self.allocator, core.StructView(core.Event.Payload.TopicBody.Item));
             defer self.allocator.free(topic_bodies);
@@ -407,8 +418,9 @@ const WorkerTestContext = struct {
 
             try std.testing.expectEqual(true, self.lookup.contains(path.path));
             try std.testing.expectEqual(.topic_body, next_event.?.tag());
-            try std.testing.expectEqual(1, next_event.?.topic_body.header.item_count);
-            try std.testing.expectEqual(0, next_event.?.topic_body.index);
+            try std.testing.expectEqualStrings(expect_result.name, next_event.?.topic_body.header.name);
+            try std.testing.expectEqual(expect_result.count, next_event.?.topic_body.header.item_count);
+            try std.testing.expectEqual(expect_result.offset, next_event.?.topic_body.index);
             try std.testing.expectEqualStrings(path.path, next_event.?.topic_body.header.path);
             break:decode;
         }
@@ -520,10 +532,14 @@ test "worker workflow/single query (success flow)" {
         const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
         defer item.deinit();
 
-        try ctx.expectResult(path, item.from, item.event, &.{
-            c.topic_query, c.topic_placeholder, c.topic_placeholder_order, 
-            c.topic_select_list, c.topic_bound_user_type, c.topic_anon_user_type
-        });
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "test", .offset = 0, .count = 1 }, 
+            &.{
+                c.topic_query, c.topic_placeholder, c.topic_placeholder_order, 
+                c.topic_select_list, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
         break:receive;
     }
     receive: {
@@ -581,7 +597,78 @@ test "worker workflow/single query (unssuported query flow)" {
 }
 
 test "worker workflow/multiple query (success flow) " {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.source,
+        \\ select 1 as a;
+        \\ select 2 as b;
+        \\ select 3 as c;
+    );
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectProgress(path, item.from, item.event, 3);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "test_1", .offset = 0, .count = 3 }, 
+            &.{
+                c.topic_query, c.topic_placeholder, c.topic_placeholder_order, 
+                c.topic_select_list, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "test_2", .offset = 1, .count = 3 }, 
+            &.{
+                c.topic_query, c.topic_placeholder, c.topic_placeholder_order, 
+                c.topic_select_list, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "test_3", .offset = 2, .count = 3 }, 
+            &.{
+                c.topic_query, c.topic_placeholder, c.topic_placeholder_order, 
+                c.topic_select_list, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
 }
 
 test "worker workflow/multiple query (partially unssuported query flow)" {
@@ -724,9 +811,13 @@ test "worker workflow/single schema (success flow)" {
         const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
         defer item.deinit();
 
-        try ctx.expectResult(path, item.from, item.event, &.{
-            c.topic_user_type, c.topic_bound_user_type, c.topic_anon_user_type
-        });
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "test", .offset = 0, .count = 1 }, 
+            &.{
+                c.topic_user_type, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
         break:receive;
     }
     receive: {
@@ -784,6 +875,61 @@ test "worker workflow/single schema (unssuported flow)" {
 }
 
 test "worker workflow/multiple schema (success flow) " {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var ctx = try WorkerTestContext.init(&arena);
+    defer ctx.deinit();
+
+    const path = try ctx.pushTestQuery(.schema,
+        \\ create type Visibility as enum ('hide', 'visible');
+        \\ create type Status as enum ('failed', 'success');
+    );
+    defer path.deinit();
+
+    try ctx.stage.spawnWorker(path);
+
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectProgress(path, item.from, item.event, 2);
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "Visibility", .offset = 0, .count = 2 }, 
+            &.{
+                c.topic_user_type, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectResult(
+            path, item.from, item.event, 
+            .{ .name = "Status", .offset = 1, .count = 2 }, 
+            &.{
+                c.topic_user_type, c.topic_bound_user_type, c.topic_anon_user_type
+            }
+        );
+        break:receive;
+    }
+    receive: {
+        const item = try ctx.stage.connection.dispatcher.dispatch() orelse @panic("Need to receive event");
+        defer item.deinit();
+
+        try ctx.expectFinished(path, item.from, item.event);
+        break:receive;
+    }
 }
 
 test "worker workflow/multiple schema (partially unssuported flow)" {

@@ -12,7 +12,7 @@ enum class LogLevel {
 
 auto encodeStatementCount(const size_t count) -> std::vector<char>;
 auto encodeStatementOffset(size_t offset) -> std::vector<char>;
-auto encodeTopicBody(const size_t offset , const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char>;
+auto encodeTopicBody(const size_t offset , std::optional<std::string> name_alt, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char>;
 auto encodeWorkerLog(LogLevel log_level, const std::string& id, const size_t offset, const std::string message) -> std::vector<char>;
 
 }

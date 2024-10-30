@@ -23,11 +23,19 @@ auto encodeStatementOffset(size_t offset) -> std::vector<char> {
     return payload_encoder.rawBuffer();
 }
 
-auto encodeTopicBody(const size_t offset, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char> {
+auto encodeTopicBody(const size_t offset, std::optional<std::string> name_alt, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char> {
     CborEncoder payload_encoder;
 
     stmt_offset: {
         payload_encoder.addUInt(offset);
+    }
+    stmt_name_alt: {
+        if (name_alt) {
+            payload_encoder.addString(name_alt.value());
+        }
+        else {
+            payload_encoder.addNull();
+        }
     }
     topic_body: {
         payload_encoder.addArrayHeader(topic_bodies.size());

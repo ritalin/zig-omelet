@@ -43,11 +43,11 @@ void deinitDatabase(DatabaseRef handle);
 WorkerResultCode loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len);
 WorkerResultCode retainUserTypeName(DatabaseRef handle);
 
-int32_t initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle);
+int32_t initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle);
 void deinitSourceCollector(CollectorRef handle);
 WorkerResultCode executeDescribe(CollectorRef handle, const char *query, size_t query_len);
 
-int32_t initUserTypeCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle);
+int32_t initUserTypeCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle);
 void deinitUserTypeCollector(CollectorRef handle);
 WorkerResultCode describeUserType(CollectorRef handle, const char *query, size_t query_len);
 

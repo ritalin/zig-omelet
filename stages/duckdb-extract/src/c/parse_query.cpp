@@ -32,14 +32,17 @@ class DescribeWorker {
 public:
     duckdb::Connection conn;
 public:
-    DescribeWorker(worker::Database *db, std::string&& id, std::optional<void *>&& socket) 
-        : conn(std::move(db->connect())), id(id), socket(socket) {}
+    DescribeWorker(worker::Database *db, std::string&& id, std::string&& name, std::optional<void *>&& socket) 
+        : conn(std::move(db->connect())), id(id), name(name), socket(socket) 
+    {
+    }
 public:
     auto execute(std::string query) -> WorkerResultCode;
-public:
     auto messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel;
+    auto rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
 private:
     std::string id;
+    std::string name;
     std::optional<void *> socket;
 };
 
@@ -193,6 +196,11 @@ auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, const s
     return ZmqChannel(this->socket, offset, this->id, from);
 }
 
+auto DescribeWorker::rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string> {
+    return stmt_count > 1 ? std::make_optional(std::format("{}_{}", base_name, stmt_index+1)) : std::nullopt;
+}
+
+
 static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
     std::string message;
 
@@ -209,7 +217,7 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&&
 
         return std::move(stmts);
     }
-    catch (const duckdb::ParserException& ex) {
+    catch (const duckdb::Exception& ex) {
         message = ex.what();
     }
 
@@ -219,7 +227,7 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&&
     return {};
 }
 
-static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> void {
+static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& stmt_name, ZmqChannel&& channel) -> void {
     std::string message;
     try {
         auto walk_result = walkSQLStatement(stmt, channel.clone());
@@ -260,7 +268,7 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
         });
         channel.clone().sendWorkerResponse(
             ::worker_result, 
-            encodeTopicBody(stmt_offset, topic_bodies)
+            encodeTopicBody(stmt_offset, stmt_name, topic_bodies)
         );
 
         return;
@@ -278,11 +286,13 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
 auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
     auto stmts = parseQuery(this->conn, query, this->messageChannel(std::nullopt, "worker.phase.parse"));
 
-    const size_t stmt_offset = 0;
-
-    // for (auto& stmt: stmts) {
-    if (stmts.size() > 0) {
-        executeInternal(this->conn, stmt_offset, stmts[stmt_offset], this->messageChannel(stmt_offset, "worker.phase.extract"));
+    for (size_t stmt_offset = 0; auto& stmt: stmts) {
+        executeInternal(
+            this->conn, stmt_offset, stmt, 
+            this->rename(std::string(this->name), stmt_offset, stmts.size()),
+            this->messageChannel(stmt_offset, "worker.phase.extract")
+        );
+        ++stmt_offset;
     }
 
     this->messageChannel(std::nullopt, "worker.phase.done").sendWorkerResponse(::worker_finished, {});
@@ -291,9 +301,9 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
 }
 
 extern "C" {
-    auto initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, void *socket, CollectorRef *handle) -> int32_t {
+    auto initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
-        auto collector = new DescribeWorker(db, std::string(id, id_len), socket ? std::make_optional(socket) : std::nullopt);
+        auto collector = new DescribeWorker(db, std::string(id, id_len), std::string(name, name_len), socket ? std::make_optional(socket) : std::nullopt);
 
         *handle = reinterpret_cast<CollectorRef>(collector);
         return 0;

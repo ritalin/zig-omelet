@@ -65,7 +65,7 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
             if (self.cache.get(topic_body.header.path)) |group| {
                 if (group.isExpired(topic_body.header.hash)) return .expired;
 
-                const entry = try group.fetchEntry(topic_body.index, topic_body.header.item_count);
+                const entry = try group.fetchEntry(topic_body.index, topic_body.header);
                 return entry.update(topic_body.bodies);
             }
 
@@ -98,7 +98,7 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
                     }
 
                     try self.ready_queue.enqueue(
-                        try core.Event.Payload.TopicBody.init(a, group.source.values(), bodies)
+                        try core.Event.Payload.TopicBody.init(a, entry.header.values(), bodies)
                     );
 
                     return true;
@@ -230,15 +230,15 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
                 }
             }
 
-            pub fn fetchEntry(self: *EntryGroup, index: usize, max_count: usize) !*Entry {
-                std.debug.assert(index < max_count);
-                try self.ensureExpand(max_count);
+            pub fn fetchEntry(self: *EntryGroup, index: usize, source_path: core.Event.Payload.SourcePath) !*Entry {
+                std.debug.assert(index < source_path.item_count);
+                try self.ensureExpand(source_path.item_count);
 
                 if (self.entries.items[index]) |entry| {
                     return entry;
                 }
                 else {
-                    const entry = try Entry.init(self.allocator, &self.topics);
+                    const entry = try Entry.init(self.allocator, source_path, &self.topics);
                     self.entries.items[index] = entry;
                     return entry;
                 }
@@ -263,12 +263,14 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
         };
 
         const Entry = struct {
+            header: core.Event.Payload.SourcePath,
             left_topics: std.BufSet,
             contents: std.BufMap,
 
-            pub fn init(allocator: std.mem.Allocator, topics: *std.BufSet) !*Entry {
+            pub fn init(allocator: std.mem.Allocator, source_path: core.Event.Payload.SourcePath, topics: *std.BufSet) !*Entry {
                 const self = try allocator.create(Entry);
                 self.* =  .{
+                    .header = try source_path.clone(allocator),
                     .left_topics = try topics.cloneWithAllocator(allocator),
                     .contents = std.BufMap.init(allocator),
                 };
@@ -279,6 +281,7 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
             pub fn deinit(self: *Entry, allocator: std.mem.Allocator) void {
                 self.contents.deinit();
                 self.left_topics.deinit();
+                self.header.deinit();
                 allocator.destroy(self);
             }
 

@@ -161,7 +161,7 @@ fn sendFile(self: *Self, category: core.TopicCategory, base_dir: std.fs.Dir, fil
     // Send path, content, hash
     try self.connection.dispatcher.post(.{
         .source_path = try core.Event.Payload.SourcePath.init(
-            self.allocator, .{category, name, file_path_abs, hash, 1}
+            self.allocator, .{category, std.fs.path.stem(name), file_path_abs, hash, 1}
         ),
     });
 }

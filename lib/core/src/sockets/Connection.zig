@@ -28,7 +28,6 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
 
         pub fn init(allocator: std.mem.Allocator, context: *zmq.ZContext) !*Self {
             var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Dealer, context);
-            // var request_socket = try zmq.ZSocket.init(zmq.ZSocketType.Req, context);
             request_socket_opt: {
                 const opt:zmq.ZSocketOption = .{.RoutingId = @constCast(stage_name)}; 
                 try request_socket.setSocketOption(opt);
@@ -185,13 +184,14 @@ pub fn Client(comptime stage_name: types.Symbol, comptime WorkerType: type) type
     };
 }
 
-pub fn Server(comptime stage_name: types.Symbol) type {
+pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
     const Trace = Logger.TraceDirect(stage_name);
 
     return struct {
         allocator: std.mem.Allocator,
         send_socket: *zmq.ZSocket,
         reply_socket: *zmq.ZSocket,
+        pull_sink_socket: *PullSinkSocket.Worker(WorkerType),
         dispatcher: *EventDispatcher(stage_name),
 
         const Self = @This();
@@ -200,8 +200,10 @@ pub fn Server(comptime stage_name: types.Symbol) type {
             const send_socket = try zmq.ZSocket.init(zmq.ZSocketType.Pub, context);
             errdefer send_socket.deinit();
             const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Router, context);
-            // const reply_socket = try zmq.ZSocket.init(zmq.ZSocketType.Rep, context);
             errdefer reply_socket.deinit();
+
+            const pull_sink_socket = try PullSinkSocket.Worker(WorkerType).init(allocator, context);
+            errdefer pull_sink_socket.deinit();
 
             const self = try allocator.create(Self);
             errdefer self.deinit();
@@ -210,7 +212,12 @@ pub fn Server(comptime stage_name: types.Symbol) type {
                 .allocator = allocator,
                 .send_socket = send_socket,
                 .reply_socket = reply_socket,
-                .dispatcher = try EventDispatcher(stage_name).init(allocator, send_socket, &.{reply_socket}, onDispatch),
+                .pull_sink_socket = pull_sink_socket,
+                .dispatcher = try EventDispatcher(stage_name).init(
+                    allocator, send_socket, 
+                    &.{reply_socket, pull_sink_socket.socket}, 
+                    onDispatch
+                ),
             };
 
             return self;
@@ -219,6 +226,7 @@ pub fn Server(comptime stage_name: types.Symbol) type {
         pub fn deinit(self: *Self) void {
             self.reply_socket.deinit();
             self.send_socket.deinit();
+            self.pull_sink_socket.deinit();
             self.dispatcher.deinit();     
             self.allocator.destroy(self);
         }
@@ -226,6 +234,7 @@ pub fn Server(comptime stage_name: types.Symbol) type {
         pub fn bind(self: *Self, endpoints: types.Endpoints) !void {
             try self.send_socket.bind(endpoints.pub_sub);
             try self.reply_socket.bind(endpoints.req_rep);
+            try self.pull_sink_socket.connect();
         }
 
         fn onDispatch(dispatcher: *EventDispatcher(stage_name)) !?EventDispatcher(stage_name).Entry {

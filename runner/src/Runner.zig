@@ -6,6 +6,7 @@ const app_context = @import("build_options").app_context;
 const Setting = @import("./settings/Setting.zig");
 const StageCount = @import("./configs/Config.zig").StageCount;
 const PayloadCacheManager = @import("./cache_manager.zig").PayloadCacheManager(app_context);
+const CommandPallet = @import("./CommandPallet.zig");
 
 const Symbol = core.Symbol;
 const systemLog = core.Logger.SystemDirect(app_context);
@@ -16,13 +17,13 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 context: zmq.ZContext,
-connection: *core.sockets.Connection.Server(app_context),
+connection: *core.sockets.Connection.Server(app_context, CommandPallet),
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     var ctx = try zmq.ZContext.init(allocator);
     errdefer ctx.deinit();
 
-    var connection = try core.sockets.Connection.Server(app_context).init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Server(app_context, CommandPallet).init(allocator, &ctx);
     errdefer connection.deinit();
     try connection.bind(setting.general.runner_endpoints);
 
@@ -49,13 +50,15 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     }
 
     // const oneshot = (!setting.watch);
-    const oneshot = true;
+    const oneshot = false;
     var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
     var left_topic_stage = stage_count.stage_extract;
     var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
 
     var source_cache = try PayloadCacheManager.init(self.allocator);
     defer source_cache.deinit();
+
+    try self.spawnCommandPallet();
 
     try self.connection.dispatcher.state.ready();
     
@@ -201,6 +204,11 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 .pending_fatal_quit => {
                     try self.connection.dispatcher.post(.quit_all);
                 },
+                .worker_response => |payload| {
+                    if (try self.handleWorkerResponse(payload)) |next_event| {
+                        try self.connection.dispatcher.post(next_event);
+                    }
+                },
                 .quit_accept => {
                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
 
@@ -268,6 +276,44 @@ fn handleTopicBody(self: Self, topic_body: core.Event.Payload.TopicBody, source_
 fn handleSkipTopicBody(self: Self, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
     _ = self;
     try source_cache.dismiss(topic_body.header, topic_body.index);
+}
+
+fn spawnCommandPallet(self: Self) !void {
+    const worker = try CommandPallet.init(self.allocator);
+    try self.connection.pull_sink_socket.spawn(worker);
+}
+
+fn handleWorkerResponse(self: Self, res: core.Event.Payload.WorkerResponse) !?core.Event {
+    var reader = core.CborStream.Reader.init(res.content);
+
+    switch (try reader.readEnum(CommandPallet.Status)) {
+        .invalid => {
+            const message = try reader.readString();
+            std.debug.print("{s}\n", .{message});
+            try self.spawnCommandPallet();
+            return null;
+        },
+        .accept => {
+            return try self.handleCommand(try reader.readEnum(CommandPallet.Command));
+        }
+}
+}
+
+fn handleCommand(self: Self, command: CommandPallet.Command) !?core.Event {
+    switch (command) {
+        .help => {
+            try CommandPallet.showCommandhelp();
+            try self.spawnCommandPallet();
+            return null;
+        },
+        .quit => {
+            return .quit_all;
+        },
+        .run => {
+            try self.spawnCommandPallet();
+            return .ready_watch_path;
+        }
+    }
 }
 
 const RunnerTestContext = struct {

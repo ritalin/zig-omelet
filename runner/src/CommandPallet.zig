@@ -44,19 +44,33 @@ pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
     switch (tk.tag) {
         .identifier => {
             const s = input[tk.loc.start..tk.loc.end];
-            const cmd = std.meta.stringToEnum(Command, s);
 
-            if (cmd == null) {
-                try invalidCommand(self.allocator, socket, s);
+            if (evaluateCommand(s)) |cmd| {
+                try invokeCommand(self.allocator, socket, cmd, &tokens);
             }
             else {
-                try invokeCommand(self.allocator, socket, cmd.?, &tokens);
+                try invalidCommand(self.allocator, socket, s);
             }
         },
         else => {
             try invalidCommand(self.allocator, socket, input);
         }
     }
+}
+
+fn evaluateCommand(s: Symbol) ?Command {
+    const cmd = std.meta.stringToEnum(Command, s);
+    if (cmd != null) {
+        return cmd.?;
+    }
+
+    inline for (std.meta.fields(Command)) |f| {
+        if (std.mem.startsWith(u8, f.name, s)) {
+            return @enumFromInt(f.value);
+        }
+    }
+    
+    return null;
 }
 
 fn invokeCommand(allocator: std.mem.Allocator, socket: *zmq.ZSocket, command: Command, next_tokens: *std.zig.Tokenizer) !void {
@@ -115,7 +129,7 @@ pub const Status = enum(u8) {
 const CommandHelp = std.StaticStringMap(Symbol).initComptime(.{
     .{ @tagName(.help), "Show help text." },
     .{ @tagName(.quit), "Exit this program." },
-    .{ @tagName(.run), "Run invoked subcommand again." },
+    // .{ @tagName(.run), "Run invoked subcommand again." },
 });
 
 pub fn showCommandhelp(allocator: std.mem.Allocator) !void {

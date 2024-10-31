@@ -59,6 +59,12 @@ pub const CommandSetting = union(help.CommandArgId) {
             .generate => Generate.strategy,
         };
     }
+
+    pub fn watching(self: CommandSetting) bool {
+        return switch (self) {
+            .generate => |setting| return setting.watch,
+        };
+    }
 };
 
 pub fn findTag(diag: ?*clap.Diagnostic) !help.CommandArgId {

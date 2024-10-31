@@ -49,8 +49,6 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
         break :dump_setting;
     }
 
-    // const oneshot = (!setting.watch);
-    const oneshot = false;
     var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
     var left_topic_stage = stage_count.stage_extract;
     var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
@@ -58,7 +56,10 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
     var source_cache = try PayloadCacheManager.init(self.allocator);
     defer source_cache.deinit();
 
-    try self.spawnCommandPallet();
+    const watch_mode = setting.command.watching();
+    if (watch_mode) {
+        try self.spawnCommandPallet();
+    }
 
     try self.connection.dispatcher.state.ready();
     
@@ -121,7 +122,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                 },
                 .finish_watch_path => {
                     traceLog.debug("Watching stage finished", .{});
-                    if (oneshot) {
+                    if (!watch_mode) {
                         // request quit for Watch stage
                         traceLog.debug("Request quit for Watching stage", .{});
                         try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
@@ -160,7 +161,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .finish_topic_body => {
-                    if (oneshot) {
+                    if (!watch_mode) {
                         // request quit for Extract stage
                         try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
                     }
@@ -193,7 +194,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     }
                 },
                 .finish_generate => {
-                    if (oneshot) {
+                    if (!watch_mode) {
                         // request quit for Generate stage
                         try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
                     }

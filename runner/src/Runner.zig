@@ -302,7 +302,7 @@ fn handleWorkerResponse(self: Self, res: core.Event.Payload.WorkerResponse) !?co
 fn handleCommand(self: Self, command: CommandPallet.Command) !?core.Event {
     switch (command) {
         .help => {
-            try CommandPallet.showCommandhelp();
+            try CommandPallet.showCommandhelp(self.allocator);
             try self.spawnCommandPallet();
             return null;
         },

@@ -113,15 +113,43 @@ pub const Status = enum(u8) {
 };
 
 const CommandHelp = std.StaticStringMap(Symbol).initComptime(.{
-    .{ @tagName(.help), "Show help text" },
-    .{ @tagName(.quit), "Exit this program" },
-    .{ @tagName(.quit), "Run that invoked subcommand" },
+    .{ @tagName(.help), "Show help text." },
+    .{ @tagName(.quit), "Exit this program." },
+    .{ @tagName(.run), "Run invoked subcommand again." },
 });
 
-pub fn showCommandhelp() !void {
+pub fn showCommandhelp(allocator: std.mem.Allocator) !void {
+    var command_width: usize = 0;    
+
     for (0..CommandHelp.kvs.len) |i| {
-        std.debug.print("{s} {s}\n", .{CommandHelp.kvs.keys[i], CommandHelp.kvs.values[i]});
+        var writer = std.io.countingWriter(std.io.null_writer);
+        const w = try writer.write(CommandHelp.kvs.keys[i]);
+        command_width = @max(w + 4, command_width);
     }
 
-    std.debug.print("\n", .{});
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    var writer = buffer.writer();
+
+    const commands = try allocator.dupe(core.Symbol, CommandHelp.keys());
+    defer allocator.free(commands);
+
+    std.mem.sort(
+        core.Symbol, commands, .{}, 
+        struct {
+            fn lessThan(_: @TypeOf(.{}), lhs: Symbol, rhs: Symbol) bool {
+                return std.mem.order(u8, lhs, rhs) == .lt;
+            }
+        }.lessThan
+    );
+
+    for (commands) |command| {
+        _ = try writer.writeAll(command);
+        _ = try writer.writeByteNTimes(' ', command_width - command.len);
+        _ = try writer.writeAll(CommandHelp.get(command).?);
+        _ = try writer.writeByte('\n');
+    }
+
+    std.debug.print("\n{s}\n", .{buffer.items});
 }

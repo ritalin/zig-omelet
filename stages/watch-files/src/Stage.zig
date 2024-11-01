@@ -11,16 +11,20 @@ const Connection = core.sockets.Connection.Client(app_context, void);
 const Logger = core.Logger.withAppContext(app_context);
 
 allocator: std.mem.Allocator,
-context: zmq.ZContext,
+context: *zmq.ZContext,
 connection: *Connection,
 logger: Logger,
 
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
-    var ctx = try zmq.ZContext.init(allocator);
+    const ctx = try allocator.create(zmq.ZContext);
+    ctx.* = try zmq.ZContext.init(allocator);
+    errdefer allocator.destroy(ctx);
+    errdefer ctx.deinit();
 
-    var connection = try Connection.init(allocator, &ctx);
+    var connection = try Connection.init(allocator, ctx);
+    errdefer connection.deinit();
 
     // try connection.subscribe_socket.socket.setSocketOption(.{.Subscribe=""});
 
@@ -42,6 +46,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
 pub fn deinit(self: *Self) void {
     self.connection.deinit();
     self.context.deinit();
+    self.allocator.destroy(self.context);
 }
 
 pub fn run(self: *Self, setting: Setting) !void {

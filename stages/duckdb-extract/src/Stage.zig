@@ -23,6 +23,8 @@ database: c.DatabaseRef,
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const ctx = try allocator.create(zmq.ZContext);
     ctx.* = try zmq.ZContext.init(allocator);
+    errdefer allocator.destroy(ctx);
+    errdefer ctx.deinit();
 
     var connection = try Connection.init(allocator, ctx);
     try connection.subscribe_socket.addFilters(.{
@@ -32,10 +34,12 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
         .quit_all = true,
         .quit = true,
     });
+    errdefer connection.deinit();
     try connection.connect(setting.endpoints);
 
     const logger = Logger.init(allocator, connection.dispatcher, setting.standalone);
-    
+    errdefer logger.deinit();
+
     var database: c.DatabaseRef = undefined;
     _ = c.initDatabase(&database);
 

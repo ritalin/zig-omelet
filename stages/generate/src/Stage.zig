@@ -22,8 +22,11 @@ logger: Logger,
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
     const context = try allocator.create(zmq.ZContext);
     context.* = try zmq.ZContext.init(allocator);
+    errdefer allocator.destroy(context);
+    errdefer context.deinit();
 
     var connection = try Connection.init(allocator, context);
+    errdefer connection.deinit();
     try connection.subscribe_socket.addFilters(.{
         .ready_topic_body = true,
         .topic_body = true,

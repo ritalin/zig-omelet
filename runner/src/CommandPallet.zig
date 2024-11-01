@@ -129,7 +129,7 @@ pub const Status = enum(u8) {
 const CommandHelp = std.StaticStringMap(Symbol).initComptime(.{
     .{ @tagName(.help), "Show help text." },
     .{ @tagName(.quit), "Exit this program." },
-    // .{ @tagName(.run), "Run invoked subcommand again." },
+    .{ @tagName(.run), "Run invoked subcommand again." },
 });
 
 pub fn showCommandhelp(allocator: std.mem.Allocator) !void {

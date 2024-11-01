@@ -16,14 +16,16 @@ const log = core.Logger.Stage.log;
 const Self = @This();
 
 allocator: std.mem.Allocator,
-context: zmq.ZContext,
+context: *zmq.ZContext,
 connection: *core.sockets.Connection.Server(app_context, CommandPallet),
 
 pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
-    var ctx = try zmq.ZContext.init(allocator);
+    const ctx = try allocator.create(zmq.ZContext);
+    ctx.* = try zmq.ZContext.init(allocator);
+    errdefer allocator.destroy(ctx);
     errdefer ctx.deinit();
 
-    var connection = try core.sockets.Connection.Server(app_context, CommandPallet).init(allocator, &ctx);
+    var connection = try core.sockets.Connection.Server(app_context, CommandPallet).init(allocator, ctx);
     errdefer connection.deinit();
     try connection.bind(setting.general.runner_endpoints);
 
@@ -37,6 +39,7 @@ pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
 pub fn deinit(self: *Self) void {
     self.connection.deinit();
     self.context.deinit();
+    self.allocator.destroy(self.context);
 }
 
 pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
@@ -206,7 +209,8 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     try self.connection.dispatcher.post(.quit_all);
                 },
                 .worker_response => |payload| {
-                    if (try self.handleWorkerResponse(payload)) |next_event| {
+                    const x: ?core.Event = try self.handleWorkerResponse(payload);
+                    if (x) |next_event| {
                         try self.connection.dispatcher.post(next_event);
                     }
                 },
@@ -279,12 +283,12 @@ fn handleSkipTopicBody(self: Self, topic_body: core.Event.Payload.SkipTopicBody,
     try source_cache.dismiss(topic_body.header, topic_body.index);
 }
 
-fn spawnCommandPallet(self: Self) !void {
+fn spawnCommandPallet(self: *Self) !void {
     const worker = try CommandPallet.init(self.allocator);
     try self.connection.pull_sink_socket.spawn(worker);
 }
 
-fn handleWorkerResponse(self: Self, res: core.Event.Payload.WorkerResponse) !?core.Event {
+fn handleWorkerResponse(self: *Self, res: core.Event.Payload.WorkerResponse) !?core.Event {
     var reader = core.CborStream.Reader.init(res.content);
 
     switch (try reader.readEnum(CommandPallet.Status)) {
@@ -297,10 +301,10 @@ fn handleWorkerResponse(self: Self, res: core.Event.Payload.WorkerResponse) !?co
         .accept => {
             return try self.handleCommand(try reader.readEnum(CommandPallet.Command));
         }
-}
+    }
 }
 
-fn handleCommand(self: Self, command: CommandPallet.Command) !?core.Event {
+fn handleCommand(self: *Self, command: CommandPallet.Command) !?core.Event {
     switch (command) {
         .help => {
             try CommandPallet.showCommandhelp(self.allocator);

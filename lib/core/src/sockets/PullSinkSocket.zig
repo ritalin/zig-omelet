@@ -50,6 +50,7 @@ pub fn Worker(comptime WorkerType: type) type {
                 self.pool.deinit();
                 try self.pool.init(.{.allocator = self.allocator});
             }
+            errdefer worker.deinit();
 
             try self.pool.spawn(runWorker, .{self, worker, self.endpoint});
         }

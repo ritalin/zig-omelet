@@ -2,6 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const DescriptionItem = core.settings.DescriptionItem;
 const log = core.Logger.SystemDirect(@import("build_options").app_context);
 const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 
@@ -54,14 +55,14 @@ pub fn help(writer: anytype) !void {
 }
 
 const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
-    .{@tagName(.request_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
-    .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
-    .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-    .{@tagName(.source_dir), .{.desc = "Source SQL directores or files", .value = "PATH"}},
-    .{@tagName(.schema_dir), .{.desc = "Schema SQL directores or files", .value = "PATH"}},
-    .{@tagName(.include_filter), .{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
-    .{@tagName(.exclude_filter), .{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
-    .{@tagName(.watch), .{.desc = "Enter to watch-mode", .value = ""}},
+    .{@tagName(.request_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
+    .{@tagName(.subscribe_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
+    .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
+    .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL directores or files", .value = "PATH"}},
+    .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL directores or files", .value = "PATH"}},
+    .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.watch), DescriptionItem{.desc = "Enter to watch-mode", .value = ""}},
 });
 
 const ArgId = enum {

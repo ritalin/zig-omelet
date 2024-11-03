@@ -182,7 +182,7 @@ pub fn PathMatcher(comptime TChar: type) type {
             pub fn build(self: *PatriciaAhoCorasick) !void {
                 const allocator = self.arena.allocator();
 
-                const Q = std.TailQueue(*PatriciaNode);
+                const Q = std.DoublyLinkedList(*PatriciaNode);
                 var q = Q{};
 
                 self.root.fail = null;

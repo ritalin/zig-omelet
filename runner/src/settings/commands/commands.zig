@@ -26,7 +26,7 @@ pub const CommandSetting = union(help.CommandArgId) {
         var defaults_file = try core.configs.resolveFileCandidate(arena.allocator(), @tagName(id), path_candidates);
         defer if (defaults_file) |*file| file.close();
 
-        const Iterator = @typeInfo(@TypeOf(parser.iter)).Pointer.child;
+        const Iterator = @typeInfo(@TypeOf(parser.iter)).pointer.child;
         
         switch (id) {
             .generate => {

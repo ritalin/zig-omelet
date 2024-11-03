@@ -62,7 +62,7 @@ pub const Stage = struct {
         }
     }
 
-    fn Scoped(comptime scope: @Type(.EnumLiteral)) type {
+    fn Scoped(comptime scope: @Type(.enum_literal)) type {
         return struct {
             pub fn log(level: std.log.Level, stage_name: types.Symbol, message: []const u8) void {
                 switch (level) {
@@ -77,7 +77,7 @@ pub const Stage = struct {
 };
 
 fn ArgsWithStageName(type_info: std.builtin.Type) type {
-    const info = type_info.Struct;
+    const info = type_info.@"struct";
 
     comptime var item_types: [info.fields.len+1]type = undefined;
 
@@ -102,7 +102,7 @@ fn directLogArgs(stage_name: types.Symbol, args: anytype) ArgsWithStageName(@typ
     return result;
 }
 
-fn Direct(comptime stage_name: types.Symbol, comptime scope: @Type(.EnumLiteral)) type {
+fn Direct(comptime stage_name: types.Symbol, comptime scope: @Type(.enum_literal)) type {
     const S = std.log.scoped(scope);
 
     return struct {

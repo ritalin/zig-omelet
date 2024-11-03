@@ -107,7 +107,7 @@ pub const Builder = struct {
     }
 
     fn makeIPCChannel(allocator: std.mem.Allocator) ![]const u8 {
-        var seed = std.rand.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+        var seed = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
         var rand = seed.random();
 
         var buf: [24]u8 = undefined;

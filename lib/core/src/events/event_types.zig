@@ -96,7 +96,7 @@ const ExceptStructView = std.StaticStringMap(void).initComptime(.{
 });
 
 pub fn StructView(comptime T: type) type {
-    comptime std.debug.assert(@typeInfo(T) == .Struct);
+    comptime std.debug.assert(@typeInfo(T) == .@"struct");
 
     const fields = std.meta.fields(T);
     comptime var i: usize = 0;

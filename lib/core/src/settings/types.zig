@@ -11,7 +11,13 @@ pub const ArgHelpOption = struct {
     category_name: ?[]const u8,
 };
 
-pub const DescriptionMap = std.StaticStringMap(struct { desc: []const u8, value: []const u8, required: bool = false });
+pub const DescriptionItem = struct {
+    desc: []const u8, 
+    value: []const u8, 
+    required: bool = false,
+};
+
+pub const DescriptionMap = std.StaticStringMap(DescriptionItem);
 
 pub fn ArgHelp(comptime Id: type, comptime _description: DescriptionMap) type {
     return struct {    

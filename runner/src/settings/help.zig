@@ -2,20 +2,22 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const DescriptionItem = core.settings.DescriptionItem;
+
 const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     // General
-    .{@tagName(.req_rep_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL",}},
-    .{@tagName(.pub_sub_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL",}},
-    .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-    .{@tagName(.help), .{.desc = "Print command-specific usage", .value = "",}},
+    .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL",}},
+    .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL",}},
+    .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
+    .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},
     // Commands
-    .{@tagName(.generate), .{.desc = "Generate query parameters/result-sets", .value = "",}},
+    .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
     // Command/Generate
-    .{@tagName(.source_dir), .{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
-    .{@tagName(.output_dir), .{.desc = "Output folder", .value = "PATH", .required = true}},  
-    .{@tagName(.schema_dir), .{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
-    .{@tagName(.include_filter), .{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
-    .{@tagName(.exclude_filter), .{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
+    .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
+    .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
+    .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
 });
 
 const GeneralSetting = @import("./commands/GeneralSetting.zig");

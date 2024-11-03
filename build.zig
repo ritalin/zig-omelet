@@ -108,9 +108,9 @@ pub fn build(b: *std.Build) !void {
 
 fn addTestAll(b: *std.Build) void {
     const run_step = b.step("test", "Run all unit tests");
-    var deps_iter = b.initialized_deps.valueIterator();
+    var deps_iter = b.graph.dependency_cache.valueIterator();
 
-    while(deps_iter.next()) |dep| {
+    while (deps_iter.next()) |dep| {
         var tls_iter = dep.*.builder.top_level_steps.iterator();
         while (tls_iter.next()) |entry| {
             const tls = entry.value_ptr.*;

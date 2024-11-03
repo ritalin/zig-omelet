@@ -3,14 +3,14 @@ const std = @import("std");
 pub fn Queue(comptime Entry: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        queue: std.TailQueue(Entry),
+        queue: std.DoublyLinkedList(Entry),
 
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
-                .queue = std.TailQueue(Entry){},
+                .queue = std.DoublyLinkedList(Entry){},
             };
         }
 
@@ -22,7 +22,7 @@ pub fn Queue(comptime Entry: type) type {
         }
 
         pub fn enqueue(self: *Self, entry: Entry) !void {
-            const node = try self.allocator.create(std.TailQueue(Entry).Node);
+            const node = try self.allocator.create(std.DoublyLinkedList(Entry).Node);
 
             node.data = entry;
             self.queue.append(node);
@@ -42,7 +42,7 @@ pub fn Queue(comptime Entry: type) type {
         }
 
         pub fn prepend(self: *Self, entry: Entry) !void {
-            const node = try self.allocator.create(std.TailQueue(Entry).Node);
+            const node = try self.allocator.create(std.DoublyLinkedList(Entry).Node);
 
             node.data = entry;
             self.queue.prepend(node);

@@ -3,6 +3,7 @@ const clap = @import("clap");
 const core = @import("core");
 
 const log = core.Logger.SystemDirect(@import("build_options").app_context);
+const DescriptionItem = core.settings.DescriptionItem;
 
 const Setting = @This();
 
@@ -41,9 +42,9 @@ pub fn help(writer: anytype) !void {
 }
 
 const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
-    .{@tagName(.request_channel), .{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
-    .{@tagName(.subscribe_channel), .{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
-    .{@tagName(.log_level), .{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
+    .{@tagName(.request_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
+    .{@tagName(.subscribe_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
+    .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
 });
 
 const ArgId = enum {

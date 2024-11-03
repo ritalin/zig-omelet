@@ -51,7 +51,7 @@ pub fn loadFromArgs(allocator: std.mem.Allocator) !core.settings.LoadResult(Sett
         }
     ;
     
-    const setting = .{
+    const setting: Setting = .{
         .arena = arena,
         .general = general_setting,
         .command = command_setting,

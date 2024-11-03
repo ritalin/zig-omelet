@@ -82,11 +82,11 @@ pub const Writer = struct {
     }
 
     pub fn writeEnum(self: *Self, comptime T: type, value: T) !usize {
-        comptime std.debug.assert(@typeInfo(T) == .Enum);
+        comptime std.debug.assert(@typeInfo(T) == .@"enum");
 
-        const tag_type = @typeInfo(T).Enum.tag_type;
+        const tag_type = @typeInfo(T).@"enum".tag_type;
         
-        if (@typeInfo(tag_type).Int.signedness == .signed) {
+        if (@typeInfo(tag_type).int.signedness == .signed) {
             return self.writeInt(tag_type, @intFromEnum(value));
         }
         else {
@@ -136,9 +136,9 @@ pub const Writer = struct {
     }
 
     pub fn writeTuple(self: *Self, comptime T: type, values: T) !usize {
-        comptime std.debug.assert(@typeInfo(T).Struct.is_tuple);
+        comptime std.debug.assert(@typeInfo(T).@"struct".is_tuple);
         
-        const fields = @typeInfo(T).Struct.fields;
+        const fields = @typeInfo(T).@"struct".fields;
         var write_size = try self.writeLength(4, fields.len);
 
         inline for (fields) |field| {
@@ -150,7 +150,7 @@ pub const Writer = struct {
 
     fn writeContainerField(self: *Self, comptime T: type, value: T) !usize {
         switch (@typeInfo(T)) {
-            .Int => |t| {
+            .int => |t| {
                 if (t.signedness == .signed) {
                     return self.writeInt(T, value);
                 }
@@ -158,13 +158,13 @@ pub const Writer = struct {
                     return self.writeUInt(T, value);
                 }
             },
-            .Bool => {
+            .bool => {
                 return self.writeBool(value);
             },
-            .Enum => {
+            .@"enum" => {
                 return self.writeEnum(T, value);
             },
-            .Pointer => |t| {
+            .pointer => |t| {
                 std.debug.assert(t.size == .Slice);
 
                 if (t.child == u8) {
@@ -179,7 +179,7 @@ pub const Writer = struct {
                     return self.writeSlice(t.child, value);
                 }
             },
-            .Struct => |t| {
+            .@"struct" => |t| {
                 if (t.is_tuple) {
                     return self.writeTuple(T, value);
                 }
@@ -187,7 +187,7 @@ pub const Writer = struct {
                     unreachable;
                 }
             },
-            .Optional => |payload| {
+            .optional => |payload| {
                 if (value) |v| {
                     return try self.writeContainerField(payload.child, v);
                 }
@@ -242,7 +242,7 @@ pub const Reader = struct {
     }
 
     pub fn readUInt(self: *Self, comptime T: type) !T {
-        comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
+        comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
 
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
         std.debug.assert(result.type == c.CBOR_ITEM_INTEGER);
@@ -262,11 +262,11 @@ pub const Reader = struct {
     }
 
     pub fn readEnum(self: *Self, comptime T: type) !T {
-        comptime std.debug.assert(@typeInfo(T) == .Enum);
+        comptime std.debug.assert(@typeInfo(T) == .@"enum");
 
-        const tag_type = @typeInfo(T).Enum.tag_type;
+        const tag_type = @typeInfo(T).@"enum".tag_type;
 
-        if (@typeInfo(tag_type).Int.signedness == .signed) {
+        if (@typeInfo(tag_type).int.signedness == .signed) {
             return @enumFromInt(try self.readInt(tag_type));
         }
         else {
@@ -436,7 +436,7 @@ pub const Reader = struct {
     }
 
     fn readTupleInternal(self: *Self, comptime T: type, member_allocator: ?std.mem.Allocator) !T {
-        comptime std.debug.assert(@typeInfo(T).Struct.is_tuple);
+        comptime std.debug.assert(@typeInfo(T).@"struct".is_tuple);
 
         const prev_items = self.raw_reader.items;
         defer self.raw_reader.items = prev_items;
@@ -448,7 +448,7 @@ pub const Reader = struct {
     fn readTupleRecursive(self: *Self, comptime T: type, item: c.cbor_item_t, member_allocator: ?std.mem.Allocator) !T {
         self.offset += item.offset;
 
-        const fields = @typeInfo(T).Struct.fields;
+        const fields = @typeInfo(T).@"struct".fields;
         var value: T = undefined;
 
         inline for (fields) |field| {
@@ -582,10 +582,10 @@ pub const CborMember = struct {
 
     pub fn matchType(comptime T: type) CborMember {
         switch (@typeInfo(T)) {
-            .Int => return .{.type = .Int, .option = .{}},
-            .Bool => return .{.type = .Bool, .option = .{}},
-            .Enum => return .{.type = .Enum, .option = .{}},
-            .Pointer => |t| {
+            .int => return .{.type = .Int, .option = .{}},
+            .bool => return .{.type = .Bool, .option = .{}},
+            .@"enum" => return .{.type = .Enum, .option = .{}},
+            .pointer => |t| {
                 if (t.size == .Slice) {
                     if (t.child == u8) {
                         if (t.sentinel) |_| {
@@ -601,12 +601,12 @@ pub const CborMember = struct {
                 }
                 @compileError(std.fmt.comptimePrint("Unexpected pointer type: {s}\n", .{@typeName(T)}));
             },
-            .Struct => |t| {
+            .@"struct" => |t| {
                 if (t.is_tuple) {
                     return .{.type = .Tuple, .option = .{}};
                 }
             },
-            .Optional => |payload| {
+            .optional => |payload| {
                 const child = matchType(payload.child);
                 return .{.type = child.type, .option = .{.nullable = true}};
             },

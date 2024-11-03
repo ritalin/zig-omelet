@@ -702,55 +702,55 @@ pub const Parser = struct {
 };
 
 const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
-    // BIGINT 	INT8, LONG 	signed eight-byte integer
+    // BIGINT INT8, LONG signed eight-byte integer
     .{"BIGINT", "number"}, 
     .{"INT8", "number"}, 
     .{"LONG", "number"}, 
-    // BIT 	BITSTRING 	string of 1s and 0s
+    // BIT  BITSTRING  string of 1s and 0s
     .{"BIT", "string"}, 
     .{"BITSTRING", "string"}, 
-    // BLOB BYTEA, BINARY, VARBINARY 	variable-length binary data
+    // BLOB BYTEA, BINARY, VARBINARY variable-length binary data
     .{"BLOB", "string"}, 
     .{"BYTEA", "string"}, 
     .{"BINARY", "string"}, 
     .{"VARBINARY", "string"}, 
-    // BOOLEAN 	BOOL, LOGICAL 	logical boolean (true/false)
+    // BOOLEAN BOOL, LOGICAL logical boolean (true/false)
     .{"BOOLEAN", "boolean"}, 
     .{"BOOL", "boolean"}, 
     .{"LOGICAL", "boolean"}, 
     // DATE calendar date (year, month day)
     .{"DATE", "string"}, 
-    // DECIMAL(prec, scale), NUMERIC(prec, scale) 	fixed-precision number
+    // DECIMAL(prec, scale), NUMERIC(prec, scale) fixed-precision number
     .{"DECIMAL", "number"}, 
     .{"NUMERIC", "number"}, 
-    // DOUBLE 	FLOAT8, 	double precision floating-point number (8 bytes)
+    // DOUBLE FLOAT8, double precision floating-point number (8 bytes)
     .{"DOUBLE", "number"}, 
     .{"FLOAT8", "number"}, 
-    // HUGEINT 	  	signed sixteen-byte integer
+    // HUGEINT signed sixteen-byte integer
     .{"HUGEINT", "number"}, 
-    // INTEGER 	INT4, INT, SIGNED 	signed four-byte integer
+    // INTEGER INT4, INT, SIGNED signed four-byte integer
     .{"INTEGER", "number"}, 
     .{"INT4", "number"}, 
     .{"INT", "number"}, 
     .{"SIGNED", "number"}, 
     // INTERVAL date / time delta
     .{"INTERVAL", "string"}, 
-    // REAL FLOAT4, FLOAT 	single precision floating-point number (4 bytes)
+    // REAL FLOAT4, FLOAT single precision floating-point number (4 bytes)
     .{"REAL", "number"}, 
     .{"FLOAT4", "number"}, 
     .{"FLOAT", "number"}, 
-    // INT2, SHORT 	signed two-byte integer
+    // INT2, SHORT signed two-byte integer
     .{"SMALLINT", "number"}, 
     .{"SHORT", "number"}, 
     // TIME time of day (no time zone)
     .{"TIME", "string"}, 
-    // TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ 	combination of time and date
+    // TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ combination of time and date
     .{"TIMESTAMP WITH TIME ZONE", "string"}, 
     .{"TIMESTAMPZ", "string"}, 
-    // TIMESTAMP, DATETIME 	combination of time and date
+    // TIMESTAMP, DATETIME combination of time and date
     .{"TIMESTAMP", "string"}, 
     .{"DATETIME", "string"}, 
-    // TINYINT 	INT1 signed one-byte integer
+    // TINYINT INT1 signed one-byte integer
     .{"TINYINT", "number"}, 
     .{"INT1", "number"}, 
     // UBIGINT unsigned eight-byte integer
@@ -765,14 +765,14 @@ const TypeMappingRules = std.StaticStringMap(Symbol).initComptime(.{
     .{"UTINYINT", "number"}, 
     // UUID UUID data type
     .{"UUID", "string"}, 
-    // VARCHAR 	CHAR, BPCHAR, TEXT, STRING 	variable-length character string
+    // VARCHAR CHAR, BPCHAR, TEXT, STRING variable-length character string
     .{"VARCHAR", "string"}, 
     .{"CHAR", "string"}, 
     .{"BPCHAR", "string"}, 
     .{"TEXT", "string"}, 
     .{"STRING", "string"}, 
     // Other
-    .{"ANY", "any"},
+    .{"ANY", "any"}
 });
 
 test "parse query" {

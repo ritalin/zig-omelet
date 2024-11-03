@@ -133,7 +133,7 @@ pub fn PayloadCacheManager(comptime app_context: Symbol) type {
             entries: std.enums.EnumArray(core.TopicCategory, std.BufSet),
 
             pub fn init(allocator: std.mem.Allocator) TopicsMap {
-                var self = .{
+                var self: TopicsMap = .{
                     .entries = std.enums.EnumArray(core.TopicCategory, std.BufSet).initUndefined(),
                 };
 

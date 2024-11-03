@@ -20,9 +20,10 @@ pub fn build(b: *std.Build) !void {
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
 
-    std.debug.print("**** runner/zmq_prefix {s}\n", .{zmq_prefix});
+    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt/duckdb";
 
-    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt";
+    std.debug.print("**** runner/zmq_prefix {s}\n", .{zmq_prefix});
+    std.debug.print("**** runner/duckdb_prefix {s}\n", .{duckdb_prefix});
 
     const dep_core = b.dependency("lib_core", .{ .zmq_prefix = zmq_prefix });
 

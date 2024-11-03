@@ -342,7 +342,7 @@ const RunnerTestContext = struct {
         try core.makeIpcChannelRoot(setting.general.stage_endpoints);
         defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
-        var self = .{
+        var self: RunnerTestContext = .{
             .allocator = allocator,
             .runner = try Runner.init(allocator, setting),
             .cache_manager = try PayloadCacheManager.init(allocator),

@@ -1616,8 +1616,8 @@ test "generate positional parameter code with enum user type" {
         .{.field_name = "vis1", .type_kind = .user, .field_type = "Visibility"},
         .{.field_name = "vis2", .type_kind = .@"enum", .field_type = "Param::Enum#1"},
     };
-    const anon_user_types = &.{
-        .{  
+    const anon_user_types: []const UserTypeDef = &.{
+        .{
             .header = .{ .kind = .@"enum", .name = "Param::Enum#1" },
             .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
         },
@@ -1825,7 +1825,7 @@ test "generate select list#7 (with enum user type)" {
         .{.field_name = "vis1", .type_kind = .@"enum", .field_type = "SelList::Enum#1", .nullable = true},
         .{.field_name = "vis2", .type_kind = .user, .field_type = "Visibility", .nullable = false},
     };
-    const anon_user_types = &.{
+    const anon_user_types: []const UserTypeDef = &.{
         .{  
             .header = .{ .kind = .@"enum", .name = "SelList::Enum#1" },
             .fields = &.{ .{.field_name = "hide"}, .{.field_name = "visible"} },
@@ -1849,7 +1849,7 @@ test "generate select list#8 (primitive list)" {
         .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
         .{.field_name = "numbers", .type_kind = .array, .field_type = "SelList::Array#1", .nullable = true},
     };
-    const anon_user_types = &.{
+    const anon_user_types: []const UserTypeDef = &.{
         .{  
             .header = .{ .kind = .array, .name = "SelList::Array#1" },
             .fields = &.{ .{.field_name = "Anon::Primitive#2", .field_type = .{.header = .{.kind = .primitive, .name = "INTEGER"}, .fields = &.{} }} },
@@ -1872,7 +1872,7 @@ test "generate select list#8 (predefined enum list)" {
         .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
         .{.field_name = "vis2", .type_kind = .array, .field_type = "SelList::Array#1", .nullable = true},
     };
-    const anon_user_types = &.{
+    const anon_user_types: []const UserTypeDef = &.{
         .{  
             .header = .{ .kind = .array, .name = "SelList::Array#1" },
             .fields = &.{ .{.field_name = "Anon::User#2", .field_type = .{.header = .{.kind = .@"user", .name = "Visibility"}, .fields = &.{} }} },
@@ -1913,7 +1913,7 @@ test "generate select list#9 (anonymous struct)" {
         .{.field_name = "id", .type_kind = .primitive, .field_type = "INTEGER", .nullable = false},
         .{.field_name = "user", .type_kind = .user, .field_type = "SelList::Array#1", .nullable = true},
     };
-    const anon_user_types = &.{
+    const anon_user_types: []const UserTypeDef = &.{
         .{
             .header = .{.kind = .array, .name = "SelList::Array#1"},
             .fields = &.{ 
@@ -2084,7 +2084,7 @@ test "generate struct user type#2 (with anonymous struct type field)" {
             .{.field_name = "children", .field_type = .{.header = .{.kind = .array, .name = "Anon::Array#1"}, .fields = &.{}}},
         },
     };
-    const anon_user_types = &.{
+    const anon_user_types: []const UserTypeDef = &.{
         .{
             .header = .{.kind = .array, .name = "Anon::Array#1"},
             .fields = &.{ 

@@ -33,10 +33,10 @@ pub const Writer = struct {
     }
 
     pub fn writeInt(self: *Self, comptime T: type, value: T) !usize {
-        comptime std.debug.assert(@typeInfo(T).Int.signedness == .signed);
-        const info = @typeInfo(T).Int;
+        comptime std.debug.assert(@typeInfo(T).int.signedness == .signed);
+        const info = @typeInfo(T).int;
         const uint_type = @Type(.{
-            .Int = .{
+            .int = .{
                 .signedness = .unsigned,
                 .bits = info.bits,
             }
@@ -233,7 +233,7 @@ pub const Reader = struct {
     }
 
     pub fn readInt(self: *Self, comptime T: type) !T {
-        comptime std.debug.assert(@typeInfo(T).Int.signedness == .signed);
+        comptime std.debug.assert(@typeInfo(T).int.signedness == .signed);
 
         const result = try parseOne(&self.raw_reader, self.data[self.offset..]);
         std.debug.assert(result.type == c.CBOR_ITEM_INTEGER);
@@ -400,7 +400,7 @@ pub const Reader = struct {
                 inline .Int, .Bool, .Enum, .String, .CString, .Tuple => {
                     const item_ty = type_item: {
                         if (cbor_member.option.nullable) {
-                            break:type_item @typeInfo(T).Optional.child;
+                            break:type_item @typeInfo(T).optional.child;
                         }
                         else {
                             break:type_item T;
@@ -412,10 +412,10 @@ pub const Reader = struct {
                 inline .Slice => {
                     const item_ty = type_item: {
                         if (cbor_member.option.nullable) {
-                            break:type_item @typeInfo(child_info.Pointer.child).Optional.child;
+                            break:type_item @typeInfo(child_info.pointer.child).optional.child;
                         }
                         else {
-                            break:type_item child_info.Pointer.child;
+                            break:type_item child_info.pointer.child;
                         }   
                     };
                     
@@ -468,11 +468,11 @@ pub const Reader = struct {
                         if (member_allocator) |a| {
                             const slice_member_type = tuple_member: {
                                 if (cbor_member.option.nullable) {
-                                    const type_opt = @typeInfo(field.type).Optional;
-                                    break:tuple_member @typeInfo(type_opt.child).Pointer;
+                                    const type_opt = @typeInfo(field.type).optional;
+                                    break:tuple_member @typeInfo(type_opt.child).pointer;
                                 }
                                 else {
-                                    break:tuple_member @typeInfo(field.type).Pointer;
+                                    break:tuple_member @typeInfo(field.type).pointer;
                                 }
                             };
                             @field(value, field.name) = try self.readSliceRecursive(a, slice_member_type.child, child_item, member_allocator);
@@ -513,7 +513,7 @@ pub const Reader = struct {
         switch (cbor_member.type) {
             .Slice => { 
                 if (allocator) |a| {
-                    return try self.readSliceWithAllocator(a, @typeInfo(T).Pointer.child);
+                    return try self.readSliceWithAllocator(a, @typeInfo(T).pointer.child);
                 }
                 @panic("Optional slice needs `member_allocator`. Call `readOptionalWithAllocator`\n");  
             },          

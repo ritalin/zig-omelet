@@ -20,9 +20,6 @@ jobs:
 
     container:
       image: ktzalias/omelet-actions-container:latest
-      # options: |
-      #   --network host
-      # --privileged
       env:
         PKG_PREFIX: "/home/node"
         LD_LIBRARY_PATH: "/home/node/libsodium/lib:$LD_LIBRARY_PATH"
@@ -32,8 +29,6 @@ jobs:
         run: |
           apt-get update
           apt-get install -y git xz-utils
-
-          echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
       - name: Check git version
         run: |
           git --version
@@ -46,9 +41,11 @@ jobs:
       - name: Install zig latest
         uses: mlugg/setup-zig@v1
         with:
+          version: master
           use-cache: false
           
       - name: Run test
         run: |
           zig build test -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
-          # zig build -D"duckdb_prefix=/home/linuxbrew/duckdb/_install" -D"zmq_prefix=$BREW_HOME/zeromq" -D"catch2_prefix=/home/linuxbrew/catch2" --verbose
+      - name: Run build
+          zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb/_install" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose

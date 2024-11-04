@@ -281,7 +281,8 @@ const WatcherWrapper = struct {
         if (stat.kind == .directory) return;
 
         const event = try encodeWorkerResponse(context.allocator, context.category, context.root_dir, dir_path, basename);
-
+        defer event.deinit();
+        
         try core.sendEvent(context.allocator, context.socket, .{.kind = .post, .from = worker_context, .event = event});
     }
 

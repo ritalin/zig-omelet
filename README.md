@@ -20,7 +20,19 @@ This product has tested on MacOS Ventura 13.6.7.
 
 ## Build
 
+1. Clone the repository
+
 ```
+git clone --recursive https://github.com/ritalin/zig-omelet.git $YOUR_PROJECT
+```
+
+Note that `recursive` option is required because of containing submodule.
+
+
+2. Do build
+
+```
+cd $YOUR_PROJECT
 zig build
 ```
 

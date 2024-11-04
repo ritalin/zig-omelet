@@ -103,11 +103,8 @@ fn invalidCommand(allocator: std.mem.Allocator, socket: *zmq.ZSocket, command: S
     _ = try writer.writeEnum(Status, .invalid);
     _ = try writer.writeString(message);
 
-    const content = try writer.buffer.toOwnedSlice();
-    defer allocator.free(content);
-
     const event: core.Event = .{ 
-        .worker_response = try core.Event.Payload.WorkerResponse.init(allocator, .{ content })
+        .worker_response = try core.Event.Payload.WorkerResponse.init(allocator, .{ writer.buffer.items })
     };
     defer event.deinit();
 

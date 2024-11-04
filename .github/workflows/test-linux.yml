@@ -29,6 +29,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y git xz-utils
+          echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
       - name: Check git version
         run: |
           git --version

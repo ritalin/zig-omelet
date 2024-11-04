@@ -111,7 +111,7 @@ pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
                     systemLog.debug("Receive 'topic' ({})", .{left_topic_stage});
                     try source_cache.topics_map.dumpTopics(self.allocator);
 
-                    if (left_topic_stage <= 0) {
+                    if ((left_topic_stage <= 0) and (!watch_mode)) {
                         try self.connection.dispatcher.post(.ready_watch_path);
                     }
                 },

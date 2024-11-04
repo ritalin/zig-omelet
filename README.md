@@ -38,6 +38,8 @@ zig build
 
 ## Usage (Run using example query/schema)
 
+### Run as one-shot
+
 ```
 ./zig-out/bin/omelet generate \
     --source-dir=./_sql-examples
@@ -48,6 +50,19 @@ zig build
 ```
 
 Note that if the schema includes user-defined types, all of them must be specified before the table definitions.
+
+### Run with watch mode
+
+```
+./zig-out/bin/omelet generate \
+    --source-dir=./_sql-examples
+    --schema-dir=./_schema-examples/user_types
+    --schema-dir=./_schema-examples/tables
+    --exclude-filter=tables
+    --output-dir=./_dump/ts
+    --watch
+```
+
 
 ## Source/Schema file encoding
 

@@ -49,4 +49,5 @@ jobs:
         run: |
           zig build test -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
       - name: Run build
+        run: |
           zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb/_install" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose

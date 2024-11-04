@@ -46,6 +46,7 @@
         .zzmq = .{ .path = "../../vendor/zzmq" },
         .lib_core = .{ .path = "../../lib/core" },
         .clap = .{ .path = "../../vendor/zig-clap"},
+        .efsw = .{ .path = "../../vendor/zig-efsw" },
     },
 
     // Specifies the set of files and directories that are included in this package.

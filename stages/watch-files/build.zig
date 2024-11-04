@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
 
     const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
     const dep_clap = b.dependency("clap", .{});
+    const dep_efsw = b.dependency("efsw", .{});
     const dep_lib_core = b.dependency("lib_core", .{ .zmq_prefix = zmq_prefix});
 
     const app_context = "watch-files";
@@ -51,6 +52,7 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
+            exe.root_module.addImport("efsw", dep_efsw.module("efsw"));
             exe.root_module.addImport("core", dep_lib_core.module("core"));
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
@@ -119,6 +121,7 @@ pub fn build(b: *std.Build) void {
         import_modules: {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
+            exe_unit_tests.root_module.addImport("efsw", dep_efsw.module("efsw"));
             exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
             exe_unit_tests.root_module.addOptions("build_options", build_options);
             break:import_modules;

@@ -42,4 +42,5 @@ pub const ConfigCategory = enum {
 pub const SubcommandArgId = enum {
     generate,
     @"init-default",
+    @"init-config",
 };

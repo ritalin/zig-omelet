@@ -14,6 +14,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     // Commands
     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
     .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
+    .{@tagName(.@"init-config"), DescriptionItem{.desc = "Initialize subcommand configuration environment", .value = "",}},
     // Command/Generate
     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
@@ -49,6 +50,7 @@ pub const ArgHelpSetting = struct {
         cmd_general,
         cmd_generate,
         cmd_init_default,
+        cmd_init_config,
     };
 
     tags: []const Tag,
@@ -75,9 +77,9 @@ pub const ArgHelpSetting = struct {
                 .cmd_generate => {
                     try core.settings.showHelp(writer, GenerateCommandArgId);
                 },
-                .cmd_init_default => {
+                .cmd_init_default, .cmd_init_config => {
                     try core.settings.showHelp(writer, InitializeCommandArgId);
-                }
+                },
             }
         }
     }

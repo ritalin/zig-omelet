@@ -40,6 +40,14 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
                 defer stages.deinit();
                 break:spawn stages.spawnAll(allocator, setting.general, setting.command.@"init-default");
             },
+            .@"init-config" => {
+                var stages = 
+                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command) 
+                    catch |err| break:spawn err
+                ;
+                defer stages.deinit();
+                break:spawn stages.spawnAll(allocator, setting.general, setting.command.@"init-config");
+            },
         }
     };
 

@@ -18,6 +18,7 @@ const path_candidates: core.configs.ConfigFileCandidates = .{
 pub const CommandSetting = union(core.SubcommandArgId) {
     generate: Generate,
     @"init-default": Initialize,
+    @"init-config": Initialize,
 
     pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
         const id = findTag(parser.diagnostic) catch  |err| switch (err) {
@@ -44,11 +45,23 @@ pub const CommandSetting = union(core.SubcommandArgId) {
                 };       
             },
             .@"init-default" => {
-                var builder = Initialize.Builder.init(arena.allocator(), .defaults, false, .{.@"init-default" = true, });
+                var builder = Initialize.Builder.init(arena.allocator(), .defaults, false, .{.@"init-default" = true, .@"init-config" = true});
                 const setting = builder.loadArgs(Iterator, parser.iter) 
                 catch {
                     return .{
                         .help = .{.tags = &.{ .cmd_init_default, .cmd_general }, .command = .@"init-default" }
+                    };
+                };
+                return .{
+                    .success = .{ .@"init-default" = setting }
+                };       
+            },
+            .@"init-config" => {
+                var builder = Initialize.Builder.init(arena.allocator(), .configs, false, .{});
+                const setting = builder.loadArgs(Iterator, parser.iter) 
+                catch {
+                    return .{
+                        .help = .{.tags = &.{ .cmd_init_config, .cmd_general }, .command = .@"init-config" }
                     };
                 };
                 return .{
@@ -72,7 +85,7 @@ pub const CommandSetting = union(core.SubcommandArgId) {
     pub fn strategy(self: CommandSetting) core.configs.StageStrategy {
         return switch (self) {
             .generate => Generate.strategy,
-            .@"init-default" => Initialize.strategy,
+            .@"init-default", .@"init-config" => Initialize.strategy,
         };
     }
 

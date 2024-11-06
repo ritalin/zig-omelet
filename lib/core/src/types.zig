@@ -27,6 +27,17 @@ pub const FilterKind = enum {include, exclude};
 pub const ConfigCategory = enum {
     defaults,
     configs,
+
+    pub fn destPath(self: ConfigCategory) Symbol {
+        return @tagName(self);
+    }
+
+    pub fn templateDir(self: ConfigCategory) Symbol {
+        return switch (self) {
+            .defaults => "default-templates",
+            .configs => @tagName(self),
+        };
+    }
 };
 pub const SubcommandArgId = enum {
     generate,

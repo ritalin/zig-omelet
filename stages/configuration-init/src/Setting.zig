@@ -14,6 +14,8 @@ source_dir_path: core.FilePath,
 output_dir_path: core.FilePath,
 category: core.ConfigCategory,
 command: core.SubcommandArgId,
+scope_set: []const core.Symbol,
+from_scope: ?core.Symbol,
 standalone: bool,
 
 pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
@@ -25,6 +27,7 @@ pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
     defer args.deinit();
     
     var builder = try loadInternal(managed_allocator, &args);
+    defer builder.deinit();
 
     return builder.build(arena);
 }
@@ -56,6 +59,8 @@ const ArgId = enum {
     output_dir,
     category,
     command,
+    scope,
+    from_scope,
     standalone,
 
     pub const Decls: []const clap.Param(ArgId) = &.{
@@ -64,8 +69,10 @@ const ArgId = enum {
         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
         .{.id = .source_dir, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .one},
         .{.id = .output_dir, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
-        .{.id = .category, .names = .{.long = "category", .short = 'c'}, .takes_value = .one},
-        .{.id = .command, .names = .{.long = "command", .short = 's'}, .takes_value = .one},
+        .{.id = .category, .names = .{.long = "category"}, .takes_value = .one},
+        .{.id = .command, .names = .{.long = "command"}, .takes_value = .one},
+        .{.id = .scope, .names = .{.long = "scope"}, .takes_value = .many},
+        .{.id = .from_scope, .names = .{.long = "from-scope"}, .takes_value = .one},
         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
         // .{.id = ., .names = , .takes_value = },
     };
@@ -82,9 +89,8 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
         .iter = args_iter,
         .diagnostic = &diag,
     };
-    _ = allocator;
 
-    var builder = Builder{};
+    var builder = Builder.init(allocator);
 
     while (true) {
         const arg_ = parser.next() catch |err| {
@@ -101,6 +107,10 @@ fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterato
             .output_dir => builder.output_dir_path = arg.value,
             .category => builder.category = arg.value,
             .command => builder.command = arg.value,
+            .scope => {
+                if (arg.value) |v| try builder.scope_set.append(v);
+            },
+            .from_scope => builder.from_scope = arg.value,
             .standalone => builder.standalone = true,
         }
     }
@@ -117,6 +127,18 @@ const Builder = struct {
     standalone: bool = false,
     category: ?core.Symbol = null,
     command: ?core.Symbol = null,
+    scope_set: std.ArrayList(core.Symbol),
+    from_scope: ?core.Symbol = null,
+
+    pub fn init(allocator: std.mem.Allocator) Builder {
+        return .{
+            .scope_set = std.ArrayList(core.Symbol).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Builder) void {
+        self.scope_set.deinit();
+    }
 
     pub fn build(self: *Builder, arena: *std.heap.ArenaAllocator) !Setting {
         const allocator = arena.allocator();
@@ -145,6 +167,10 @@ const Builder = struct {
             log.warn("Need to specify a `subcommand` arg.\n\n", .{});
             return error.SettingLoadFailed;
         }
+        if (self.scope_set.items.len == 0) {
+            log.warn("Need to specify a `scope` arg.\n\n", .{});
+            return error.SettingLoadFailed;
+        }
 
         const log_level = core.settings.resolveLogLevel(self.log_level) catch |err| {
             log.warn("Unresolved log level: {?s}", .{self.log_level});
@@ -158,7 +184,23 @@ const Builder = struct {
             log.warn("Unresolved `subcommand`: `{?s}`.\n\n", .{self.command});
             return error.SettingLoadFailed;
         };
+
+        var scopes = std.ArrayList(core.Symbol).init(allocator);
+        defer scopes.deinit();
         
+        for (self.scope_set.items) |scope| {
+            try scopes.append(try allocator.dupe(u8, scope));
+        }
+
+        const from_scope = scope: {
+            if (self.from_scope) |scope| {
+                break:scope try allocator.dupe(u8, scope);
+            }
+            else {
+                break:scope null;
+            }
+        };
+
         return .{
             .arena = arena,
             .endpoints = .{
@@ -170,6 +212,8 @@ const Builder = struct {
             .output_dir_path = try allocator.dupe(u8, self.output_dir_path.?),
             .category = category,
             .command = subcommand,
+            .scope_set = try scopes.toOwnedSlice(),
+            .from_scope = from_scope,
             .standalone = self.standalone,
         };
     }

@@ -9,18 +9,21 @@ const Self = @This();
 log_level: core.LogLevel,
 runner_endpoints: core.Endpoints,
 stage_endpoints: core.Endpoints,
+scope: core.Symbol,
 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
         req_rep_channel,
         pub_sub_channel,
         log_level,
+        use_scope,
         help,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .req_rep_channel, .names = .{.long = "reqrep-channel"}, .takes_value = .one},
             .{.id = .pub_sub_channel, .names = .{.long = "pubsub-channel"}, .takes_value = .one},
             .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
+            .{.id = .use_scope, .names = .{.long = "use-scope"}, .takes_value = .one},
             .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
         };
         pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
@@ -62,12 +65,14 @@ pub const Builder = struct {
     log_level: ?core.LogLevel,
     request_channel: ?core.Symbol,
     subscribe_channel: ?core.Symbol,
-    
+    scope: core.Symbol,
+
     pub fn init() Builder {
         return .{
             .log_level = null,
             .request_channel = null,
             .subscribe_channel = null,
+            .scope = "default",
         };
     }
 
@@ -102,6 +107,9 @@ pub const Builder = struct {
                 },
                 .req_rep_channel => builder.request_channel = arg.value,
                 .pub_sub_channel => builder.subscribe_channel = arg.value,
+                .use_scope => {
+                    if (arg.value) |v| builder.scope = v;
+                },
             };
         }
     }
@@ -164,6 +172,7 @@ pub const Builder = struct {
                 .req_rep = req_rep_channels[0],
                 .pub_sub = pub_sub_channels[1],
             },
+            .scope = try allocator.dupe(u8, self.scope),
         };
     }
 };

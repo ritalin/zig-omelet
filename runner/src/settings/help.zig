@@ -9,18 +9,21 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL",}},
     .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL",}},
     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
+    .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope (default: default)", .value = "VALUE",}},
     .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},
     // Commands
     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
-    .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value config", .value = "",}},
+    .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
     // Command/Generate
     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
-    .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
-    .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
+    .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
+    .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
     // Command/init-default
     .{@tagName(.subcommand), DescriptionItem{.desc = "Subcommand name", .value = "COMMAND", .required = true}},
+    .{@tagName(.new_scope), DescriptionItem{.desc = "init environment scope (default: default)", .value = "VALUE", .required = false}},
+    .{@tagName(.from_scope), DescriptionItem{.desc = "source environment scope (optional)", .value = "VALUE", .required = false}},
     .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
 });
 
@@ -32,7 +35,7 @@ const GenerateSetting = @import("./commands/Generate.zig");
 const GenerateCommandArgId = GenerateSetting.ArgId(ArgDescriptions);
 
 const InitializeSetting = @import("./commands/Initialize.zig");
-const InitializeCommandArgId = InitializeSetting.ArgId(ArgDescriptions);
+const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
 
 const SubcommandHelp = struct {
     pub usingnamespace core.settings.ArgHelp(core.SubcommandArgId, ArgDescriptions);

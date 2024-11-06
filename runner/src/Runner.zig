@@ -336,6 +336,7 @@ const RunnerTestContext = struct {
                 .runner_endpoints = core.DebugEndPoint.RunnerEndpoint,
                 .stage_endpoints = core.DebugEndPoint.StageEndpoint,
                 .log_level = .info,
+                .scope = "default",
             },
             .command = undefined,
         };

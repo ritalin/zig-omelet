@@ -12,6 +12,8 @@
                 .output_dir_path = .default,
                 .category = .default, 
                 .command = .default,
+                .scope_set = .default,
+                .from_scope = .default,
             },
             // wheather launch stage automatic
             .managed = true,

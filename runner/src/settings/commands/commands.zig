@@ -44,7 +44,7 @@ pub const CommandSetting = union(core.SubcommandArgId) {
                 };       
             },
             .@"init-default" => {
-                var builder = Initialize.Builder.init(arena.allocator(), .defaults, .{.@"init-default" = true, });
+                var builder = Initialize.Builder.init(arena.allocator(), .defaults, false, .{.@"init-default" = true, });
                 const setting = builder.loadArgs(Iterator, parser.iter) 
                 catch {
                     return .{

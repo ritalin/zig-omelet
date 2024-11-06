@@ -7,7 +7,8 @@ this tool has following fetues:
 * can extract named placeholder in SQL to convert into positional
 * can extract select list in SQL to convert result set type definition
 
-Currently, extracting is only from `duckdb` and code generation is only `typescript`.
+> [!NOTE]
+> Currently, extracting is only from `duckdb` and code generation is only `typescript`.
 
 ## Requirement
 
@@ -71,14 +72,14 @@ Following command is generate a default value environment specified command (sco
 
 A environment is generated at `.omelet` directory in current directory.
 
-> [!INFO]
+> [!CAUTION]
 > Note that `init-default` and `init-config` command is not supported the default value env.
 
 ```
 ./zig-out/bin/omelet init-default --command generate
 ```
 
-> [!INFO]
+> [!NOTE]
 > you can use `-global` option to `.omelet` directory in user home directory.
 > ```
 > ./zig-out/bin/omelet init-default --command generate --global
@@ -107,7 +108,7 @@ In general option, using `--use-scope` option result in applying the custom scop
 
 #### Default value environment formats
 
-> [!INFO]
+> [!NOTE]
 > A value variant `.default` is always applied values from CLI arg input.
 
 `generate` command
@@ -161,7 +162,7 @@ In general option, using `--use-scope` option result in applying the custom scop
 
 #### Subcommand configuration environment formats
 
-> [!INFO]
+> [!NOTE]
 > A value variant `.default` is always applied values from CLI arg input.
 
 Top leven configuration
@@ -174,7 +175,7 @@ Top leven configuration
 
 Stage configuration
 
-> [!INFO]
+> [!NOTE]
 > top level key in stage configuration indicates executable file name.
 
 | key         | value variant | note                                                              |
@@ -182,7 +183,7 @@ Stage configuration
 | .extra_args | list          | Extra arguments for a stage.                                      |
 | .managed    | bool          | Manage auto launch of a stage.                                    |
 
-> [!INFO]
+> [!NOTE]
 > A key of extra argument is same as default value environment of a stage.
 
 ## Source/Schema file encoding

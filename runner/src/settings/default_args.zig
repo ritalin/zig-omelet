@@ -1,6 +1,8 @@
 const std = @import("std");
 const core = @import("core");
 
+const log = core.Logger.SystemDirect(@import("build_options").app_context);
+
 pub const DufaultArg = union (enum) {
     default: void,
     values: []const core.Symbol,
@@ -77,7 +79,10 @@ pub fn Defaults(comptime ArgId: type) type {
                 const key = key: {
                     const token_index = ast.firstToken(field_index) - 2;
                     const ident_name = ast.tokenSlice(token_index);
-                    break:key std.meta.stringToEnum(ArgId, ident_name) orelse return error.InvalidDefaultsKey;
+                    break:key std.meta.stringToEnum(ArgId, ident_name) orelse {
+                        log.err("default key not found: {s}", .{ident_name});
+                        return error.InvalidDefaultsKey;
+                    };
                 };
 
                 if (ast.fullStructInit(&buf, field_index)) |arg_node| {
@@ -88,7 +93,10 @@ pub fn Defaults(comptime ArgId: type) type {
                     const tag = tag: {
                         const token_index = ast.firstToken(arg_field_index) - 2;
                         const ident_name = ast.tokenSlice(token_index);
-                        break:tag std.meta.stringToEnum(std.meta.FieldEnum(Arg), ident_name) orelse return error.InvalidDefaultsEntryTag;
+                        break:tag std.meta.stringToEnum(std.meta.FieldEnum(Arg), ident_name) orelse {
+                            log.err("default entry tag not found: {s}", .{ident_name});
+                            return error.InvalidDefaultsEntryTag;
+                        };
                     };
 
                     if (tag == .default) return error.InvalidDefaultsPayload;
@@ -107,12 +115,19 @@ pub fn Defaults(comptime ArgId: type) type {
                     const token_index = ast.firstToken(field_index);
                     const ident_name = ast.tokenSlice(token_index+1);
                     const tag = std.meta.stringToEnum(std.meta.FieldEnum(Arg), ident_name);
-                    if (tag == null) return error.InvalidDefaultsEntryTag;
-                    if (tag.? != .default) return error.InvalidDefaultsPayload;
+                    if (tag == null) {
+                        log.err("default entry tag not found: {s}", .{ident_name});
+                        return error.InvalidDefaultsEntryTag;
+                    }
+                    if (tag.? != .default) {
+                        log.err("invalid default payload: {s}", .{@tagName(tag.?)});
+                        return error.InvalidDefaultsPayload;
+                    }
 
                     map.put(key, .default);
                 }
                 else {
+                    log.err("invalid default entry", .{});
                     return error.InvalidDefaults;
                 }
             }

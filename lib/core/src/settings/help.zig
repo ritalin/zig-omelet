@@ -8,19 +8,21 @@ pub fn showHelp(writer: anytype, comptime Id: type) !void {
     try clap.help(writer, Id, Id.Decls, .{});
 }
 
-pub fn showSubcommandAll(writer: anytype, comptime Id: type) !void {
+pub fn showSubcommandAll(writer: anytype, comptime Id: type, comptime Help: type) !void {
     const clap_opt: clap.HelpOptions = .{};
     const max_width = try measureLineWidth(Id);
 
-    try showCategory(writer, Id);
+    try showCategory(writer, Help);
 
     inline for (std.meta.fields(Id)) |id| {
+        const item: Id = @enumFromInt(id.value);
+
         // write command
         try writer.writeByteNTimes(' ', clap_opt.indent);
         try writer.writeAll(id.name);
         try writer.writeByteNTimes(' ', clap_opt.indent + max_width - id.name.len);
         // write description
-        try writer.writeAll(@as(Id, @enumFromInt(id.value)).description());
+        try writer.writeAll(Help.description(item));
         try writer.writeByte('\n');
     }
     

@@ -23,3 +23,12 @@ pub const LogScope = enum {
 };
 
 pub const FilterKind = enum {include, exclude};
+
+pub const ConfigCategory = enum {
+    defaults,
+    configs,
+};
+pub const SubcommandArgId = enum {
+    generate,
+    @"init-default",
+};

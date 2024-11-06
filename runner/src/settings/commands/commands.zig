@@ -7,6 +7,7 @@ const core = @import("core");
 const help = @import("../help.zig");
 
 pub const Generate = @import("./Generate.zig");
+pub const Initialize = @import("./Initialize.zig");
 
 const path_candidates: core.configs.ConfigFileCandidates = .{
     .current_dir = ".omelet/defaults",
@@ -14,8 +15,9 @@ const path_candidates: core.configs.ConfigFileCandidates = .{
     .executable_dir = "defaults",
 };
 
-pub const CommandSetting = union(help.CommandArgId) {
+pub const CommandSetting = union(core.SubcommandArgId) {
     generate: Generate,
+    @"init-default": Initialize,
 
     pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
         const id = findTag(parser.diagnostic) catch  |err| switch (err) {
@@ -41,33 +43,51 @@ pub const CommandSetting = union(help.CommandArgId) {
                     .success = .{ .generate = setting }
                 };       
             },
+            .@"init-default" => {
+                var builder = Initialize.Builder.init(arena.allocator(), .defaults, .{.@"init-default" = true, });
+                const setting = builder.loadArgs(Iterator, parser.iter) 
+                catch {
+                    return .{
+                        .help = .{.tags = &.{ .cmd_init_default, .cmd_general }, .command = .@"init-default" }
+                    };
+                };
+                return .{
+                    .success = .{ .@"init-default" = setting }
+                };       
+            }
         }
     }
 
     pub fn watchModeEnabled(self: CommandSetting) bool {
         return switch (self) {
             .generate => |c| c.watch,
+            else => false,
         };
     }
 
-    pub fn tag(self: CommandSetting) help.CommandArgId {
+    pub fn tag(self: CommandSetting) core.SubcommandArgId {
         return std.meta.activeTag(self);
     }
 
     pub fn strategy(self: CommandSetting) core.configs.StageStrategy {
         return switch (self) {
             .generate => Generate.strategy,
+            .@"init-default" => Initialize.strategy,
         };
     }
 
     pub fn watching(self: CommandSetting) bool {
         return switch (self) {
             .generate => |setting| return setting.watch,
+            else => false,
         };
     }
 };
 
-pub fn findTag(diag: ?*clap.Diagnostic) !help.CommandArgId {
+pub fn findTag(diag: ?*clap.Diagnostic) !core.SubcommandArgId {
     if (diag == null) return error.ShowGeneralHelp;
-    return std.meta.stringToEnum(help.CommandArgId, diag.?.arg) orelse return error.ShowGeneralHelp;
+
+    const subcommand_text = @constCast(diag.?.arg);
+
+    return std.meta.stringToEnum(core.SubcommandArgId, subcommand_text) orelse return error.ShowGeneralHelp;
 }

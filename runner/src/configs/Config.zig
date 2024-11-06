@@ -11,11 +11,13 @@ const loader = @import("./config_loader.zig");
 const mappings = @import("./bind_mappings.zig");
 const GeneralConfig = @import("./GeneralConfig.zig");
 const GenerateConfig = @import("./GenerateConfig.zig");
+const InitializeConfig = @import("./InitializeConfig.zig");
 const Stage = loader.Stage;
 
 const Setting = @import("../settings/Setting.zig");
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
+const InitializeSetting = @import("../settings/commands/Initialize.zig");
 
 pub const StageCount = std.enums.EnumFieldStruct(core.configs.StageCategory, usize, 0);
 
@@ -29,6 +31,14 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
                 ;
                 defer stages.deinit();
                 break:spawn stages.spawnAll(allocator, setting.general, setting.command.generate);
+            },
+            .@"init-default" => {
+                var stages = 
+                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command) 
+                    catch |err| break:spawn err
+                ;
+                defer stages.deinit();
+                break:spawn stages.spawnAll(allocator, setting.general, setting.command.@"init-default");
             },
         }
     };
@@ -44,7 +54,7 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
 pub fn StageSet(comptime SubcommandSetting: type, comptime SubcommandConfig: type) type {
     return struct {
         const Self = @This();
-        const ArgId = SubcommandSetting.ArgId(.{});
+        const ArgId = SubcommandConfig.ArgId;
 
         arena: *std.heap.ArenaAllocator,
         stages: []const Stage(ArgId),
@@ -142,7 +152,13 @@ pub fn StageSet(comptime SubcommandSetting: type, comptime SubcommandConfig: typ
             var args = std.ArrayList(core.Symbol).init(allocator);
             defer args.deinit();
 
-            try args.append(try base_dir.realpathAlloc(allocator, stage.location));
+            try args.append(
+                base_dir.realpathAlloc(allocator, stage.location)
+                catch |err| {
+                    log.warn("Stage is not found: `{s}`", .{stage.location});
+                    return err;
+                }    
+            );
 
             general: {
                 try GeneralConfig.apply(general_setting, &args);

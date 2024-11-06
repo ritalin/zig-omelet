@@ -12,12 +12,16 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
     .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},
     // Commands
     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
+    .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value config", .value = "",}},
     // Command/Generate
     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
     .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
     .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
+    // Command/init-default
+    .{@tagName(.subcommand), DescriptionItem{.desc = "Subcommand name", .value = "COMMAND", .required = true}},
+    .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
 });
 
 const GeneralSetting = @import("./commands/GeneralSetting.zig");
@@ -27,10 +31,11 @@ const CommandGeneralArgId = GeneralSetting.Command.ArgId(ArgDescriptions);
 const GenerateSetting = @import("./commands/Generate.zig");
 const GenerateCommandArgId = GenerateSetting.ArgId(ArgDescriptions);
 
-pub const CommandArgId = enum {
-    generate,
+const InitializeSetting = @import("./commands/Initialize.zig");
+const InitializeCommandArgId = InitializeSetting.ArgId(ArgDescriptions);
 
-    pub usingnamespace core.settings.ArgHelp(@This(), ArgDescriptions);
+const SubcommandHelp = struct {
+    pub usingnamespace core.settings.ArgHelp(core.SubcommandArgId, ArgDescriptions);
     pub const options: core.settings.ArgHelpOption = .{.category_name = "Subcommands"};
 };
 
@@ -40,16 +45,17 @@ pub const ArgHelpSetting = struct {
         subcommand,
         cmd_general,
         cmd_generate,
+        cmd_init_default,
     };
 
     tags: []const Tag,
-    command: ?CommandArgId,
+    command: ?core.SubcommandArgId,
 
     pub fn help(self: ArgHelpSetting, writer: anytype) !void {
         try writer.print("usage: {s} [General options] {s} [Subcommand options]\n\n", .{
             @import("build_options").exe_name, 
-            if (self.command) |c| std.fmt.comptimePrint("{s}", .{@tagName(c)}) 
-            else CommandArgId.options.category_name.?
+            if (self.command) |c| @tagName(c) 
+            else SubcommandHelp.options.category_name.?
         });
 
         for (self.tags) |tag| {
@@ -61,11 +67,14 @@ pub const ArgHelpSetting = struct {
                     try core.settings.showHelp(writer, CommandGeneralArgId);
                 },
                 .subcommand => {
-                    try core.settings.showSubcommandAll(writer, CommandArgId);
+                    try core.settings.showSubcommandAll(writer, core.SubcommandArgId, SubcommandHelp);
                 },
                 .cmd_generate => {
                     try core.settings.showHelp(writer, GenerateCommandArgId);
                 },
+                .cmd_init_default => {
+                    try core.settings.showHelp(writer, InitializeCommandArgId);
+                }
             }
         }
     }

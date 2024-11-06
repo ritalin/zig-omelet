@@ -55,5 +55,6 @@ pub fn main() !void {
 }
 
 test "main" {
+    core.Logger.disable();
     std.testing.refAllDecls(@This());
 }

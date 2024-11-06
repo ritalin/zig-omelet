@@ -53,6 +53,7 @@ pub fn build(b: *std.Build) !void {
             exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe.root_module.addImport("clap", dep_clap.module("clap"));
             exe.root_module.addImport("core", dep_core.module("core"));
+            exe.root_module.addImport("known_folders", dep_core.module("core").import_table.get("known_folders").?);
             exe.root_module.addOptions("build_options", build_options);
             break:import_modules;
         }
@@ -108,6 +109,7 @@ pub fn build(b: *std.Build) !void {
             exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
             exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
             exe_unit_tests.root_module.addImport("core", dep_core.module("core"));
+            exe_unit_tests.root_module.addImport("known_folders", dep_core.module("core").import_table.get("known_folders").?);
             exe_unit_tests.root_module.addOptions("build_options", build_options);
             break:import_modules;
         } 

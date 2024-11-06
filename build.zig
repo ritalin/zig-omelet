@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) !void {
     const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt/duckdb";
     const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
     
-    stage_watch_files: {
+    stage: {
         const dep = b.dependency("stage_watch_files", .{
             .target = target,
             .optimize = optimize,
@@ -29,9 +29,9 @@ pub fn build(b: *std.Build) !void {
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "watch-files"}));
         b.installArtifact(exe_stage);
-        break :stage_watch_files;
+        break :stage;
     }
-    stage_duck_db_extract: {
+    stage: {
         const dep = b.dependency("stage_duckdb_extract", .{
             .target = target,
             .optimize = optimize,
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) !void {
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract"}));
         b.installArtifact(exe_stage);
-        break :stage_duck_db_extract;
+        break :stage;
     }
     stage: {
         const dep = b.dependency("stage_ts_generate", .{
@@ -52,6 +52,17 @@ pub fn build(b: *std.Build) !void {
             .zmq_prefix = zmq_prefix,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
+        b.installArtifact(exe_stage);
+        break :stage;
+    }
+    stage: {
+        const dep = b.dependency("stage_init_config", .{
+            .target = target,
+            .optimize = optimize,
+            .exe_prefix = exe_prefix,
+            .zmq_prefix = zmq_prefix,
+        });
+        const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "configuration-init"}));
         b.installArtifact(exe_stage);
         break :stage;
     }
@@ -66,16 +77,24 @@ pub fn build(b: *std.Build) !void {
         b.installArtifact(exe_stage);
         break :stage exe_stage;
     };
-    install_config: {
+    install_configs: {
         b.installDirectory(.{
             .source_dir = b.path("./runner/assets/configs"),
             .install_dir = .prefix,
             .install_subdir = "configs",
             .include_extensions = &.{".zon"},
         });
-        break:install_config;
+        break:install_configs;
     }
-
+    install_defaults: {
+        b.installDirectory(.{
+            .source_dir = b.path("./runner/assets/defaults"),
+            .install_dir = .prefix,
+            .install_subdir = "default-templates",
+            .include_extensions = &.{".zon"},
+        });
+        break:install_defaults;
+    }
     run_cmd: {
         const cmd = b.addRunArtifact(stage_runner);
         cmd.step.dependOn(b.getInstallStep());

@@ -10,11 +10,11 @@ const DefaultArgs = @import("../default_args.zig").Defaults(ArgId(.{}));
 const FilePath = core.FilePath;
 const FilterKind = core.FilterKind;
 
-source_dir: []FilePath,
-schema_dir: []FilePath,
+source_dir_set: []FilePath,
+schema_dir_set: []FilePath,
 include_filter: []FilePath,
 exclude_filter: []FilePath,
-output_dir: FilePath,
+output_dir_path: FilePath,
 watch: bool,
 
 const Self = @This();
@@ -234,11 +234,11 @@ pub const Builder = struct {
         };
 
         return .{
-            .source_dir = try sources.toOwnedSlice(),
-            .schema_dir = try schemas.toOwnedSlice(),
+            .source_dir_set = try sources.toOwnedSlice(),
+            .schema_dir_set = try schemas.toOwnedSlice(),
             .include_filter = try include_filters.toOwnedSlice(),
             .exclude_filter = try exclude_filters.toOwnedSlice(),
-            .output_dir = output_dir_path,
+            .output_dir_path = output_dir_path,
             .watch = self.watch,
         };
     }

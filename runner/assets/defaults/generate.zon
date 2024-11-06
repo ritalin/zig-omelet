@@ -1,0 +1,10 @@
+.{
+    // default: supplied from CLI arg
+    // fixed: supplied from fixed value(s)
+    .source_dir = .default,
+    .schema_dir = .default,
+    .include_filter = .default,
+    .exclude_filter = .default,
+    .output_dir = .default,
+    .watch = .default, 
+}

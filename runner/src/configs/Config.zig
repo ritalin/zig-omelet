@@ -26,7 +26,7 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
         switch (setting.command.tag()) {
             .generate => {
                 var stages = 
-                    StageSet(GenerateSetting, GenerateConfig).createConfig(allocator, setting.command) 
+                    StageSet(GenerateSetting, GenerateConfig).createConfig(allocator, setting.command, setting.general.scope) 
                     catch |err| break:spawn err
                 ;
                 defer stages.deinit();
@@ -34,7 +34,7 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
             },
             .@"init-default" => {
                 var stages = 
-                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command) 
+                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command, setting.general.scope) 
                     catch |err| break:spawn err
                 ;
                 defer stages.deinit();
@@ -42,7 +42,7 @@ pub fn spawnStages(allocator: std.mem.Allocator, setting: Setting) !core.setting
             },
             .@"init-config" => {
                 var stages = 
-                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command) 
+                    StageSet(InitializeSetting, InitializeConfig).createConfig(allocator, setting.command, setting.general.scope) 
                     catch |err| break:spawn err
                 ;
                 defer stages.deinit();
@@ -74,8 +74,8 @@ pub fn StageSet(comptime SubcommandSetting: type, comptime SubcommandConfig: typ
             self.arena.child_allocator.destroy(self.arena);
         }
         
-        pub fn createConfig(allocator: std.mem.Allocator, subcommand: Setting.CommandSetting) !Self {
-            var file = try core.configs.resolveFileCandidate(allocator, @tagName(subcommand.tag()), loader.ConfigPathCandidate) orelse {
+        pub fn createConfig(allocator: std.mem.Allocator, subcommand: Setting.CommandSetting, scope: core.Symbol) !Self {
+            var file = try core.configs.resolveFileCandidate(allocator, @tagName(subcommand.tag()), loader.ConfigPathCandidate, scope, .configs) orelse {
                 log.err("Configuration file not found.", .{});
                 return error.CofigLoadFailed;
             };

@@ -5,14 +5,40 @@
             // path: launch from specified full/cwd-relative directory path
             .location = .default,
             .extra_args = .{
-                // default: supplied from CLI arg
-                // values: supplied from fixed value(s)
-                // enabled: flag arg
+                // Template folder path
+                // .default: Passed from CLI arg
+                // .values: Accept single path
+                // ```
+                // .source_dir_path = .{.values = .{ "/path/from" } }
+                // ```
                 .source_dir_path = .default, 
+                // Destination folder path
+                // .default: Passed from CLI arg
+                // .values: Accept single path
+                // ```
+                // .output_dir_path = .{.values = .{ "/path/to" } }
+                // ```
                 .output_dir_path = .default,
-                .category = .default, 
+                // Generate for specified subcommand
+                // .default: Passed from CLI arg
+                // .values: Specify <SUBCOMMAND> name
+                // ```
+                // .command = .{ .values = .{"generate"} }
+                // ```
                 .command = .default,
+                // SConfiguration scope name(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple scope name
+                // ```
+                // .scope_set = .{ .values = .{"s_01", ...} }
+                // ```
                 .scope_set = .default,
+                // Configuration template scope name
+                // .default: Passed from CLI arg
+                // .values: Accept single scope name
+                // ```
+                // .scope_set = .{ .values = .{"s_01"} }
+                // ```
                 .from_scope = .default,
             },
             // wheather launch stage automatic

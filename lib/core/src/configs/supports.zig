@@ -4,16 +4,23 @@ const known_folders = @import("known_folders");
 const core_types = @import("../types.zig");
 const Symbol = core_types.Symbol;
 const FilePath = core_types.FilePath;
+const ConfigCategory = core_types.ConfigCategory;
 
 pub const ConfigFileCandidates = std.enums.EnumFieldStruct(enum {current_dir, home_dir, executable_dir}, ?FilePath, @as(?FilePath, null));
 
-pub fn resolveFileCandidate(allocator: std.mem.Allocator, command: Symbol, candidates: ConfigFileCandidates) !?std.fs.File {
+pub fn resolveFileCandidate(allocator: std.mem.Allocator, command: Symbol, candidates: ConfigFileCandidates, scope: Symbol, category: ConfigCategory) !?std.fs.File {
+    return try resolveFileCandidateInternal(allocator, command, candidates, scope, category) orelse {
+        return try resolveFileCandidateInternal(allocator, command, candidates, "default", category);
+    };
+}
+
+fn resolveFileCandidateInternal(allocator: std.mem.Allocator, command: Symbol, candidates: ConfigFileCandidates, scope: Symbol, category: ConfigCategory) !?std.fs.File {
     const file_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{command});
     defer allocator.free(file_name);
     
     path: {
         if (candidates.current_dir) |dir_path| {
-            const path = try std.fs.path.join(allocator, &.{dir_path, file_name});
+            const path = try std.fs.path.join(allocator, &.{dir_path, scope, category.destPath(), file_name});
             defer allocator.free(path);
 
             return std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
@@ -28,7 +35,7 @@ pub fn resolveFileCandidate(allocator: std.mem.Allocator, command: Symbol, candi
             if (dir_) |*dir| {
                 defer dir.close();
 
-                const path = try std.fs.path.join(allocator, &.{dir_path, file_name});
+                const path = try std.fs.path.join(allocator, &.{dir_path, scope, category.destPath(), file_name});
                 defer allocator.free(path);
 
                 return dir.openFile(path, .{}) catch |err| switch (err) {
@@ -38,13 +45,16 @@ pub fn resolveFileCandidate(allocator: std.mem.Allocator, command: Symbol, candi
             }
         }
     }
+
+    if (! std.mem.eql(u8, scope, "default")) return null;
+
     path: {
         if (candidates.executable_dir) |dir_path| {
             var dir_ = try known_folders.open(allocator, .executable_dir, .{});
             if (dir_) |*dir| {
                 defer dir.close();
 
-                const path = try std.fs.path.join(allocator, &.{"..", dir_path, file_name});
+                const path = try std.fs.path.join(allocator, &.{"..", dir_path, category.templateDir(), file_name});
                 defer allocator.free(path);
 
                 return dir.openFile(path, .{}) catch |err| switch (err) {

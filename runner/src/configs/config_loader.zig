@@ -11,9 +11,9 @@ const help = @import("../settings/help.zig");
 const Defaults = @import("../settings/default_args.zig").Defaults;
 
 pub const ConfigPathCandidate: core.configs.ConfigFileCandidates = .{
-    .current_dir = ".omelet/configs",
-    .home_dir = ".omelet/configs",
-    .executable_dir = "configs",
+    .current_dir = ".omelet",
+    .home_dir = ".omelet",
+    .executable_dir = "",
 };
 
 pub fn Stage(comptime _ArgId: type) type {

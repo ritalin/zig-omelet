@@ -16,8 +16,8 @@ pub fn applyValue(setting: GenerateSetting, arg_id: ArgId, args: *std.ArrayList(
         .source_dir_set => Binder.SourceDir.bind(setting, args),
         .schema_dir_set => Binder.SchemaDir.bind(setting, args),
         .output_dir_path => Binder.OutputDir.bind(setting, args),
-        .include_filter => Binder.IncludeFilter.bind(setting, args),
-        .exclude_filter => Binder.ExcludeFilter.bind(setting, args),
+        .include_filter_set => Binder.IncludeFilter.bind(setting, args),
+        .exclude_filter_set => Binder.ExcludeFilter.bind(setting, args),
         .watch => Binder.WatchMode.bind(setting, args),
     };
 }
@@ -27,8 +27,8 @@ pub fn argName(arg_id: ArgId) core.Symbol {
         .source_dir_set => Binder.SourceDir.name,
         .schema_dir_set => Binder.SchemaDir.name,
         .output_dir_path => Binder.OutputDir.name,
-        .include_filter => Binder.IncludeFilter.name,
-        .exclude_filter => Binder.ExcludeFilter.name,
+        .include_filter_set => Binder.IncludeFilter.name,
+        .exclude_filter_set => Binder.ExcludeFilter.name,
         .watch => Binder.WatchMode.name,
     };
 }
@@ -85,7 +85,7 @@ const Binder = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .include_filter).names.long.?;
 
         fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            for (setting.include_filter) |filter| {
+            for (setting.include_filter_set) |filter| {
                 try args.append(name);
                 try args.append(filter);
             }
@@ -96,7 +96,7 @@ const Binder = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .exclude_filter).names.long.?;
 
         fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
-            for (setting.exclude_filter) |filter| {
+            for (setting.exclude_filter_set) |filter| {
                 try args.append(name);
                 try args.append(filter);
             }

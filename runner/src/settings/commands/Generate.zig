@@ -5,19 +5,18 @@ const core = @import("core");
 const log = core.Logger.SystemDirect(@import("build_options").app_context);
 const help = @import("../help.zig");
 
-const DefaultArgs = @import("../default_args.zig").Defaults(ArgId(.{}));
-
 const FilePath = core.FilePath;
 const FilterKind = core.FilterKind;
 
 source_dir_set: []FilePath,
 schema_dir_set: []FilePath,
-include_filter: []FilePath,
-exclude_filter: []FilePath,
+include_filter_set: []FilePath,
+exclude_filter_set: []FilePath,
 output_dir_path: FilePath,
 watch: bool,
 
 const Self = @This();
+const DefaultArgs = @import("../default_args.zig").Defaults(std.meta.FieldEnum(Self));
 
 pub fn ArgId(comptime descriptions: core.settings.DescriptionMap) type {
     return enum {
@@ -60,7 +59,7 @@ pub const Builder = struct {
     filter_set: std.ArrayList(PathFilter),
     filter_set_counts: std.enums.EnumArray(FilterKind, usize),
     output_dir_path: ?FilePath = null,
-    watch: bool = false,
+    watch: ?bool = null,
     defaults: DefaultArgs,
 
     pub fn init(allocator: std.mem.Allocator, defaults_file: ?std.fs.File) !Builder {
@@ -132,41 +131,43 @@ pub const Builder = struct {
 
         while (iter.next()) |entry| {
             switch (entry.key) {
-                .source_dir => if (entry.value.tag() == .values) {
+                .source_dir_set => if (entry.value.tag() == .values) {
                     if (self.source_dir_set.items.len == 0) {
                         for (entry.value.values) |value| {
                             try self.source_dir_set.append(value);
                         }
                     }
                 },
-                .schema_dir => if (entry.value.tag() == .values) {
+                .schema_dir_set => if (entry.value.tag() == .values) {
                     if (self.schema_dir_set.items.len == 0) {
                         for (entry.value.values) |value| {
                             try self.schema_dir_set.append(value);
                         }
                     }
                 },
-                .include_filter => if (entry.value.tag() == .values) {
+                .include_filter_set => if (entry.value.tag() == .values) {
                     if (self.filter_set_counts.get(.include) == 0) {
                         for (entry.value.values) |value| {
                             try self.filter_set.append(.{.kind = .include, .path = value});
                         }
                     }
                 },
-                .exclude_filter => if (entry.value.tag() == .values) {
+                .exclude_filter_set => if (entry.value.tag() == .values) {
                     if (self.filter_set_counts.get(.exclude) == 0) {
                         for (entry.value.values) |value| {
                             try self.filter_set.append(.{.kind = .exclude, .path = value});
                         }
                     }
                 },
-                .output_dir => if (entry.value.tag() == .values) {
+                .output_dir_path => if (entry.value.tag() == .values) {
                     if ((self.output_dir_path == null) and (entry.value.values.len > 0)) {
                         self.output_dir_path = entry.value.values[0];
                     }
                 },
                 .watch => if (entry.value.tag() == .enabled) {
-                    self.watch = entry.value.enabled;
+                    if (self.watch == null) {
+                        self.watch = entry.value.enabled;
+                    }
                 },
             }
         }
@@ -236,10 +237,10 @@ pub const Builder = struct {
         return .{
             .source_dir_set = try sources.toOwnedSlice(),
             .schema_dir_set = try schemas.toOwnedSlice(),
-            .include_filter = try include_filters.toOwnedSlice(),
-            .exclude_filter = try exclude_filters.toOwnedSlice(),
+            .include_filter_set = try include_filters.toOwnedSlice(),
+            .exclude_filter_set = try exclude_filters.toOwnedSlice(),
             .output_dir_path = output_dir_path,
-            .watch = self.watch,
+            .watch = self.watch orelse false,
         };
     }
 };

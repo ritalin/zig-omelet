@@ -45,7 +45,7 @@ pub fn loadFromArgs(allocator: std.mem.Allocator) !core.settings.LoadResult(Sett
         }
     ;
     const command_setting = 
-        switch(try CommandSetting.loadArgs(arena, @TypeOf(parser), &parser)) {
+        switch(try CommandSetting.loadArgs(arena, @TypeOf(parser), &parser, general_setting.scope)) {
             .success => |setting| setting,
             .help => |setting| return .{ .help = setting },
         }

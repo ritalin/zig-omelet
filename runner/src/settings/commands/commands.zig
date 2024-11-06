@@ -10,9 +10,9 @@ pub const Generate = @import("./Generate.zig");
 pub const Initialize = @import("./Initialize.zig");
 
 const path_candidates: core.configs.ConfigFileCandidates = .{
-    .current_dir = ".omelet/defaults",
-    .home_dir = ".omelet/defaults",
-    .executable_dir = "defaults",
+    .current_dir = ".omelet",
+    .home_dir = ".omelet",
+    .executable_dir = "",
 };
 
 pub const CommandSetting = union(core.SubcommandArgId) {
@@ -20,13 +20,13 @@ pub const CommandSetting = union(core.SubcommandArgId) {
     @"init-default": Initialize,
     @"init-config": Initialize,
 
-    pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
+    pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser, scope: core.Symbol) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
         const id = findTag(parser.diagnostic) catch  |err| switch (err) {
             error.ShowGeneralHelp => return .{ .help = help.GeneralHelpSetting },
             else => return err,
         };
 
-        var defaults_file = try core.configs.resolveFileCandidate(arena.allocator(), @tagName(id), path_candidates);
+        var defaults_file = try core.configs.resolveFileCandidate(arena.allocator(), @tagName(id), path_candidates, scope, .defaults);
         defer if (defaults_file) |*file| file.close();
 
         const Iterator = @typeInfo(@TypeOf(parser.iter)).pointer.child;

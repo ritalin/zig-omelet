@@ -86,7 +86,10 @@ pub fn Defaults(comptime ArgId: type) type {
                 };
 
                 if (ast.fullStructInit(&buf, field_index)) |arg_node| {
-                    if (arg_node.ast.fields.len == 0) return error.InvalidDefaultsEntry;
+                    if (arg_node.ast.fields.len == 0) {
+                        log.err("At least, it needs default entry tag: {s}", .{@tagName(key)});
+                        return error.InvalidDefaultsEntry;
+                    }
 
                     const arg_field_index = arg_node.ast.fields[0];
 
@@ -99,9 +102,11 @@ pub fn Defaults(comptime ArgId: type) type {
                         };
                     };
 
-                    if (tag == .default) return error.InvalidDefaultsPayload;
-
-                    if (tag == .enabled) {
+                    if (tag == .default) {
+                        log.err("Invalid payload tag: {s}", .{@tagName(tag)});
+                        return error.InvalidDefaultsPayload;
+                    }
+                    else if (tag == .enabled) {
                         map.put(key, .{.enabled = try loadFixedEnabled(allocator, ast, arg_field_index)});
                     }
                     else if (core.configs.isItemsEmpty(node_tags[arg_field_index])) {
@@ -119,15 +124,19 @@ pub fn Defaults(comptime ArgId: type) type {
                         log.err("default entry tag not found: {s}", .{ident_name});
                         return error.InvalidDefaultsEntryTag;
                     }
-                    if (tag.? != .default) {
-                        log.err("invalid default payload: {s}", .{@tagName(tag.?)});
-                        return error.InvalidDefaultsPayload;
-                    }
 
-                    map.put(key, .default);
+                    switch (tag.?) {
+                        .default => {
+                            map.put(key, .default);
+                        },
+                        else => {
+                            log.err("Invalid payload tag: {s}", .{@tagName(tag.?)});
+                            return error.InvalidDefaultsPayload;
+                        }
+                    }
                 }
                 else {
-                    log.err("invalid default entry", .{});
+                    log.err("invalid default entry (key: {s})", .{@tagName(key)});
                     return error.InvalidDefaults;
                 }
             }

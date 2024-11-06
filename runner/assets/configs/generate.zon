@@ -5,15 +5,42 @@
             // path: launch from specified full/cwd-relative directory path
             .location = .default,
             .extra_args = .{
-                // default: supplied from CLI arg
-                // values: supplied from fixed value(s)
-                // enabled: flag arg
-                .source_dir = .default, 
-                .schema_dir = .default,
-                .include_filter = .default, 
-                .exclude_filter = .default,
-                .watch = .default
-            },
+                // Source query folder path(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple path
+                // ```
+                // .source_dir_set = .{.values = .{ "/path/from", ... } }
+                // ```
+                .source_dir_set = .default,
+                // Schema folder path(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple path
+                // ```
+                // .schema_dir_set = .{.values = .{ "/path/from", ... } }
+                // ```
+                .schema_dir_set = .default,
+                // Source/Schema path include filter(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple path
+                // ```
+                // .include_filter_set = .{.values = .{ "PATTERN1", ... } }
+                // ```
+                .include_filter_set = .default,
+                // Source/Schema path exclude filter(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple path
+                // ```
+                // .exclude_filter_set = .{.values = .{ "PATTERN1", ... } }
+                // ```
+                .exclude_filter_set = .default,
+                // Enable(true)/Disable(false) watch mode
+                // .default: Passed from CLI arg
+                // .enabled: false or true
+                // ```
+                // .watch = .{.enabled = true}
+                // ```
+                .watch = .default, 
+        },
             // wheather launch stage automatic
             .managed = true,
         },
@@ -22,7 +49,13 @@
         .@"omelet-duckdb-extract" = .{
             .location = .default,
             .extra_args = .{
-                .schema_dir = .default
+                // Schema folder path(s)
+                // .default: Passed from CLI arg
+                // .values: Accept multiple path
+                // ```
+                // .schema_dir_set = .{.values = .{ "/path/from", ... } }
+                // ```
+                .schema_dir_set = .default
             },
             .managed = true,
         },
@@ -31,7 +64,13 @@
         .@"omelet-ts-generate" = .{
             .location = .default,
             .extra_args = .{
-                .output_dir = .default
+                // Destination folder path
+                // .default: Passed from CLI arg
+                // .values: Accept single path
+                // ```
+                // .output_dir_path = .{.values = .{ "/path/to" } }
+                // ```
+                .output_dir_path = .default
             },
             .managed = true,
         },

@@ -89,11 +89,6 @@ pub const Builder = struct {
         }
     }
 
-    const suffix_map = std.StaticStringMap(FilePath).initComptime(.{
-        .{@tagName(.defaults), "default-templates"},
-        .{@tagName(.configs), "configs"},
-    });
-
     fn build(self: Builder) !Self {
         if (self.subcommand == null) {
             log.warn("Need to specify subcommand name", .{});

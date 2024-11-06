@@ -8,6 +8,7 @@ const types = @import("./types.zig");
 const events = @import("./events/events.zig");
 
 var level_filter = resetFilter(.info);
+var log_disabled = false;
 
 pub fn withAppContext(comptime app_context: Symbol) type {
     return struct {
@@ -107,19 +108,23 @@ fn Direct(comptime stage_name: types.Symbol, comptime scope: @Type(.enum_literal
 
     return struct {
         pub fn err(comptime message: []const u8, args: anytype) void {
+            if (log_disabled) return;
             S.err("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn warn(comptime message: []const u8, args: anytype) void {
+            if (log_disabled) return;
             if (! level_filter.contains(.warn)) return;
 
             S.warn("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn info(comptime message: []const u8, args: anytype) void {
+            if (log_disabled) return;
             if (! level_filter.contains(.info)) return;
 
             S.info("[{s}] " ++ message, directLogArgs(stage_name, args));
         }
         pub fn debug(comptime message: []const u8, args: anytype) void {
+            if (log_disabled) return;
             if ((scope == .trace) and (! level_filter.contains(.trace))) return;
             if (! level_filter.contains(.debug)) return;
 
@@ -152,4 +157,8 @@ fn resetFilter(level: events.LogLevel) events.LogLevelSet {
 
 pub fn stringToLogLevel(s: types.Symbol) events.LogLevel {
     return std.meta.stringToEnum(events.LogLevel, s) orelse .err;
+}
+
+pub fn disable() void {
+    log_disabled = true;
 }

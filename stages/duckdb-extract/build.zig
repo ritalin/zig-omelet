@@ -274,6 +274,8 @@ fn createWorkerModule(
 
         if (builtin.os.tag == .linux) {
             mod.linkSystemLibrary("jemalloc_extension", .{});
+            mod.linkSystemLibrary("duckdb_zstd", .{});
+            mod.linkSystemLibrary("core_functions_extension", .{});
         }
         break:duckdb_native_config;
     }

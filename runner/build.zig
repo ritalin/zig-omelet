@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
         zmq_native_config: {
-            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{duckdb_prefix, "lib"}) });
+            exe_unit_tests.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "lib"}) });
             exe_unit_tests.linkSystemLibrary("zmq");
             break:zmq_native_config;
         }

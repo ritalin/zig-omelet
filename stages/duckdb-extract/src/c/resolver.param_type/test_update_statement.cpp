@@ -96,4 +96,40 @@ TEST_CASE("ResolveParam::Update statement") {
     }
 }
 
+TEST_CASE("TransformeSQL: Update statement") {
+    SECTION("basic") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            update Foo 
+            set xys = $v1
+        )#");
+        std::string expect_sql(R"#(UPDATE Foo SET xys = $1)#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("update with returning") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            update Foo 
+            set xys = $v1
+            returning id
+        )#");
+        std::string expect_sql(R"#(UPDATE Foo SET xys = $1 RETURNING id)#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("update with returning with alias") {
+        SKIP("alias of returning clause is not supported");
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            update Foo 
+            set xys = $v1
+            returning id as updated
+        )#");
+        std::string expect_sql(R"#(UPDATE Foo SET xys = $1 RETURNING id AS updated)#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+}
+
 #endif

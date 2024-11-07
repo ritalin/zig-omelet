@@ -34,6 +34,21 @@ TEST_CASE("SelectList::Insert statement") {
 
         runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
     }
+    SECTION("has returning/single column (with alias)") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            insert into Foo (id, kind) 
+            values ($id, $kind)
+            returning id as inserted
+        )#");
+        std::vector<ColumnEntry> expects{
+            {.field_name = "inserted", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
+        };
+        std::vector<std::string> user_type_names{};
+        std::vector<UserTypeEntry> anon_types{};
+
+        runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
+    }
     SECTION("has returning/single column (nullable)") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql(R"#(
@@ -65,8 +80,7 @@ TEST_CASE("SelectList::Insert statement") {
 
         runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
     }
-    SECTION("has returning/anonymous tuple") {
-        SKIP("Unsupported returning alias, currently");
+    SECTION("has returning/anonymous tuple (with alias)") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql(R"#(
             insert into Foo (id, kind) 
@@ -107,7 +121,6 @@ TEST_CASE("SelectList::Insert statement") {
         runBindStatement(sql, {schema_1}, expects, user_type_names, anon_types);
     }
     SECTION("has returning/anonymous tuple (with alias)") {
-        SKIP("Unsupported returning alias, currently");
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql(R"#(
             insert into Foo (id, kind) 
@@ -115,7 +128,7 @@ TEST_CASE("SelectList::Insert statement") {
             returning (xys, id) as inserted
         )#");
         std::vector<ColumnEntry> expects{
-            {.field_name = R"#(main."row"(xys, id))#", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
+            {.field_name = "inserted", .type_kind = UserTypeKind::Struct, .field_type = "SelList::Struct#1", .nullable = true},
         };
         std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{

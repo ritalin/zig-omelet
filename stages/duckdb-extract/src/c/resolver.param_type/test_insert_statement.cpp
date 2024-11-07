@@ -178,15 +178,47 @@ TEST_CASE("TransformeSQL: Insert statement") {
 
         runTransformQuery(sql, {schema_1}, expect_sql);
     }
-    SECTION("insert with returning w/o alias") {
-        SKIP("Unsupported returning alias, currently");
+    SECTION("insert with returning") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            insert into Foo (id, kind) 
+            values ($id, $kind)
+            returning id
+        )#");
+        std::string expect_sql(R"#(INSERT INTO Foo (id, kind ) (VALUES ($1, $2)) RETURNING id)#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("insert with returning") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            insert into Foo (id, kind) 
+            values ($id, $kind)
+            returning id as inserted
+        )#");
+        std::string expect_sql(R"#(INSERT INTO Foo (id, kind ) (VALUES ($1, $2)) RETURNING id AS inserted)#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("insert with returning tuple w/o alias") {
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
         std::string sql(R"#(
             insert into Foo (id, kind) 
             values ($id, $kind)
             returning (kind, id)
         )#");
-        std::string expect_sql(R"#(INSERT INTO Foo (id, kind ) (VALUES ($1, $2)) RETURNING main."row"(kind, id) AS "main."row"(kind, id)")#");
+        std::string expect_sql(R"#(INSERT INTO Foo (id, kind ) (VALUES ($1, $2)) RETURNING main."row"(kind, id) AS "main.""row""(kind, id)")#");
+
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("insert with returning tuple with alias") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql(R"#(
+            insert into Foo (id, kind) 
+            values ($id, $kind)
+            returning (kind, id) as inserted
+        )#");
+        std::string expect_sql(R"#(INSERT INTO Foo (id, kind ) (VALUES ($1, $2)) RETURNING main."row"(kind, id) AS inserted)#");
 
         runTransformQuery(sql, {schema_1}, expect_sql);
     }

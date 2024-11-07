@@ -77,12 +77,59 @@ TEST_CASE("ResolveParam::Delete statement") {
 }
 
 TEST_CASE("TransformeSQL: Delete statement") {
-    SECTION("insert with returning w/o alias") {
+    SECTION("delete with returning") {
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("delete from Foo where kind = $kind returning id");
+        std::string expect_sql(R"#(DELETE FROM Foo WHERE (kind = $1) RETURNING id)#");
+
+        ParamNameLookup lookup{
+            { "1", ParamLookupEntry("kind") }
+        };
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
+        };
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("delete with returning with alias") {
         SKIP("alias of returning clause is not supported");
         std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
-        std::string sql("delete from Foo where kind = $kind");
-        std::string expect_sql(R"(#(DELETE FROM Foo WHERE (kind = $1) RETURNING id AS deletted)#)");
+        std::string sql("delete from Foo where kind = $kind returning id as deleted");
+        std::string expect_sql(R"#(DELETE FROM Foo WHERE (kind = $1) RETURNING id AS deleted)#");
 
+        ParamNameLookup lookup{
+            { "1", ParamLookupEntry("kind") }
+        };
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
+        };
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("delete with returning tuple w/o alias") {
+        SKIP("alias of returning clause is not supported");
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("delete from Foo where kind = $kind returning (kind, id)");
+        std::string expect_sql(R"#(DELETE FROM Foo WHERE (kind = $1) RETURNING (kind, id) AS "main.""row""(kind, id)")#");
+
+        ParamNameLookup lookup{
+            { "1", ParamLookupEntry("kind") }
+        };
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
+        };
+        runTransformQuery(sql, {schema_1}, expect_sql);
+    }
+    SECTION("delete with returning tuple with alias") {
+        SKIP("alias of returning clause is not supported");
+        std::string schema_1("CREATE TABLE Foo (id int primary key, kind int not null, xys int, remarks VARCHAR)");
+        std::string sql("delete from Foo where kind = $kind returning (kind, id) as deleted");
+        std::string expect_sql(R"#(DELETE FROM Foo WHERE (kind = $1) RETURNING (kind, id) AS deleted)#");
+
+        ParamNameLookup lookup{
+            { "1", ParamLookupEntry("kind") }
+        };
+        ExpectParamLookup bound_types{
+            {"1", ExpectParam{.type_kind = UserTypeKind::Primitive, .type_name = "INTEGER"} }, 
+        };
         runTransformQuery(sql, {schema_1}, expect_sql);
     }
 }

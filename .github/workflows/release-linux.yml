@@ -1,0 +1,105 @@
+name: Release zig-omelet (linux x86_64)
+
+on:
+  push:
+    tags: 
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    container:
+      image: ktzalias/omelet-actions-container:latest
+      env:
+        PKG_PREFIX: "/home/node"
+        LD_LIBRARY_PATH: "/home/node/libsodium/lib:$LD_LIBRARY_PATH"
+
+    steps:
+      - name: Check tar version
+        run: tar --version
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y git xz-utils
+          echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
+      - name: Check git version
+        run: |
+          git --version
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install zig latest
+        uses: mlugg/setup-zig@v1
+        with:
+          version: master
+          use-cache: false
+          
+      - name: Run build
+        run: |
+          zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
+          ls -la zig-out
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omelet-build-artifact
+          path: |
+            zig-out/**
+            !zig-out/test/*
+  
+  release-artifact:
+    runs-on: ubuntu-latest
+    needs: release-build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: omelet-build-artifact
+          path: zig-out
+
+      - name: extract version
+        id: extract_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          ARTIFACT_NAME=omelet-zig-linux-x86_64-$VERSION.tar.gz
+          echo "extracted $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "artifact_file=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          cat $GITHUB_OUTPUT   
+      - name: Check env
+        run: |
+          echo "ls -la ."
+          ls -la .
+
+          echo "ls -la zig-out"
+          ls -la zig-out
+          echo "vv = ${{ steps.extract_version.outputs.version }}"
+          echo "ff = ${{ steps.extract_version.outputs.artifact_file }}"
+
+      - name: Artifact release image
+        run: |
+          tar -czf ${{ steps.extract_version.outputs.artifact_file }} --exclude ./zig-out/test ./zig-out   
+      - name: Generate release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$RUN_ACT" = "true" ]; then
+            echo "SKIP because it's simulation from 'nektos/act'"
+          else
+            gh release create v${{ steps.extract_version.outputs.version }} ${{ steps.extract_version.outputs.artifact_file }} --generate-notes
+          fi

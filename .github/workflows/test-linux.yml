@@ -35,7 +35,7 @@ jobs:
           git --version
 
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -48,6 +48,3 @@ jobs:
       - name: Run test
         run: |
           zig build test -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
-      - name: Run build
-        run: |
-          zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose

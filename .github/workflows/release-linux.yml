@@ -48,7 +48,7 @@ jobs:
           
       - name: Run build
         run: |
-          zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
+          zig build -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --release --verbose
           ls -la zig-out
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

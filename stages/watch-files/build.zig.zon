@@ -45,8 +45,12 @@
         //},
         .zzmq = .{ .path = "../../vendor/zzmq" },
         .lib_core = .{ .path = "../../lib/core" },
-        .clap = .{ .path = "../../vendor/zig-clap"},
-        .efsw = .{ .path = "../../vendor/zig-efsw" },
+        .clap = .{ .path = "../../vendor/zig-clap" },
+        .efsw = .{ 
+            .url = "git+https://github.com/ritalin/zig-efsw#2eb4924aec11f812bcbb16dae93c9a14b54d130a", 
+            .hash ="12203b4106a78176a4916e4fb52ae23641664e219e0ae97b2c2845823ac687592761",
+        },
+        // .efsw = .{ .path = "../../vendor/zig-efsw" },
     },
 
     // Specifies the set of files and directories that are included in this package.

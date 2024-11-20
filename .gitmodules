@@ -10,6 +10,4 @@
 [submodule "vendor/known-folders"]
 	path = vendor/known-folders
 	url = https://github.com/ziglibs/known-folders.git
-[submodule "vendor/zig-efsw"]
-	path = vendor/zig-efsw
-	url = https://github.com/ritalin/zig-efsw.git
+

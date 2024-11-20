@@ -252,6 +252,7 @@ const WatcherWrapper = struct {
                 .on_add = handleSourceFile,
                 .on_modified = handleSourceFile,
                 .recursive = true,
+                .mac_modified_exclude_filter = .{.finder_info = true, .inode = true},
                 .user_data = context,
             });
         }

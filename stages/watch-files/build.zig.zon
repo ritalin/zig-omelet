@@ -47,8 +47,8 @@
         .lib_core = .{ .path = "../../lib/core" },
         .clap = .{ .path = "../../vendor/zig-clap" },
         .efsw = .{
-            .url = "git+https://github.com/ritalin/zig-efsw#5e49033e4d1962cd6994c4028f4ad96ca9cda1f9",
-            .hash = "12207f5fe97a4db39ac0c3725fd9181a8a0d8f507218b440b6a9f6c83b9698004e8a",
+            .url = "git+https://github.com/ritalin/zig-efsw#90e866abda3fe118b4a47afcbe73d92b16243caa",
+            .hash = "12203313bd744ab8576094636200708d66b7524b9cb3fe3e204a3c288d1b47386117",
         },
     },
 

@@ -5,7 +5,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    log_level_err,
+    log_level_err = 1,
     log_level_warn,
     log_level_info,
     log_level_debug,
@@ -13,12 +13,12 @@ typedef enum {
 } CLogLevel;
 
 typedef enum {
-    Enum = 1, 
-    Struct, 
-    Array, 
-    Primitive, 
+    Enum = 1,
+    Struct,
+    Array,
+    Primitive,
     User,
-    Alias, 
+    Alias,
 } CUserTypeKind;
 
 const unsigned char CPostPacketKind = 1;

@@ -34,12 +34,12 @@ pub const LogLevel = enum(u8) {
 pub const LogLevelSet = std.enums.EnumSet(LogLevel);
 
 pub const UserTypeKind = enum(u8) {
-    @"enum" = c.Enum, 
-    @"struct" = c.Struct, 
-    array = c.Array, 
-    primitive = c.Primitive, 
+    @"enum" = c.Enum,
+    @"struct" = c.Struct,
+    array = c.Array,
+    primitive = c.Primitive,
     user = c.User,
-    alias = c.Alias, 
+    alias = c.Alias,
 };
 
 /// ChannelType
@@ -108,26 +108,24 @@ pub fn StructView(comptime T: type) type {
         }
     }
 
-    return std.meta.Tuple(types[0..i]);
+    return @Tuple(types[0..i]);
 }
 
 pub const TopicCategory = enum {
-    source, 
+    source,
     schema,
 };
 
 const EventPayload = struct {
     pub const Topic = struct {
-        arena: *std.heap.ArenaAllocator,
         category: TopicCategory,
-        names: []const Symbol,
-        has_more: bool,
+        name: Symbol,
 
         pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_more: bool) !@This() {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             const a = arena.allocator();
-            
+
             const new_names = try a.alloc(Symbol, names.len);
             for (names, 0..) |name, i| {
                 new_names[i] = try a.dupe(u8, name);
@@ -137,7 +135,6 @@ const EventPayload = struct {
                 .arena = arena,
                 .category = category,
                 .names = new_names,
-                .has_more = has_more,
             };
         }
         pub fn deinit(self: @This()) void {
@@ -154,7 +151,7 @@ const EventPayload = struct {
 
     pub const TopicBody = struct {
         allocator: std.mem.Allocator,
-        header: SourcePath, 
+        header: SourcePath,
         index: usize,
         bodies: []const Item,
 
@@ -163,7 +160,7 @@ const EventPayload = struct {
             for (items, 0..) |item, i| {
                 new_bodies[i] = try Item.init(allocator, item);
             }
-        
+
             return .{
                 .allocator = allocator,
                 .header = try SourcePath.init(allocator, header),
@@ -192,7 +189,7 @@ const EventPayload = struct {
             for (self.bodies, 0..) |item, i| {
                 new_bodies[i] = try Item.init(allocator, item.values());
             }
-        
+
             return .{
                 .allocator = allocator,
                 .header = try SourcePath.init(allocator, self.header.values()),
@@ -205,7 +202,7 @@ const EventPayload = struct {
         }
 
         pub const Item = struct {
-            topic: Symbol, 
+            topic: Symbol,
             content: Symbol,
 
             pub fn init(allocator: std.mem.Allocator, item: StructView(Item)) !@This() {
@@ -228,7 +225,7 @@ const EventPayload = struct {
     };
 
     pub const SkipTopicBody = struct {
-        header: SourcePath, 
+        header: SourcePath,
         index: usize,
 
         pub fn init(allocator: std.mem.Allocator, header: StructView(SourcePath), index: usize) !@This() {
@@ -251,8 +248,8 @@ const EventPayload = struct {
     pub const SourcePath = struct {
         allocator: std.mem.Allocator,
         category: TopicCategory,
-        name: Symbol, 
-        path: FilePath, 
+        name: Symbol,
+        path: FilePath,
         hash: Symbol,
         item_count: usize,
 
@@ -324,7 +321,7 @@ const EventPayload = struct {
     };
 };
 
-/// Event operation 
+/// Event operation
 pub const EventOperation = struct {
     pub const deinit = deinitEvent;
     pub const clone = cloneEvent;
@@ -342,7 +339,7 @@ pub const Event = union(EventType) {
     launched: void,
     failed_launching: void,
     request_topic: void,
-    topic: Payload.Topic,
+    topic: []const Payload.Topic,
     // Watch event
     ready_watch_path: void,
     finish_watch_path: void,
@@ -371,7 +368,6 @@ pub const Event = union(EventType) {
     pending_fatal_quit: void,
 
     pub const Payload = EventPayload;
-    pub usingnamespace EventOperation;
 };
 
 fn deinitEvent(event: Event) void {
@@ -440,7 +436,7 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
         .ready_generate => .ready_generate,
         .finish_generate => .finish_generate,
         // Worker event
-        .worker_response => |payload| .{.worker_response = try payload.clone(allocator)}, 
+        .worker_response => |payload| .{.worker_response = try payload.clone(allocator)},
         // Other events
         .quit => .quit,
         .quit_all => .quit_all,
@@ -452,7 +448,7 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
 
     std.debug.assert(event.tag() == cloned_event.tag());
 
-    return cloned_event; 
+    return cloned_event;
 }
 
 test "Clone events" {
@@ -475,8 +471,8 @@ test "Clone events" {
         break:source_path;
     }
     topic_body: {
-        const expect_event: Event = .{ .topic_body = try Event.Payload.TopicBody.init(allocator, 
-            .{.schema, "header/name", "header/path", "header/hash", 2}, 
+        const expect_event: Event = .{ .topic_body = try Event.Payload.TopicBody.init(allocator,
+            .{.schema, "header/name", "header/path", "header/hash", 2},
             &.{ .{"topic_1", "value_1"}, .{"topic_2", "value_3"}, .{"topic_99", "value_99"},  }
         ) };
         defer expect_event.deinit();
@@ -486,7 +482,7 @@ test "Clone events" {
         break:topic_body;
     }
     skip_topic_body: {
-        const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, 
+        const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator,
             .{.schema, "header/name_i", "header/path_i", "header/hash_i", 3},
             0,
         ) };
@@ -512,4 +508,4 @@ test "Clone events" {
         try std.testing.expectEqualDeep(expect_event.log.values(), event.log.values());
         break:log;
     }
-} 
+}

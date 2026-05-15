@@ -5,7 +5,7 @@ const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
 const FilePath = core_types.FilePath;
 
-const c = @import("../omelet_c/interop.zig");
+const c = @import("interop_c");
 
 pub const LogLevel = enum(u8) {
     err = c.log_level_err,
@@ -121,31 +121,14 @@ const EventPayload = struct {
         category: TopicCategory,
         name: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_more: bool) !@This() {
-            const arena = try allocator.create(std.heap.ArenaAllocator);
-            arena.* = std.heap.ArenaAllocator.init(allocator);
-            const a = arena.allocator();
-
-            const new_names = try a.alloc(Symbol, names.len);
-            for (names, 0..) |name, i| {
-                new_names[i] = try a.dupe(u8, name);
-            }
+        pub fn clone(self: @This(), buffer: *std.Io.Writer) !@This() {
+            const s = buffer.end;
+            const e = try buffer.writeAll(self.name);
 
             return .{
-                .arena = arena,
-                .category = category,
-                .names = new_names,
+                .category = self.category,
+                .name = buffer.buffer[s..e],
             };
-        }
-        pub fn deinit(self: @This()) void {
-            self.arena.deinit();
-            self.arena.child_allocator.destroy(self.arena);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.category, self.values(), self.has_more);
-        }
-        pub fn values(self: @This()) []const Symbol {
-            return self.names;
         }
     };
 

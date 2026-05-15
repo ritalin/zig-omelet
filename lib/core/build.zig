@@ -25,9 +25,15 @@ pub fn build(b: *std.Build) void {
     // const dep_clap = b.dependency("clap", .{});
     // const dep_known_folders = b.dependency("known_folders", .{});
     const dep_nnng = b.dependency("nnng", .{ .NNG_PREFIX = nng_prefix });
-    // const dep_cbor = b.dependency("cbor_stream", .{});
+    const dep_cbor = b.dependency("cbor_stream", .{});
 
     const mod_context = "lib_core";
+
+    const mod_interop_c = b.addTranslateC(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/include/omelet_c_types.h"),
+    });
 
     // const mod_cbor = lib_module_cbor: {
     //     const mod = b.addModule("cbor", .{
@@ -107,15 +113,15 @@ pub fn build(b: *std.Build) void {
             // .link_libcpp = true,
         });
 
-        // native_config: {
+        native_config: {
         //     mod.addIncludePath(b.path("../../vendor/cbor/include"));
-        //     mod.addIncludePath(b.path("src/omelet_c/include"));
-        //     break:native_config;
-        // }
+            mod.addImport("interop_c", mod_interop_c.createModule());
+            break:native_config;
+        }
         import_modules: {
             // mod.addImport("clap", dep_clap.module("clap"));
             // mod.addImport("known_folders", dep_known_folders.module("known-folders"));
-            // mod.addImport("cbor", dep_cbor.module("cbor-stream"));
+            mod.addImport("cbor", dep_cbor.module("cbor-stream"));
             mod.addImport("nnng", dep_nnng.module("nnng"));
             break:import_modules;
         }

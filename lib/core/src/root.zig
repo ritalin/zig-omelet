@@ -1,14 +1,17 @@
 const std = @import("std");
 
 pub const types = @import("./types.zig");
+pub const events = @import("./events/event_types.zig");
 
 pub const sockets = struct {
     pub const Connection = struct {
         pub const Server = @import("sockets/connections/server.zig").Server;
     };
+    pub const SendChannel = @import("./sockets/channels/SendChannel.zig");
     // .Connection = @import("./sockets/Connection.zig"),
     // .SubscribeSocket = @import("./sockets/SubscribeSocket.zig"),
 };
+
 
 // pub const Queue = @import("./Queue.zig").Queue;
 // pub const Logger = @import("./Logger.zig");

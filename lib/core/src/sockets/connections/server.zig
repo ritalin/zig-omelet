@@ -3,29 +3,49 @@ const root = @import("../../root.zig");
 const nnng = @import("nnng");
 
 const types = root.types;
+const ReceiveEntry = root.sockets.ReceiveEntry;
+const SendChannel = root.sockets.SendChannel;
+const Event = root.events.Event;
+const EventHeader = @import("../../events/event_impl.zig").EventHeader;
 
-pub fn Server(comptime stage_name: types.Symbol) type {
+const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
+
+pub fn Server(comptime stage_name: types.StageName, comptime poller_size: comptime_int) type {
 // pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
     // const Trace = Logger.TraceDirect(stage_name);
 
     return struct {
+        context: nnng.Context,
         reply_socket: nnng.Rep.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),
         pull_socket: nnng.Pull.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
         cmd_socket: nnng.Pub.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
 
         const Self = @This();
-        const EventDispatcher = root.socket.EventDispatcher(stage_name);
 
-        pub fn init(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) Self {
+        pub const EventDispatcher = root.sockets.EventDispatcher(poller_size);
+
+        pub fn create(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) !Self {
             const context = nnng.Context.init(io, allocator);
-            var reply_socket = nnng.Rep.open(context).parallel(4).as_listener(endpoints.req_rep);
+            var reply_socket = socket: {
+                const b = try nnng.Rep.open(context);
+                break:socket try b.parallel(4).as_listener(endpoints.req_rep);
+            };
             errdefer reply_socket.close();
-            var pull_socket = nnng.Pull.open(context).as_listener(endpoints.push_pull);
+
+            var pull_socket = socket: {
+                const b = try nnng.Pull.open(context);
+                break:socket try b.as_listener(endpoints.push_pull);
+            };
             errdefer pull_socket.close();
-            var cmd_socket = nnng.Pub.open(context).as_dialer(endpoints.pub_sub);
+
+            var cmd_socket = socket: {
+                const b = try nnng.Pub.open(context);
+                break:socket try b.as_dialer(endpoints.pub_sub);
+            };
             errdefer cmd_socket.close();
 
             return .{
+                .context = context,
                 .reply_socket = reply_socket,
                 .pull_socket = pull_socket,
                 .cmd_socket = cmd_socket,
@@ -39,14 +59,51 @@ pub fn Server(comptime stage_name: types.Symbol) type {
         }
 
         pub fn bind(self: *Self) !void {
-            try self.send_socket.start(.{ .nonblocking = true });
-            try self.reply_socket.start(.{});
-            try self.pull_socket.start(.{});
+            try self.cmd_socket.transport.start(.{ .nonblocking = true });
+            try self.reply_socket.transport.start(.{});
+            try self.pull_socket.transport.start(.{});
         }
 
-        fn onDispatch(dispatcher: *EventDispatcher(stage_name)) !?EventDispatcher(stage_name).Entry {
-            _ = dispatcher;
-        //     while (true) {
+        pub fn createEventDispatcher(self: *Self) !EventDispatcher {
+            var dispatcher = try EventDispatcher.create(self.context, Self.onPoll);
+            try EventDispatcher.ReceivePoller.Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
+            try EventDispatcher.ReceivePoller.Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
+
+            return dispatcher;
+        }
+
+        pub fn createCommandChannel(self: *const Self) !SendChannel {
+            return SendChannel.init(self.context.allocator, self.cmd_socket.pipe.item.sender());
+        }
+
+        fn onPoll(dispatcher: *EventDispatcher, results: []const EventDispatcher.ReceivePoller.WakeupResult) anyerror!void {
+            for (results) |result| {
+                switch (result.event) {
+                    .failed => |err| {
+                        _ = err;
+                        // TODO: error handling
+                    },
+                    .ready => |channel| {
+                        var msg = try channel.receiver().drain(.{});
+                        if (ReceiveEntry.create(dispatcher.allocator, msg, channel.features)) |entry| {
+                            try dispatcher.pushReceiveQueue(entry);
+
+                            if (channel.features.replyable) {
+                                try writeResponse(&msg, .ack);
+                                try channel.sender().submit(msg, .{});
+                            }
+                        }
+                        else |_| {
+                            // Todo: send error log
+
+                            if (channel.features.replyable) {
+                                try writeResponse(&msg, .nack);
+                                try channel.sender().submit(msg, .{});
+                            }
+                        }
+                    }
+                }
+            }
         //         while (dispatcher.receive_queue.dequeue()) |entry| {
         //             return entry;
         //         }
@@ -119,8 +176,11 @@ pub fn Server(comptime stage_name: types.Symbol) type {
         //             }
         //         }
         //     }
+        }
 
-            return null;
+        fn writeResponse(msg: *nnng.Message, event: Event) !void {
+            msg.writer.end = 0;
+            try encodeToCbor(&msg.writer, .{ .header = EventHeader.fromEvent(event), .stage_name = stage_name, .event = event });
         }
     };
 }
@@ -133,13 +193,13 @@ pub const tests = struct {
     const supports = @import("../../supports/test_support.zig");
 
     test "start connection" {
-        var tmp_dir = std.testing.tmpDir(.{});
+        var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = supports.createEndpoint(std.testing.io, std.testing.allocator, tmp_dir);
+        const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
-        
-        var conn = Server("runner").init(std.testing.io, std.testing.allocator, ep);
+
+        var conn = try Server("runner", 16).create(std.testing.io, std.testing.allocator, ep);
         defer conn.deinit();
 
         try conn.bind();

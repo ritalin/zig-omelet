@@ -8,12 +8,11 @@ pub const sockets = struct {
         pub const Server = @import("sockets/connections/server.zig").Server;
     };
     pub const SendChannel = @import("./sockets/channels/SendChannel.zig");
-    // .Connection = @import("./sockets/Connection.zig"),
-    // .SubscribeSocket = @import("./sockets/SubscribeSocket.zig"),
+    pub const ReceiveEntry = @import("./sockets/channels/ReceiveEntry.zig");
+    pub const EventDispatcher = @import("./sockets/dispatcher.zig").EventDispatcher;
 };
 
 
-// pub const Queue = @import("./Queue.zig").Queue;
 // pub const Logger = @import("./Logger.zig");
 
 // pub const CborStream = @import("./CborStream.zig");
@@ -32,6 +31,8 @@ pub const sockets = struct {
 
 // pub const DebugEndPoint = @import("./builder_supports/DebugEndpoint.zig");
 
-// test "All tests" {
-//     std.ArrayHashMapUnmanaged(comptime K: type, comptime V: type, comptime Context: type, comptime store_hash: bool)testing.refAllDecls(@This());
-// }
+test "All tests" {
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(sockets);
+    std.testing.refAllDecls(sockets.Connection);
+}

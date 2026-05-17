@@ -268,6 +268,47 @@ pub const server_dispatch_tests = struct {
         try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
     test "receive event by REP" {
+        var tmp_dir = try supports.createTmpDir();
+        defer tmp_dir.cleanup();
 
+        const ep = try supports.createEndpoint(tmp_dir.dir);
+        defer supports.releaseEndpoint(std.testing.allocator, ep);
+
+        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer conn.deinit();
+        try conn.bind();
+
+        var dispatcher = try conn.createEventDispatcher();
+        defer dispatcher.deinit();
+
+        var push_socket = socket: {
+            const b = try nnng.Req.open(conn.context);
+            break:socket try b.as_dialer(ep.req_rep);
+        };
+        try push_socket.transport.start(.{ .nonblocking = true });
+        defer push_socket.close();
+
+        const pipe = push_socket.pipe.item;
+        send_event: {
+            var msg = try nnng.Message.create();
+            try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
+            try pipe.sender().submit(msg, .{});
+            break:send_event;
+        }
+
+        try std.testing.expectEqual(.booting, dispatcher.phase);
+
+        try dispatcher.run(struct {
+            pub fn on_dispatch(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
+                switch (entry.event) {
+                    .quit => {
+                        d.phase = .quitting;
+                    },
+                    else => unreachable,
+                }
+            }
+        }.on_dispatch);
+
+        try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
 };

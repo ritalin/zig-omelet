@@ -17,11 +17,13 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
         const Self = @This();
 
         pub const ReceivePoller = nnng.ReceivePoller(poller_size);
-        pub const PollFn = *const fn (dispatcher: *Self, results: []const ReceivePoller.WakeupResult) anyerror!void;
+        pub const PollFn = *const fn (dispatcher: *Self, results: []const nnng.PollEvent) anyerror!void;
         pub const DispatchFn = *const fn (dispatcher: *Self, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
 
         pub const Phase = enum { booting, request, ready, terminating, quitting };
         pub const DirtyState = enum { none, skipped };
+
+        // TODO:
         // pub const Phase = struct {
         //     level: std.enums.EnumFieldStruct(enum {booting, request, ready, terminating, quitting, done}, bool, false),
 
@@ -211,17 +213,39 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
     };
 }
 
+pub const Queue = struct {
+    
+};
+
 test "dispatcher test" {
     std.testing.refAllDecls(@This());
 }
 
-pub const server_dispatch_tests = struct {
+pub const tests = struct {
     const supports = @import("../supports/test_support.zig");
     const encodeToCbor = @import("../events/encoder.zig").encodeToCbor;
 
     const ReceiveEntry = root.sockets.ReceiveEntry;
     const ServerConnection = root.sockets.Connection.Server("runner", 8);
     const Dispatcher = ServerConnection.EventDispatcher;
+
+    fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
+        switch (entry.event) {
+            .quit => {
+                d.phase = .quitting;
+            },
+            else => unreachable,
+        }
+    }
+
+    fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
+        switch (entry.event) {
+            .request_quit => {
+                d.phase = .quitting;
+            },
+            else => unreachable,
+        }
+    }
 
     test "pull event by PULL" {
         var tmp_dir = try supports.createTmpDir();
@@ -254,19 +278,11 @@ pub const server_dispatch_tests = struct {
 
         try std.testing.expectEqual(.booting, dispatcher.phase);
 
-        try dispatcher.run(struct {
-            pub fn on_dispatch(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
-                switch (entry.event) {
-                    .quit => {
-                        d.phase = .quitting;
-                    },
-                    else => unreachable,
-                }
-            }
-        }.on_dispatch);
+        try dispatcher.run(serverHandler);
 
         try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
+
     test "receive event by REP" {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
@@ -298,17 +314,77 @@ pub const server_dispatch_tests = struct {
 
         try std.testing.expectEqual(.booting, dispatcher.phase);
 
-        try dispatcher.run(struct {
-            pub fn on_dispatch(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
-                switch (entry.event) {
-                    .quit => {
-                        d.phase = .quitting;
-                    },
-                    else => unreachable,
-                }
-            }
-        }.on_dispatch);
+        try dispatcher.run(serverHandler);
 
         try std.testing.expectEqual(.quitting, dispatcher.phase);
+    }
+
+    test "receive event by SUB" {
+        var tmp_dir = try supports.createTmpDir();
+        defer tmp_dir.cleanup();
+
+        const ep = try supports.createEndpoint(tmp_dir.dir);
+        defer supports.releaseEndpoint(std.testing.allocator, ep);
+
+        var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer guest.deinit();
+        guest.subscribe(&.{ .request_quit });
+        try guest.bind();
+
+        var dispatcher = try guest.createEventDispatcher();
+        defer dispatcher.deinit();
+
+        var pub_socket = socket: {
+            const b = try nnng.Pub.open(conn.context);
+            break:socket try b.as_dialer(ep.pub_sub);
+        };
+        try pub_socket.transport.start(.{ .nonblocking = true });
+        defer pub_socket.close();
+
+        var msg = try nnng.Message.create();
+        send_event: {
+            try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .request_quit });
+            try pipe.sender().submit(msg, .{});
+            break:send_event;
+        }
+
+        try std.testing.expectEqual(.booting, dispatcher.phase);
+
+        try dispatcher.run(clientHandler);
+
+        try std.testing.expectEqual(.quitting, dispatcher.phase);
+    }
+
+    test "Host/Guest communication" {
+        var tmp_dir = try supports.createTmpDir();
+        defer tmp_dir.cleanup();
+
+        const ep = try supports.createEndpoint(tmp_dir.dir);
+        defer supports.releaseEndpoint(std.testing.allocator, ep);
+
+        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer host.deinit();
+        try host.bind();
+
+        var host_dispatcher = try host.createEventDispatcher();
+        defer host_dispatcher.deinit();
+
+        var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer guest.deinit();
+        guest.subscribe(&.{ .request_quit });
+        try guest.bind();
+
+        var guest_dispatcher = try guest.createEventDispatcher();
+        defer guest_dispatcher.deinit();
+
+        publisg_event: {
+            var cmd = try host.createCommandChannel();
+            cmd.encode(.request_quit);
+            host_dispatcher.post(cmd);
+            break:publisg_event;
+        }
+
+        var g: std.Io.Group = .init;
+        g.concurrent(std.testing.io, Dispatcher.run, .{ host_dispatcher })
     }
 };

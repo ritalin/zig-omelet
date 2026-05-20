@@ -9,13 +9,14 @@ const decodeFromCbor = @import("../../events/decoder.zig").decodeFromCbor;
 
 event: Event,
 from_state: StageName,
+to_stage: StageName,
 buffer: []const u8,
 msg: nnng.Message,
 features: nnng.Pipe.Features,
 
 const Self = @This();
 
-pub fn create(allocator: std.mem.Allocator, msg: nnng.Message, features: nnng.Pipe.Features) !Self {
+pub fn create(allocator: std.mem.Allocator, stage_name: StageName, msg: nnng.Message, features: nnng.Pipe.Features) !Self {
     const buffer = if (features.replyable) try allocator.dupe(u8, msg.bytes()) else msg.bytes();
     errdefer if (features.replyable) allocator.free(buffer);
 
@@ -24,6 +25,7 @@ pub fn create(allocator: std.mem.Allocator, msg: nnng.Message, features: nnng.Pi
     return .{
         .event = packet.event,
         .from_state = packet.stage_name,
+        .to_stage = stage_name,
         .buffer = buffer,
         .msg = msg,
         .features = features,

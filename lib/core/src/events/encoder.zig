@@ -18,12 +18,22 @@ pub fn encodeToCbor(writer: *std.Io.Writer, packet: EventPacket) !void {
     defer cbor_writer.deinit();
 
     // TODO: needs to write EventHeader variant
-    _ = try cbor_writer.writeEnum(EventType, std.meta.activeTag(packet.header));
+    _ = try cbor_writer.writeString(@tagName(packet.header));
     _ = try cbor_writer.writeString(packet.stage_name);
 
     try encodePayload(&cbor_writer, packet.event);
 
     try writer.flush();
+}
+
+pub fn encodeSubscription(writer: *std.Io.Writer, subscription: EventHeader) !types.Symbol {
+    writer.end = 0;
+
+    var cbor_writer = try CborStream.Writer.init(writer);
+    defer cbor_writer.deinit();
+
+    const size = try cbor_writer.writeString(@tagName(subscription));
+    return writer.buffer[0..size];
 }
 
 fn encodePayload(writer: *CborStream.Writer, event: Event) !void {

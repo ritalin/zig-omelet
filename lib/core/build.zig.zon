@@ -12,12 +12,12 @@
             .hash = "known_folders-0.0.0-Fy-PJsbKAACbDh9bBxR0MMThxZSS6A9RH4apWphNHY70",
         },
         .cbor_stream = .{
-            .url = "git+https://github.com/ritalin/zig-cbor-stream.git#d34fd399f5fe47059c11ee36ffef62b2522f518f",
-            .hash = "zig_cbor_stream-0.2.2-mwaJWJvKAAD7IMawaO2n0aAlA4wn2521TAOuhO_8cYSo",
+            .url = "git+https://github.com/ritalin/zig-cbor-stream.git#cd8306ed0744a8b88f9bc6827eefe6d69f92efe2",
+            .hash = "zig_cbor_stream-0.2.4-mwaJWP7JAAByxLuKNHQbrW9BErji683Ft_oRML5tfxX7",
         },
         .nnng = .{
-            .url = "git+https://github.com/ritalin/nnng.git#7b2a68ce3802cf6495b17c548eb14d9398abb2b5",
-            .hash = "nnng-0.1.2-paXK8t-bAgA0LAivqilL-hdQNgiBayNQug1mumhGzedm",
+            .url = "git+https://github.com/ritalin/nnng.git#50255f54becd2dcbc839bdf145895d4c9ccf6eda",
+            .hash = "nnng-0.1.8-paXK8u7IAgDbDSEGm-Q4HriIPRrKa5Y1n-nl2fBxvPCB",
         },
     },
     .paths = .{

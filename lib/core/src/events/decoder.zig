@@ -18,7 +18,7 @@ pub fn decodeFromCbor(allocator: std.mem.Allocator, data: []const u8) !EventPack
 }
 
 pub fn decodeFromCborInternal(allocator: std.mem.Allocator, reader: *CborStream.Reader) !EventPacket {
-    const header = try reader.readEnum(EventType);
+    const header = std.meta.stringToEnum(EventType, try reader.readString()).?;
     const stage = try reader.readString();
     const event = try decodeEventInternal(allocator, header, reader);
 

@@ -69,10 +69,10 @@ pub const EventHeader = union(EventType) {
     report_fatal,
     pending_fatal_quit,
 
-    pub const fromEvent = HeaderFromEvent;
+    pub const fromEvent = headerFromEvent;
 };
 
-fn HeaderFromEvent(tag: EventType) EventHeader {
+fn headerFromEvent(tag: EventType) EventHeader {
     inline for (std.meta.fields(Event)) |f| {
         if (@field(EventHeader, f.name) == tag) {
             return @unionInit(EventHeader, f.name, {});

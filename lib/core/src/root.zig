@@ -6,18 +6,15 @@ pub const events = @import("./events/event_types.zig");
 pub const sockets = struct {
     pub const Connection = struct {
         pub const Server = @import("sockets/connections/server.zig").Server;
+        pub const Client = @import("sockets/connections/client.zig").Client;
     };
     pub const SendChannel = @import("./sockets/channels/SendChannel.zig");
     pub const ReceiveEntry = @import("./sockets/channels/ReceiveEntry.zig");
-    pub const EventDispatcher = @import("./sockets/dispatcher.zig").EventDispatcher;
+    pub const EventDispatcher = @import("./sockets/Dispatcher.zig");
 };
 
-
+// TODO:
 // pub const Logger = @import("./Logger.zig");
-
-// pub const CborStream = @import("./CborStream.zig");
-
-// pub usingnamespace @import("./events/events.zig");
 
 // pub const settings = struct {
 //     pub usingnamespace @import("./settings/types.zig");

@@ -6,11 +6,12 @@ const types = root.types;
 const ReceiveEntry = root.sockets.ReceiveEntry;
 const SendChannel = root.sockets.SendChannel;
 const Event = root.events.Event;
-const EventHeader = @import("../../events/event_impl.zig").EventHeader;
+const EventHeader = root.events.EventHeader;
+const EventDispatcher = root.sockets.EventDispatcher;
 
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 
-pub fn Server(comptime stage_name: types.StageName, comptime poller_size: comptime_int) type {
+pub fn Server(comptime stage_name: types.StageName) type {
 // pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
     // const Trace = Logger.TraceDirect(stage_name);
 
@@ -22,27 +23,30 @@ pub fn Server(comptime stage_name: types.StageName, comptime poller_size: compti
 
         const Self = @This();
 
-        pub const EventDispatcher = root.sockets.EventDispatcher(poller_size);
-
         pub fn create(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) !Self {
-            const context = nnng.Context.init(io, allocator);
-            var reply_socket = socket: {
-                const b = try nnng.Rep.open(context);
-                break:socket try b.parallel(4).as_listener(endpoints.req_rep);
-            };
-            errdefer reply_socket.close();
+            var parallel_limit = try std.Thread.getCpuCount() - 1; // std.io.Threaded default value
 
+            const context = nnng.Context.init(io, allocator);
+    
             var pull_socket = socket: {
                 const b = try nnng.Pull.open(context);
                 break:socket try b.as_listener(endpoints.push_pull);
             };
             errdefer pull_socket.close();
+            parallel_limit -= 1;
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
                 break:socket try b.as_dialer(endpoints.pub_sub);
             };
             errdefer cmd_socket.close();
+            parallel_limit -= 1;
+
+            var reply_socket = socket: {
+                const b = try nnng.Rep.open(context);
+                break:socket try b.parallel(parallel_limit).as_listener(endpoints.req_rep);
+            };
+            errdefer reply_socket.close();
 
             return .{
                 .context = context,
@@ -64,29 +68,29 @@ pub fn Server(comptime stage_name: types.StageName, comptime poller_size: compti
             try self.pull_socket.transport.start(.{});
         }
 
-        pub fn createEventDispatcher(self: *Self) !EventDispatcher {
-            var dispatcher = try EventDispatcher.create(self.context, Self.onPoll);
-            try EventDispatcher.ReceivePoller.Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
-            try EventDispatcher.ReceivePoller.Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
+        pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int) !EventDispatcher.Sized(poller_size) {
+            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll);
+            try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
+            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
 
             return dispatcher;
         }
 
         pub fn createCommandChannel(self: *const Self) !SendChannel {
-            return SendChannel.init(self.context.allocator, self.cmd_socket.pipe.item.sender());
+            return SendChannel.init(self.context.allocator, stage_name, self.cmd_socket.pipe.item.sender());
         }
 
-        fn onPoll(dispatcher: *EventDispatcher, results: []const EventDispatcher.ReceivePoller.WakeupResult) anyerror!void {
+        fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
             for (results) |result| {
-                switch (result.event) {
+                switch (result) {
                     .failed => |err| {
                         _ = err;
                         // TODO: error handling
                     },
                     .ready => |channel| {
                         var msg = try channel.receiver().drain(.{});
-                        if (ReceiveEntry.create(dispatcher.allocator, msg, channel.features)) |entry| {
-                            try dispatcher.pushReceiveQueue(entry);
+                        if (ReceiveEntry.create(queue.allocator, stage_name, msg, channel.features)) |entry| {
+                            try queue.pushReceiveQueue(entry);
 
                             if (channel.features.replyable) {
                                 try writeResponse(&msg, .ack);
@@ -199,7 +203,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var conn = try Server("runner", 16).create(std.testing.io, std.testing.allocator, ep);
+        var conn = try Server("runner").create(std.testing.io, std.testing.allocator, ep);
         defer conn.deinit();
 
         try conn.bind();

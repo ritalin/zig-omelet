@@ -10,13 +10,18 @@
         system:
         let
             pkgs = nixpkgs.legacyPackages.${system};
+            nng-static = pkgs.nng.overrideAttrs (old: {
+              cmakeFlags =
+                (old.cmakeFlags or [])
+                ++ [ "-DBUILD_SHARED_LIBS=OFF" ];
+            });
         in {
             devShells.default = pkgs.mkShell {
               buildInputs = [
                 pkgs.zsh
                 pkgs.starship
                 pkgs.bintools
-                pkgs.nng
+                nng-static
               ];
               shellHook = ''
                 export NNG_PREFIX=${pkgs.nng}

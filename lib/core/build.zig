@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     ;
 
     // const dep_clap = b.dependency("clap", .{});
-    // const dep_known_folders = b.dependency("known_folders", .{});
+    const dep_known_folders = b.dependency("known_folders", .{});
     const dep_nnng = b.dependency("nnng", .{ .NNG_PREFIX = nng_prefix });
     const dep_cbor = b.dependency("cbor_stream", .{});
 
@@ -120,7 +120,7 @@ pub fn build(b: *std.Build) void {
         }
         import_modules: {
             // mod.addImport("clap", dep_clap.module("clap"));
-            // mod.addImport("known_folders", dep_known_folders.module("known-folders"));
+            mod.addImport("known_folders", dep_known_folders.module("known-folders"));
             mod.addImport("cbor", dep_cbor.module("cbor-stream"));
             mod.addImport("nnng", dep_nnng.module("nnng"));
             break:import_modules;
@@ -133,7 +133,9 @@ pub fn build(b: *std.Build) void {
             .name = "test-lib-core",
             .root_module = mod_core,
         });
+        mod_unit_tests.use_llvm = true;
 
+        // TODO:
         // native_config: {
         //     mod_unit_tests.addIncludePath(b.path("../../vendor/cbor/include"));
         //     mod_unit_tests.addIncludePath(b.path("src/omelet_c/include"));

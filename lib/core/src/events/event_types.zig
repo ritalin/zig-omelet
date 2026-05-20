@@ -88,6 +88,9 @@ pub const EventType = enum (u8) {
     report_fatal,
     pending_fatal_quit,
 };
+
+pub const EventHeader = @import("./event_impl.zig").EventHeader;
+
 /// Event type options
 pub const EventTypes = std.enums.EnumFieldStruct(EventType, bool, false);
 pub const EventTypeSet = std.enums.EnumSet(EventType);

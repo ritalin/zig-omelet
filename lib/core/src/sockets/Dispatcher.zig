@@ -5,21 +5,21 @@ const root = @import("../root.zig");
 const types = root.types;
 const sockets = root.sockets;
 
-pub fn EventDispatcher(comptime poller_size: comptime_int) type {
+const EventDispatcher = @This();
+
+pub fn Sized(comptime poller_size: comptime_int) type {
     return struct {
-        allocator: std.mem.Allocator,
-        send_queue: std.Deque(sockets.SendChannel),
-        receive_queue: std.Deque(sockets.ReceiveEntry),
+        queue: Queue,
         poller: ReceivePoller,
         phase: Phase,
         on_poll: PollFn,
+        on_quit: ?QuitHandler = null,
 
         const Self = @This();
+        const ReceivePoller = nnng.ReceivePoller(poller_size);
 
-        pub const ReceivePoller = nnng.ReceivePoller(poller_size);
-        pub const PollFn = *const fn (dispatcher: *Self, results: []const nnng.PollEvent) anyerror!void;
         pub const DispatchFn = *const fn (dispatcher: *Self, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
-
+        pub const PollFn = *const fn (queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void;
         pub const Phase = enum { booting, request, ready, terminating, quitting };
         pub const DirtyState = enum { none, skipped };
 
@@ -53,9 +53,11 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
             // }
 
             return .{
-                .allocator = context.allocator,
-                .send_queue = .empty,
-                .receive_queue = .empty,
+                .queue = .{
+                    .allocator = context.allocator,
+                    .send_queue = .empty,
+                    .receive_queue = .empty,
+                },
                 .poller = try ReceivePoller.create(context),
                 .phase = .booting,
                 .on_poll = on_poll,
@@ -63,57 +65,52 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.send_queue.deinit(self.allocator);
-            self.receive_queue.deinit(self.allocator);
+            self.queue.send_queue.deinit(self.queue.allocator);
+            self.queue.receive_queue.deinit(self.queue.allocator);
             self.poller.deinit();
         }
 
         pub fn run(self: *Self, on_dispatch: DispatchFn) !void {
             while (true) {
                 var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
-                defer skip_entries.deinit(self.allocator);
+                defer skip_entries.deinit(self.queue.allocator);
 
-                while (self.receive_queue.popFront()) |e| {
+                while (self.queue.receive_queue.popFront()) |e| {
                     var entry = e;
                     var dirty: Self.DirtyState = .none;
                     try on_dispatch(self, entry, &dirty);
 
                     switch (dirty) {
                         .none => {
-                            entry.deinit(self.allocator);
-
-                            if (entry.features.last_msg_owner) {
-                            }
+                            entry.deinit(self.queue.allocator);
                         },
                         .skipped => {
-                            try skip_entries.append(self.allocator, entry);
+                            try skip_entries.append(self.queue.allocator, entry);
                         }
                     }
                 }
                 if (self.phase == .quitting) {
+                    if (self.on_quit) |q| {
+                        try (q.handler)(q.ptr);
+                    }
                     break;
                 }
 
-                // TODO: send event
+                while (self.queue.send_queue.popFront()) |channel| {
+                    try channel.sender.submit(channel.msg, .{ .flags = .{.nonblocking = true} });
+                }
 
                 _ = try self.poller.poll(Self.doPoll);
-                try self.receive_queue.pushBackSlice(self.allocator, skip_entries.items);
+                try self.queue.entrySkipped(skip_entries.items);
             }
         }
 
-        fn doPoll(poller: *ReceivePoller, results: []const Self.ReceivePoller.WakeupResult) !void {
+        fn doPoll(poller: *ReceivePoller, results: []const nnng.PollEvent) !void {
             const self: *Self = @fieldParentPtr("poller", poller);
-            try (self.on_poll)(self, results);
+            try (self.on_poll)(&self.queue, results);
         }
 
-        pub fn post(self: *Self, channel: sockets.SendChannel) !void {
-            try self.send_queue.pushBack(self.allocator, channel);
-        }
-
-        pub fn pushReceiveQueue(self: *Self, entry: sockets.ReceiveEntry) !void {
-            try self.receive_queue.pushBack(self.allocator, entry);
-        }
-
+        // TODO:
         // pub fn reply(self: *Self, socket: *zmq.ZSocket, event: events.Event, routing_id: ?types.Symbol) !void {
         //     try self.send_queue.prepend(.{
         //         .allocator = self.allocator,
@@ -135,10 +132,6 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
         //         .routing_id = if (routing_id) |x| try self.allocator.dupe(u8, x) else null,
         //     });
         // }
-
-        pub fn postPriority(self: *Self, channel: sockets.SendChannel) !void {
-            try self.send_queue.pushFront(self.allocator, channel);
-        }
 
         // pub fn postFatal(self: *Self, stack_trace: ?*std.builtin.StackTrace) !void {
         //     const message = err_message: {
@@ -213,8 +206,31 @@ pub fn EventDispatcher(comptime poller_size: comptime_int) type {
     };
 }
 
+pub const QuitHandler = struct {
+    ptr: *anyopaque,
+    handler: *const fn (ptr: *anyopaque) anyerror!void,
+};
+
 pub const Queue = struct {
-    
+    allocator: std.mem.Allocator,
+    send_queue: std.Deque(sockets.SendChannel),
+    receive_queue: std.Deque(sockets.ReceiveEntry),
+
+    pub fn post(self: *Queue, channel: sockets.SendChannel) !void {
+        try self.send_queue.pushBack(self.allocator, channel);
+    }
+
+    pub fn pushReceiveQueue(self: *Queue, entry: sockets.ReceiveEntry) !void {
+        try self.receive_queue.pushBack(self.allocator, entry);
+    }
+
+    pub fn postPriority(self: *Queue, channel: sockets.SendChannel) !void {
+        try self.send_queue.pushFront(self.allocator, channel);
+    }
+
+    pub fn entrySkipped(self: *Queue, entries: []const sockets.ReceiveEntry) !void {
+        try self.receive_queue.pushBackSlice(self.allocator, entries);
+    }
 };
 
 test "dispatcher test" {
@@ -226,8 +242,9 @@ pub const tests = struct {
     const encodeToCbor = @import("../events/encoder.zig").encodeToCbor;
 
     const ReceiveEntry = root.sockets.ReceiveEntry;
-    const ServerConnection = root.sockets.Connection.Server("runner", 8);
-    const Dispatcher = ServerConnection.EventDispatcher;
+    const ServerConnection = root.sockets.Connection.Server("runner");
+    const ClientConnection = root.sockets.Connection.Client("stage");
+    const Dispatcher = EventDispatcher.Sized(8);
 
     fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
         switch (entry.event) {
@@ -240,11 +257,30 @@ pub const tests = struct {
 
     fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
         switch (entry.event) {
-            .request_quit => {
+            .quit_all => {
                 d.phase = .quitting;
             },
             else => unreachable,
         }
+    }
+
+    fn runConcurrent(group: *std.Io.Group, host_dispatcher: *Dispatcher, guest_dispatcher: *Dispatcher) (std.Io.ConcurrentError || std.Io.Cancelable)!void {
+        const Runnable = struct {
+            d: *Dispatcher,
+            callback: Dispatcher.DispatchFn,
+
+            fn run(self: *const @This()) void {
+                self.d.run(self.callback) catch |err| {
+                    const msg = std.fmt.allocPrint(std.testing.allocator, "Unhandled dispatch error: {}", .{err}) catch @panic("OOM");
+                    defer std.testing.allocator.free(msg);
+                    @panic(msg);
+                };
+            }
+        };
+
+        try group.concurrent(std.testing.io, Runnable.run, .{ &Runnable{ .d = host_dispatcher, .callback = serverHandler } });
+        try group.concurrent(std.testing.io, Runnable.run, .{ &Runnable{ .d = guest_dispatcher, .callback = clientHandler } });
+        return group.await(std.testing.io);
     }
 
     test "pull event by PULL" {
@@ -258,7 +294,7 @@ pub const tests = struct {
         defer conn.deinit();
         try conn.bind();
 
-        var dispatcher = try conn.createEventDispatcher();
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8);
         defer dispatcher.deinit();
 
         var push_socket = socket: {
@@ -294,7 +330,7 @@ pub const tests = struct {
         defer conn.deinit();
         try conn.bind();
 
-        var dispatcher = try conn.createEventDispatcher();
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8);
         defer dispatcher.deinit();
 
         var push_socket = socket: {
@@ -326,25 +362,30 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
+        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer host.deinit();
+
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer guest.deinit();
-        guest.subscribe(&.{ .request_quit });
-        try guest.bind();
+        try guest.subscribe(&.{ .quit_all });
 
-        var dispatcher = try guest.createEventDispatcher();
+        var subscriptions: std.ArrayListUnmanaged(types.Symbol) = .empty;
+        defer subscriptions.deinit(std.testing.allocator);
+        var view = guest.cmd_socket.subscriptionView();
+        // try view.enableWildcard();
+        try view.extractScopeSubscriptions(std.testing.allocator, &subscriptions);
+
+        try guest.cmd_socket.transport.start(.{});
+        try host.cmd_socket.transport.start(.{});
+
+        var dispatcher: Dispatcher = try guest.configureDispatcher(8);
         defer dispatcher.deinit();
-
-        var pub_socket = socket: {
-            const b = try nnng.Pub.open(conn.context);
-            break:socket try b.as_dialer(ep.pub_sub);
-        };
-        try pub_socket.transport.start(.{ .nonblocking = true });
-        defer pub_socket.close();
+        dispatcher.on_quit = null;
 
         var msg = try nnng.Message.create();
         send_event: {
-            try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .request_quit });
-            try pipe.sender().submit(msg, .{});
+            try encodeToCbor(&msg.writer, .{ .header = .quit_all, .stage_name = "test-stage", .event = .quit_all });
+            try host.cmd_socket.pipe.item.sender().submit(msg, .{});
             break:send_event;
         }
 
@@ -364,27 +405,40 @@ pub const tests = struct {
 
         var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
         defer host.deinit();
-        try host.bind();
-
-        var host_dispatcher = try host.createEventDispatcher();
-        defer host_dispatcher.deinit();
 
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer guest.deinit();
-        guest.subscribe(&.{ .request_quit });
-        try guest.bind();
+        try guest.subscribe(&.{ .quit_all });
 
-        var guest_dispatcher = try guest.createEventDispatcher();
+        // listeners
+        try guest.cmd_socket.transport.start(.{});
+        try host.pull_socket.transport.start(.{});
+        try host.reply_socket.transport.start(.{});
+        // dialers
+        try guest.push_socket.transport.start(.{});
+        try guest.req_socket.transport.start(.{});
+        try host.cmd_socket.transport.start(.{});
+
+        var host_dispatcher: Dispatcher = try host.configureDispatcher(8);
+        defer host_dispatcher.deinit();
+
+        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8);
         defer guest_dispatcher.deinit();
 
         publisg_event: {
             var cmd = try host.createCommandChannel();
-            cmd.encode(.request_quit);
-            host_dispatcher.post(cmd);
+            try cmd.encode(.quit_all);
+            try host_dispatcher.queue.post(cmd);
             break:publisg_event;
         }
 
+        try std.testing.expectEqual(.booting, host_dispatcher.phase);
+        try std.testing.expectEqual(.booting, guest_dispatcher.phase);
+
         var g: std.Io.Group = .init;
-        g.concurrent(std.testing.io, Dispatcher.run, .{ host_dispatcher })
+        try runConcurrent(&g, &host_dispatcher, &guest_dispatcher);
+
+        try std.testing.expectEqual(.quitting, host_dispatcher.phase);
+        try std.testing.expectEqual(.quitting, guest_dispatcher.phase);
     }
 };

@@ -37,6 +37,7 @@ pub const EventHeader = union(EventType) {
     ack,
     nack,
     // Boot events
+    launching,
     launched,
     failed_launching,
     request_topic,

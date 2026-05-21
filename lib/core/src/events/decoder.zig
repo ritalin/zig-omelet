@@ -35,6 +35,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .ack => return .ack,
         .nack => return .nack,
         // Boot events
+        .launching => return .launching,
         .launched => return .launched,
         .failed_launching => return .failed_launching,
         .request_topic => return .request_topic,
@@ -157,6 +158,7 @@ pub const tests = struct {
 
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.nack), .stage_name = test_context, .event = .nack });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launching), .stage_name = test_context, .event = .launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launched), .stage_name = test_context, .event = .launched });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.failed_launching), .stage_name = test_context, .event = .failed_launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.request_topic), .stage_name = test_context, .event = .request_topic });
@@ -200,6 +202,15 @@ pub const tests = struct {
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.nack);
             break:nack;
+        }
+        launching: {
+            const packet = try decodeFromCborInternal(allocator, &reader);
+            defer packet.event.deinit(allocator);
+            try std.testing.expectEqual(.launching, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.launching);
+            try std.testing.expectEqualStrings(test_context, packet.stage_name);
+            try std.testing.expectEqualDeep({}, packet.event.launching);
+            break:launching;
         }
         launched: {
             const packet = try decodeFromCborInternal(allocator, &reader);

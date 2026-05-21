@@ -32,6 +32,19 @@ pub fn create(allocator: std.mem.Allocator, stage_name: StageName, msg: nnng.Mes
     };
 }
 
+pub fn booting(stage_name: StageName) !Self {
+    const msg = try nnng.Message.withCapacity(0);
+
+    return .{
+        .event = .launching,
+        .from_state = stage_name,
+        .to_stage = stage_name,
+        .buffer = &.{},
+        .msg = msg,
+        .features = .{ .last_msg_owner = true },
+    };
+}
+
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     if (self.features.last_msg_owner) {
         self.msg.deinit();

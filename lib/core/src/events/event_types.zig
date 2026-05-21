@@ -56,6 +56,7 @@ pub const EventType = enum (u8) {
     ack = 1,
     nack,
     // Boot events
+    launching,
     launched,
     failed_launching,
     request_topic,
@@ -290,6 +291,7 @@ pub const Event = union(EventType) {
     ack: void,
     nack: void,
     // Boot events
+    launching,
     launched: void,
     failed_launching: void,
     request_topic: void,
@@ -332,6 +334,7 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .ack => {},
         .nack => {},
         // Boot events
+        .launching => {},
         .launched => {},
         .failed_launching => {},
         .request_topic => {},

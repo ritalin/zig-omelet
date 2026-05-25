@@ -17,32 +17,28 @@ pub fn Client(comptime stage_name: types.StageName) type {
         context: nnng.Context,
         req_socket: nnng.Req.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
         push_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
-        cmd_socket: nnng.Sub.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),
+        cmd_socket: nnng.Sub.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
         // cmd_socket: nnng.Sub.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
 
         const Self = @This();
 
         pub fn create(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) !Self {
-            var parallel_limit = try std.Thread.getCpuCount() - 1; // std.io.Threaded default value
-
             const context = nnng.Context.init(io, allocator);
             var req_socket = socket: {
                 const b = try nnng.Req.open(context);
                 break:socket try b.as_dialer(endpoints.req_rep);
             };
             errdefer req_socket.close();
-            parallel_limit -= 1;
 
             var push_socket = socket: {
                 const b = try nnng.Push.open(context);
                 break:socket try b.as_dialer(endpoints.push_pull);
             };
             errdefer push_socket.close();
-            parallel_limit -= 1;
 
             var cmd_socket = socket: {
                 const b = try nnng.Sub.open(context);
-                break:socket try b.parallel(parallel_limit).as_listener(endpoints.pub_sub);
+                break:socket try b.as_listener(endpoints.pub_sub);
                 // break:socket try b.as_listener(endpoints.pub_sub);
             };
             errdefer cmd_socket.close();
@@ -69,13 +65,15 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
         pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int) !EventDispatcher.Sized(poller_size) {
             var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll);
-            try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.cmd_socket.pipe);
-            // try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe);
+            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe);
 
             dispatcher.on_quit = .{
                 .ptr = self,
                 .handler = Self.doQuit,
             };
+
+            const bootEntry = try ReceiveEntry.booting(stage_name);
+            try dispatcher.queue.pushReceiveQueue(bootEntry);
 
             return dispatcher;
         }
@@ -90,6 +88,10 @@ pub fn Client(comptime stage_name: types.StageName) type {
                 const bytes = try encodeSubscription(&buffer.writer, subscription);
                 try view.subscribe(bytes);
             }
+        }
+
+        pub fn requestChannel(self: *const Self) !SendChannel {
+            return SendChannel.init(self.context.allocator, stage_name, self.req_socket.pipe.item.sender());
         }
 
         fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
@@ -115,13 +117,19 @@ pub fn Client(comptime stage_name: types.StageName) type {
         fn doQuit(ptr: *anyopaque) anyerror!void {
             const self: *Self = @ptrCast(@alignCast(ptr));
 
-            var pipe = self.req_socket.pipe.item;
-            var msg = try nnng.Message.create();
-            try writeEvent(&msg, .quit);
-            try pipe.sender().submit(msg, .{});
+            var rpc = try nnng.Rpc.create();
+            if (rpc.msg) |*msg| {
+                try writeEvent(msg, .quit);
+            }
+            var f = rpc.submit(self.context.io, self.req_socket.pipe.item.sender(), self.req_socket.pipe.item.receiver());
+            try f.await(self.context.io);
+            // var pipe = self.req_socket.pipe.item;
+            // var msg = try nnng.Message.create();
+            // try writeEvent(&msg, .quit);
+            // try pipe.sender().submit(msg, .{});
 
-            msg = try pipe.receiver().drain(.{});
-            defer msg.deinit();
+            // msg = try pipe.receiver().drain(.{});
+            // defer msg.deinit();
         }
 
         fn writeEvent(msg: *nnng.Message, event: Event) !void {

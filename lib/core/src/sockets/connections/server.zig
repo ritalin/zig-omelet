@@ -27,7 +27,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             var parallel_limit = try std.Thread.getCpuCount() - 1; // std.io.Threaded default value
 
             const context = nnng.Context.init(io, allocator);
-    
+
             var pull_socket = socket: {
                 const b = try nnng.Pull.open(context);
                 break:socket try b.as_listener(endpoints.push_pull);
@@ -76,7 +76,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             return dispatcher;
         }
 
-        pub fn createCommandChannel(self: *const Self) !SendChannel {
+        pub fn commandChannel(self: *const Self) !SendChannel {
             return SendChannel.init(self.context.allocator, stage_name, self.cmd_socket.pipe.item.sender());
         }
 

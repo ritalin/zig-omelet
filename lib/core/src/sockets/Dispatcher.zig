@@ -20,8 +20,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
 
         pub const DispatchFn = *const fn (dispatcher: *Self, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
         pub const PollFn = *const fn (queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void;
-        pub const Phase = enum { booting, request, ready, terminating, quitting };
-        pub const DirtyState = enum { none, skipped };
 
         // TODO:
         // pub const Phase = struct {
@@ -45,13 +43,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         // };
 
         pub fn create(context: nnng.Context, on_poll: Self.PollFn) !Self {
-            // const polling_sockets = try allocator.alloc(zmq.ZPolling.Item, receive_sockets.len);
-            // defer allocator.free(polling_sockets);
-
-            // for (receive_sockets, 0..) |socket, i| {
-            //     polling_sockets[i] = zmq.ZPolling.Item.fromSocket(socket, .{ .PollIn = true });
-            // }
-
             return .{
                 .queue = .{
                     .allocator = context.allocator,
@@ -70,14 +61,14 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             self.poller.deinit();
         }
 
-        pub fn run(self: *Self, on_dispatch: DispatchFn) !void {
+        pub fn run(self: *Self, on_dispatch: DispatchFn, options: struct { force_concurrent: bool = false }) !void {
             while (true) {
                 var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
                 defer skip_entries.deinit(self.queue.allocator);
 
                 while (self.queue.receive_queue.popFront()) |e| {
                     var entry = e;
-                    var dirty: Self.DirtyState = .none;
+                    var dirty: EventDispatcher.DirtyState = .none;
                     try on_dispatch(self, entry, &dirty);
 
                     switch (dirty) {
@@ -100,13 +91,13 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                     try channel.sender.submit(channel.msg, .{ .flags = .{.nonblocking = true} });
                 }
 
-                _ = try self.poller.poll(Self.doPoll);
+                _ = try self.poller.poll(Self.doPoll, .{ .force_concurrent = options.force_concurrent });
                 try self.queue.entrySkipped(skip_entries.items);
             }
         }
 
         fn doPoll(poller: *ReceivePoller, results: []const nnng.PollEvent) !void {
-            const self: *Self = @fieldParentPtr("poller", poller);
+            const self: *Self = @alignCast(@fieldParentPtr("poller", poller));
             try (self.on_poll)(&self.queue, results);
         }
 
@@ -206,6 +197,9 @@ pub fn Sized(comptime poller_size: comptime_int) type {
     };
 }
 
+pub const Phase = enum { booting, request, ready, terminating, quitting };
+pub const DirtyState = enum { none, skipped };
+
 pub const QuitHandler = struct {
     ptr: *anyopaque,
     handler: *const fn (ptr: *anyopaque) anyerror!void,
@@ -246,7 +240,7 @@ pub const tests = struct {
     const ClientConnection = root.sockets.Connection.Client("stage");
     const Dispatcher = EventDispatcher.Sized(8);
 
-    fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
+    fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .quit => {
                 d.phase = .quitting;
@@ -255,8 +249,9 @@ pub const tests = struct {
         }
     }
 
-    fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *Dispatcher.DirtyState) !void {
+    fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
+            .launching => {},
             .quit_all => {
                 d.phase = .quitting;
             },
@@ -264,13 +259,13 @@ pub const tests = struct {
         }
     }
 
-    fn runConcurrent(group: *std.Io.Group, host_dispatcher: *Dispatcher, guest_dispatcher: *Dispatcher) (std.Io.ConcurrentError || std.Io.Cancelable)!void {
+    fn runConcurrent(host_dispatcher: *Dispatcher, guest_dispatcher: *Dispatcher) (std.Io.ConcurrentError || std.Io.Cancelable)!void {
         const Runnable = struct {
             d: *Dispatcher,
             callback: Dispatcher.DispatchFn,
 
             fn run(self: *const @This()) void {
-                self.d.run(self.callback) catch |err| {
+                self.d.run(self.callback, .{ .force_concurrent = true }) catch |err| {
                     const msg = std.fmt.allocPrint(std.testing.allocator, "Unhandled dispatch error: {}", .{err}) catch @panic("OOM");
                     defer std.testing.allocator.free(msg);
                     @panic(msg);
@@ -278,6 +273,7 @@ pub const tests = struct {
             }
         };
 
+        var group: std.Io.Group = .init;
         try group.concurrent(std.testing.io, Runnable.run, .{ &Runnable{ .d = host_dispatcher, .callback = serverHandler } });
         try group.concurrent(std.testing.io, Runnable.run, .{ &Runnable{ .d = guest_dispatcher, .callback = clientHandler } });
         return group.await(std.testing.io);
@@ -314,7 +310,7 @@ pub const tests = struct {
 
         try std.testing.expectEqual(.booting, dispatcher.phase);
 
-        try dispatcher.run(serverHandler);
+        try dispatcher.run(serverHandler, .{});
 
         try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
@@ -350,7 +346,7 @@ pub const tests = struct {
 
         try std.testing.expectEqual(.booting, dispatcher.phase);
 
-        try dispatcher.run(serverHandler);
+        try dispatcher.run(serverHandler, .{});
 
         try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
@@ -373,7 +369,7 @@ pub const tests = struct {
         defer subscriptions.deinit(std.testing.allocator);
         var view = guest.cmd_socket.subscriptionView();
         // try view.enableWildcard();
-        try view.extractScopeSubscriptions(std.testing.allocator, &subscriptions);
+        try view.extractSubscriptions(std.testing.allocator, &subscriptions);
 
         try guest.cmd_socket.transport.start(.{});
         try host.cmd_socket.transport.start(.{});
@@ -391,7 +387,7 @@ pub const tests = struct {
 
         try std.testing.expectEqual(.booting, dispatcher.phase);
 
-        try dispatcher.run(clientHandler);
+        try dispatcher.run(clientHandler, .{});
 
         try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
@@ -403,7 +399,8 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, ep);
+        // var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
         defer host.deinit();
 
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
@@ -426,7 +423,7 @@ pub const tests = struct {
         defer guest_dispatcher.deinit();
 
         publisg_event: {
-            var cmd = try host.createCommandChannel();
+            var cmd = try host.commandChannel();
             try cmd.encode(.quit_all);
             try host_dispatcher.queue.post(cmd);
             break:publisg_event;
@@ -435,8 +432,7 @@ pub const tests = struct {
         try std.testing.expectEqual(.booting, host_dispatcher.phase);
         try std.testing.expectEqual(.booting, guest_dispatcher.phase);
 
-        var g: std.Io.Group = .init;
-        try runConcurrent(&g, &host_dispatcher, &guest_dispatcher);
+        try runConcurrent(&host_dispatcher, &guest_dispatcher);
 
         try std.testing.expectEqual(.quitting, host_dispatcher.phase);
         try std.testing.expectEqual(.quitting, guest_dispatcher.phase);

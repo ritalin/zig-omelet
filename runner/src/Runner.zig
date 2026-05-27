@@ -1,263 +1,312 @@
 const std = @import("std");
-const zmq = @import("zmq");
 const core = @import("core");
 
+const types = core.types;
+
 const app_context = @import("build_options").app_context;
+const poller_size = 6;
+const ReceiveEntry = core.sockets.ReceiveEntry;
+
 const Setting = @import("./settings/Setting.zig");
 const StageCount = @import("./configs/Config.zig").StageCount;
 const PayloadCacheManager = @import("./cache_manager.zig").PayloadCacheManager(app_context);
-const CommandPallet = @import("./CommandPallet.zig");
+const EventDispatcher = core.sockets.EventDispatcher;
 
 const Symbol = core.Symbol;
 const systemLog = core.Logger.SystemDirect(app_context);
 const traceLog = core.Logger.TraceDirect(app_context);
 const log = core.Logger.Stage.log;
 
-const Self = @This();
+const HostRnner = @This();
 
 allocator: std.mem.Allocator,
-context: *zmq.ZContext,
-connection: *core.sockets.Connection.Server(app_context, CommandPallet),
+setting: *const Setting,
+connection: *HostRnner.Connection,
+dispatcher: EventDispatcher.Sized(poller_size),
+state: State,
+guest_names: []const types.Symbol,
 
-pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
-    const ctx = try allocator.create(zmq.ZContext);
-    ctx.* = try zmq.ZContext.init(allocator);
-    errdefer allocator.destroy(ctx);
-    errdefer ctx.deinit();
+// TODO:
+// const CommandPallet = @import("./CommandPallet.zig");
+// const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
+pub const Connection = core.sockets.Connection.Server(app_context);
 
-    var connection = try core.sockets.Connection.Server(app_context, CommandPallet).init(allocator, ctx);
-    errdefer connection.deinit();
-    try connection.bind(setting.general.runner_endpoints);
+pub fn create(connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRnner {
+    const allocator = connection.context.allocator;
+
+    try connection.bind();
 
     return .{
         .allocator = allocator,
-        .context = ctx,
+        .setting = setting,
         .connection = connection,
+        .dispatcher = try connection.configureDispatcher(poller_size),
+        .guest_names = guest_names,
+        .state = .{ .booting = try BootPhaseState.create(allocator, guest_names) }
     };
 }
 
-pub fn deinit(self: *Self) void {
-    self.connection.deinit();
-    self.context.deinit();
-    self.allocator.destroy(self.context);
+pub fn deinit(self: *HostRnner) void {
+    self.state.deinit();
+    self.dispatcher.deinit();
 }
 
-pub fn run(self: *Self, stage_count: StageCount, setting: Setting) !void {
-    systemLog.debug("Launched", .{});
+pub fn run(self: *HostRnner) !void {
+    // TODO:
+    // var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
+    // var left_topic_stage = stage_count.stage_extract;
+    // var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
 
-    dump_setting: {
-        systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.general.runner_endpoints.req_rep});
-        systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.general.runner_endpoints.pub_sub});
-        systemLog.debug("CLI: Watch mode = {}", .{setting.command.watchModeEnabled()});
-        break :dump_setting;
-    }
+    self.dispatcher.run(HostRnner.onDispatch, .{}) catch |err| {
+        // TODO:
+        // try self.connection.dispatcher.postFatal(@errorReturnTrace());
+        return err;
+    };    
 
-    var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
-    var left_topic_stage = stage_count.stage_extract;
-    var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
+    // TODO:
+    // var source_cache = try PayloadCacheManager.init(self.allocator);
+    // defer source_cache.deinit();
 
-    var source_cache = try PayloadCacheManager.init(self.allocator);
-    defer source_cache.deinit();
+    // const watch_mode = setting.command.watching();
+    // if (watch_mode) {
+    //     try self.spawnCommandPallet();
+    // }
 
-    const watch_mode = setting.command.watching();
-    if (watch_mode) {
-        try self.spawnCommandPallet();
-    }
-
-    try self.connection.dispatcher.state.ready();
+    // try self.connection.dispatcher.state.ready();
     
-    while (self.connection.dispatcher.isReady()) {
-        const _item = try self.connection.dispatcher.dispatch();
+    // while (self.connection.dispatcher.isReady()) {
+    //     const _item = try self.connection.dispatcher.dispatch();
 
-        if (_item) |*item| {
-            defer item.deinit();
+    //     if (_item) |*item| {
+    //         defer item.deinit();
 
-            switch (item.event) {
-                .launched => {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    
-                    if (left_launching > 0) {
-                        left_launching -= 1;
-                        systemLog.debug("Received launched: '{s}' (left: {})", .{item.from, left_launching});
-                    }
-                    else {
-                        systemLog.debug("Received rebooted: '{s}' (left: {})", .{item.from, left_launching});
-                    }
+    //         switch (item.event) {
+    //             .failed_launching => {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 try self.connection.dispatcher.state.receiveTerminate();
 
-                    if (left_launching <= 0) {
-                        try self.onAfterLaunch(item.socket, item.routing_id);
-                    }
-                },
-                .failed_launching => {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    try self.connection.dispatcher.state.receiveTerminate();
+    //                 if (left_launching > 0) {
+    //                     left_launching -= 1;
+    //                     systemLog.debug("Received to failed launching: '{s}' (left: {})", .{item.from, left_launching});
+    //                 }
+    //                 if (left_launching <= 0) {
+    //                     try self.onAfterLaunch(item.socket, item.routing_id);
+    //                 }
+    //             },
+    //             .topic => |payload| {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
 
-                    if (left_launching > 0) {
-                        left_launching -= 1;
-                        systemLog.debug("Received to failed launching: '{s}' (left: {})", .{item.from, left_launching});
-                    }
-                    if (left_launching <= 0) {
-                        try self.onAfterLaunch(item.socket, item.routing_id);
-                    }
-                },
-                .topic => |payload| {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 try source_cache.topics_map.addTopics(payload.category, payload.names);
 
-                    try source_cache.topics_map.addTopics(payload.category, payload.names);
+    //                 if (!payload.has_more) {
+    //                     left_topic_stage -= 1;
+    //                 }
+    //                 systemLog.debug("Receive 'topic' ({})", .{left_topic_stage});
+    //                 try source_cache.topics_map.dumpTopics(self.allocator);
 
-                    if (!payload.has_more) {
-                        left_topic_stage -= 1;
-                    }
-                    systemLog.debug("Receive 'topic' ({})", .{left_topic_stage});
-                    try source_cache.topics_map.dumpTopics(self.allocator);
+    //                 if ((left_topic_stage <= 0) and (!watch_mode)) {
+    //                     try self.connection.dispatcher.post(.ready_watch_path);
+    //                 }
+    //             },
+    //             .source_path => |path| {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
 
-                    if ((left_topic_stage <= 0) and (!watch_mode)) {
-                        try self.connection.dispatcher.post(.ready_watch_path);
-                    }
-                },
-                .source_path => |path| {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 if (try source_cache.addNewEntryGroup(path)) {
+    //                     systemLog.debug("Received source name: {s}, path: {s}, hash: {s}", .{path.name, path.path, path.hash});
+    //                     try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
+    //                 }
+    //             },
+    //             .finish_watch_path => {
+    //                 traceLog.debug("Watching stage finished", .{});
+    //                 if (!watch_mode) {
+    //                     // request quit for Watch stage
+    //                     traceLog.debug("Request quit for Watching stage", .{});
+    //                     try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
+    //                     try self.connection.dispatcher.state.receiveTerminate();
 
-                    if (try source_cache.addNewEntryGroup(path)) {
-                        systemLog.debug("Received source name: {s}, path: {s}, hash: {s}", .{path.name, path.path, path.hash});
-                        try self.connection.dispatcher.post(.{.source_path = try path.clone(self.allocator)});
-                    }
-                },
-                .finish_watch_path => {
-                    traceLog.debug("Watching stage finished", .{});
-                    if (!watch_mode) {
-                        // request quit for Watch stage
-                        traceLog.debug("Request quit for Watching stage", .{});
-                        try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
-                        try self.connection.dispatcher.state.receiveTerminate();
+    //                     if (source_cache.isEmpty()) {
+    //                         try self.connection.dispatcher.post(.finish_source_path);
+    //                     }
+    //                 }
+    //                 else {
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 }
+    //             },
+    //             .topic_body => |payload| {
+    //                 // delay 1 cycle
+    //                 try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path, item.routing_id);
 
-                        if (source_cache.isEmpty()) {
-                            try self.connection.dispatcher.post(.finish_source_path);
-                        }
-                    }
-                    else {
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    }
-                },
-                .topic_body => |payload| {
-                    // delay 1 cycle
-                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path, item.routing_id);
+    //                 if (try self.handleTopicBody(payload, &source_cache)) |next_event| {
+    //                     try self.connection.dispatcher.post(next_event);
+    //                 }
+    //             },
+    //             .skip_topic_body => |payload| {
+    //                 try self.handleSkipTopicBody(payload, &source_cache);
+    //                 // delay 1 cycle
+    //                 try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path, item.routing_id);
+    //             },
+    //             .pending_finish_source_path => {
+    //                 if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
+    //                     systemLog.debug("No more source path", .{});
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                     try self.connection.dispatcher.post(.finish_source_path);
+    //                 }
+    //                 else {
+    //                     systemLog.debug("Wait receive next source path", .{});
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 }
+    //             },
+    //             .finish_topic_body => {
+    //                 if (!watch_mode) {
+    //                     // request quit for Extract stage
+    //                     try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
+    //                 }
+    //                 else {
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 }
 
-                    if (try self.handleTopicBody(payload, &source_cache)) |next_event| {
-                        try self.connection.dispatcher.post(next_event);
-                    }
-                },
-                .skip_topic_body => |payload| {
-                    try self.handleSkipTopicBody(payload, &source_cache);
-                    // delay 1 cycle
-                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_source_path, item.routing_id);
-                },
-                .pending_finish_source_path => {
-                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.cache.count() == 0)) {
-                        systemLog.debug("No more source path", .{});
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                        try self.connection.dispatcher.post(.finish_source_path);
-                    }
-                    else {
-                        systemLog.debug("Wait receive next source path", .{});
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    }
-                },
-                .finish_topic_body => {
-                    if (!watch_mode) {
-                        // request quit for Extract stage
-                        try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
-                    }
-                    else {
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    }
+    //                 if ((self.connection.dispatcher.state.level.terminating) and source_cache.isEmpty()) {
+    //                     try self.connection.dispatcher.post(.finish_topic_body);
+    //                 }
+    //             },
+    //             .ready_generate => {
+    //                 if (source_cache.ready_queue.dequeue()) |source| {
+    //                     systemLog.debug("Send source: {s}", .{source.header.name});
+    //                     try self.connection.dispatcher.reply(item.socket, .{.topic_body = source}, item.routing_id);
+    //                 }
+    //                 else {
+    //                     // delay 1 cycle
+    //                     try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_topic_body, item.routing_id);
+    //                 }
+    //             },
+    //             .pending_finish_topic_body => {
+    //                 if ((self.connection.dispatcher.state.level.terminating) and (source_cache.isEmpty())) {
+    //                     systemLog.debug("No more sources", .{});
+    //                     try self.connection.dispatcher.reply(item.socket, .finish_topic_body, item.routing_id);
+    //                 }
+    //                 else {
+    //                     systemLog.debug("Wait receive next source", .{});
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 }
+    //             },
+    //             .finish_generate => {
+    //                 if (!watch_mode) {
+    //                     // request quit for Generate stage
+    //                     try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
+    //                 }
+    //                 else {
+    //                     try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 }
+    //             },
+    //             .pending_fatal_quit => {
+    //                 try self.connection.dispatcher.post(.quit_all);
+    //             },
+    //             .worker_response => |payload| {
+    //                 const x: ?core.Event = try self.handleWorkerResponse(payload);
+    //                 if (x) |next_event| {
+    //                     try self.connection.dispatcher.post(next_event);
+    //                 }
+    //             },
+    //             .quit_accept => {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
 
-                    if ((self.connection.dispatcher.state.level.terminating) and source_cache.isEmpty()) {
-                        try self.connection.dispatcher.post(.finish_topic_body);
-                    }
-                },
-                .ready_generate => {
-                    if (source_cache.ready_queue.dequeue()) |source| {
-                        systemLog.debug("Send source: {s}", .{source.header.name});
-                        try self.connection.dispatcher.reply(item.socket, .{.topic_body = source}, item.routing_id);
-                    }
-                    else {
-                        // delay 1 cycle
-                        try self.connection.dispatcher.delay(item.socket, item.from, .pending_finish_topic_body, item.routing_id);
-                    }
-                },
-                .pending_finish_topic_body => {
-                    if ((self.connection.dispatcher.state.level.terminating) and (source_cache.isEmpty())) {
-                        systemLog.debug("No more sources", .{});
-                        try self.connection.dispatcher.reply(item.socket, .finish_topic_body, item.routing_id);
-                    }
-                    else {
-                        systemLog.debug("Wait receive next source", .{});
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    }
-                },
-                .finish_generate => {
-                    if (!watch_mode) {
-                        // request quit for Generate stage
-                        try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
-                    }
-                    else {
-                        try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    }
-                },
-                .pending_fatal_quit => {
-                    try self.connection.dispatcher.post(.quit_all);
-                },
-                .worker_response => |payload| {
-                    const x: ?core.Event = try self.handleWorkerResponse(payload);
-                    if (x) |next_event| {
-                        try self.connection.dispatcher.post(next_event);
-                    }
-                },
-                .quit_accept => {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 left_launched -= 1;
+    //                 systemLog.debug("Quit acceptrd: {s} (left: {})", .{item.from, left_launched});
 
-                    left_launched -= 1;
-                    systemLog.debug("Quit acceptrd: {s} (left: {})", .{item.from, left_launched});
+    //                 if (left_launched <= 0) {
+    //                     systemLog.debug("All Quit acceptrd", .{});
+    //                     try self.connection.dispatcher.state.done();
+    //                 }
+    //             },
+    //             .log => |payload| {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 log(payload.level, item.from, payload.content);
+    //             },
+    //             .report_fatal => |payload| {
+    //                 try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
+    //                 log(payload.level, item.from, payload.content);
+    //                 try self.connection.dispatcher.delay(item.socket, item.from, .pending_fatal_quit, item.routing_id);
+    //             },
+    //             else => {
+    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
+    //                 systemLog.debug("Discard command: {}", .{std.meta.activeTag(item.event)});
+    //             },
+    //         }
+    //     }
+    // }
 
-                    if (left_launched <= 0) {
-                        systemLog.debug("All Quit acceptrd", .{});
-                        try self.connection.dispatcher.state.done();
-                    }
-                },
-                .log => |payload| {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    log(payload.level, item.from, payload.content);
-                },
-                .report_fatal => |payload| {
-                    try self.connection.dispatcher.reply(item.socket, .quit, item.routing_id);
-                    log(payload.level, item.from, payload.content);
-                    try self.connection.dispatcher.delay(item.socket, item.from, .pending_fatal_quit, item.routing_id);
-                },
-                else => {
-                    try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-                    systemLog.debug("Discard command: {}", .{std.meta.activeTag(item.event)});
-                },
-            }
+    // systemLog.debug("terminated", .{});
+}
+
+fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
+    const self: *HostRnner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
+
+    switch (self.state) {
+        .booting => |*state| {
+            try state.handle(self, entry, dirty);
+        },
+        .terminating => |*state| {
+            try state.handle(self, entry, dirty);
+        },
+        else => {
+            // TODO:
+            // Invalid phase
         }
     }
-
-    systemLog.debug("terminated", .{});
 }
 
-fn onAfterLaunch(self: Self, socket: *zmq.ZSocket, routing_id: ?core.Symbol) !void {
-    if (self.connection.dispatcher.state.level.terminating) {
-        traceLog.debug("Stopping launch process", .{});
-        try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
-    }
-    else {
-        traceLog.debug("Received launched all", .{});
-        // collect topics
-        try self.connection.dispatcher.post(.request_topic);
+fn defaultHandler(self: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+    _ = self;
+    
+    switch (entry.event) {
+        .log => {
+            unreachable;
+        },
+        else => {
+            dirty.* = .unhandled;
+        }
     }
 }
 
-fn handleTopicBody(self: Self, topic_body: core.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
+fn doRequestPhase(self: *HostRnner) !void {
+    // TODO:
+    // stub impl
+    try self.doTerminatePhase();
+
+    // self.state.deinit();
+    // self.state = .{ .request = RequestPhaseState.create() };
+
+    // // TODO:
+    // // Send command
+
+    // self.dispatcher.phase = .request;
+}
+
+fn doTerminatePhase(self: *HostRnner) !void {
+    self.state.deinit();
+    self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, self.guest_names) };
+
+    var channel = try self.connection.commandChannel();
+    try channel.encode(.quit_all);
+    try self.dispatcher.queue.post(channel);
+
+    self.dispatcher.phase = .terminating;
+}
+
+// TODO:
+// fn onAfterLaunch(self: HostRnner, socket: *zmq.ZSocket, routing_id: ?core.Symbol) !void {
+//     if (self.connection.dispatcher.state.level.terminating) {
+//         traceLog.debug("Stopping launch process", .{});
+//         try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
+//     }
+//     else {
+//         traceLog.debug("Received launched all", .{});
+//         // collect topics
+//         try self.connection.dispatcher.post(.request_topic);
+//     }
+// }
+
+fn handleTopicBody(self: *const HostRnner, topic_body: core.events.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
     _ = self;
 
     switch (try source_cache.update(topic_body)) {
@@ -278,351 +327,503 @@ fn handleTopicBody(self: Self, topic_body: core.Event.Payload.TopicBody, source_
     return null;
 }
 
-fn handleSkipTopicBody(self: Self, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
+fn handleSkipTopicBody(self: *const HostRnner, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
     _ = self;
     try source_cache.dismiss(topic_body.header, topic_body.index);
 }
 
-fn spawnCommandPallet(self: *Self) !void {
-    const worker = try CommandPallet.init(self.allocator);
-    try self.connection.pull_sink_socket.spawn(worker);
-}
+// TODO:
+// fn spawnCommandPallet(self: *HostRnner) !void {
+//     const worker = try CommandPallet.init(self.allocator);
+//     try self.connection.pull_sink_socket.spawn(worker);
+// }
 
-fn handleWorkerResponse(self: *Self, res: core.Event.Payload.WorkerResponse) !?core.Event {
-    var reader = core.CborStream.Reader.init(res.content);
+// fn handleWorkerResponse(self: *HostRnner, res: core.Event.Payload.WorkerResponse) !?core.Event {
+//     var reader = core.CborStream.Reader.init(res.content);
 
-    switch (try reader.readEnum(CommandPallet.Status)) {
-        .invalid => {
-            const message = try reader.readString();
-            std.debug.print("{s}\n", .{message});
-            try self.spawnCommandPallet();
-            return null;
-        },
-        .accept => {
-            return try self.handleCommand(try reader.readEnum(CommandPallet.Command));
-        }
+//     switch (try reader.readEnum(CommandPallet.Status)) {
+//         .invalid => {
+//             const message = try reader.readString();
+//             std.debug.print("{s}\n", .{message});
+//             try self.spawnCommandPallet();
+//             return null;
+//         },
+//         .accept => {
+//             return try self.handleCommand(try reader.readEnum(CommandPallet.Command));
+//         }
+//     }
+// }
+
+// fn handleCommand(self: *Self, command: CommandPallet.Command) !?core.Event {
+//     switch (command) {
+//         .help => {
+//             try CommandPallet.showCommandhelp(self.allocator);
+//             try self.spawnCommandPallet();
+//             return null;
+//         },
+//         .quit => {
+//             return .quit_all;
+//         },
+//         .run => {
+//             try self.spawnCommandPallet();
+//             return .ready_watch_path;
+//         }
+//     }
+// }
+
+const State = union(EventDispatcher.Phase) {
+    booting: BootPhaseState,
+    request: RequestPhaseState,
+    ready: void,
+    terminating: TerminatePhaseState,
+    quitting: void,
+
+    const deinit = deinitState;
+};
+
+fn deinitState(self: *State) void {
+    switch (self.*) {
+        .booting => |*state| state.deinit(),
+        .request => |*state| state.deinit(),
+        .terminating => |*state| state.deinit(),
+        else => unreachable,
     }
 }
 
-fn handleCommand(self: *Self, command: CommandPallet.Command) !?core.Event {
-    switch (command) {
-        .help => {
-            try CommandPallet.showCommandhelp(self.allocator);
-            try self.spawnCommandPallet();
-            return null;
-        },
-        .quit => {
-            return .quit_all;
-        },
-        .run => {
-            try self.spawnCommandPallet();
-            return .ready_watch_path;
+const BootPhaseState = struct {
+    guests: std.BufSet,
+
+    const Self = @This();
+
+    pub fn create(allocator: std.mem.Allocator, guest_names: []const types.StageName) !Self {
+        var guests = std.BufSet.init(allocator);
+        for (guest_names) |name| {
+            try guests.insert(name);
         }
+
+        return .{
+            .guests = guests,
+        };
     }
-}
 
-const RunnerTestContext = struct {
-    allocator: std.mem.Allocator, 
-    runner: Runner,
-    cache_manager: PayloadCacheManager,
-    category: core.TopicCategory,
+    pub fn deinit(self: *Self) void {
+        self.guests.deinit();
+    }
 
-    const Runner = Self;
+    pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+        switch (entry.event) {
+            .launching => {
+                _ = stage.setting.general.stage_endpoints;
+                // TODO:
+                // systemLog.debug("Launched", .{});
 
-    pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory) !RunnerTestContext {
-        const setting: Setting = .{
-            .arena = undefined,
-            .general = .{
-                .runner_endpoints = core.DebugEndPoint.RunnerEndpoint,
-                .stage_endpoints = core.DebugEndPoint.StageEndpoint,
-                .log_level = .info,
-                .scope = "default",
+                // dump_setting: {
+                //     systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.general.runner_endpoints.req_rep});
+                //     systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.general.runner_endpoints.pub_sub});
+                //     systemLog.debug("CLI: Watch mode = {}", .{setting.command.watchModeEnabled()});
+                //     break :dump_setting;
+                // }
             },
-            .command = undefined,
-        };
-        try core.makeIpcChannelRoot(setting.general.stage_endpoints);
-        defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
+            .failed_launching => {
+                if (self.guests.contains(entry.from_stage)) {
+                    // TODO:
+                    // log
+                    try stage.doTerminatePhase();
+                }
+            },
+            .launched => {
+                if (! self.guests.contains(entry.from_stage)) {
+                    // TODO:
+                    // unexpected guest
+                    // try self.onAfterLaunch(item.socket, item.routing_id);
 
-        var self: RunnerTestContext = .{
-            .allocator = allocator,
-            .runner = try Runner.init(allocator, setting),
-            .cache_manager = try PayloadCacheManager.init(allocator),
-            .category = category,
-        };
+                }
 
-        try self.cache_manager.topics_map.addTopics(category, &.{"test1", "test2"});
+                self.guests.remove(entry.from_stage);
 
-        return self;
-    }
+                // TODO:
+                // Accept log
+                // systemLog.debug("Received launched: '{s}' (left: {})", .{item.from, left_launching});
 
-    pub fn deinit(self: *RunnerTestContext) void {
-        self.cache_manager.deinit();
-        self.runner.deinit();
-    }
-
-    pub fn newEntry(self: *RunnerTestContext, path: core.FilePath, item_count: usize) !core.Event.Payload.SourcePath {
-        const source_path = try core.Event.Payload.SourcePath.init(
-            self.allocator, 
-            .{
-                self.category,
-                "test",
-                path,
-                path,
-                item_count,
+                if (self.guests.count() == 0) {
+                    // TODO:
+                    // Accept log
+                    try stage.doRequestPhase();
+                }
+            },
+            else => {
+                try stage.defaultHandler(entry, dirty);
             }
-        );
-
-        const add_result = try self.cache_manager.addNewEntryGroup(source_path);
-        try std.testing.expect(add_result);
-
-        return source_path;
+        }
     }
 };
 
-test "Event: Receive topic body/single" {
-    const allocator = std.testing.allocator;
+const RequestPhaseState = struct {
+    const Self = @This();
 
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
-
-    receive: {
-        const source_path = try ctx.newEntry("/path/to/test_file", 1);
-        defer source_path.deinit();
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
-        break:receive;
+    pub fn create() !Self {
+        return .{};
     }
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+};
+
+const TerminatePhaseState = struct {
+    guests: std.BufSet,
+
+    const Self = @This();
+
+    pub fn create(allocator: std.mem.Allocator, guest_names: []const types.StageName) !Self {
+        var guests = std.BufSet.init(allocator);
+        for (guest_names) |name| {
+            try guests.insert(name);
+        }
+
+        return .{
+            .guests = guests,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.guests.deinit();
+    }
+
+    pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+        switch (entry.event) {
+            .quit => {
+                if (! self.guests.contains(entry.from_stage)) {
+                    // TODO:
+                    // unexpected guest
+                }
+
+                self.guests.remove(entry.from_stage);
+
+                // TODO:
+                // log
+
+                if (self.guests.count() == 0) {
+                    // TODO:
+                    // log
+                    stage.dispatcher.phase = .quitting;
+                }
+            },
+            else => {
+                try stage.defaultHandler(entry, dirty);
+            }
+        }
+    }
+};
+
+test "Runner tests" {
+    std.testing.refAllDecls(@This());
 }
 
-test "Event: Receive topic body/single (incompleted)" {
-    const allocator = std.testing.allocator;
+pub const tests = struct {
+    const RunnerTestContext = struct {
+        allocator: std.mem.Allocator, 
+        runner: Runner,
+        cache_manager: PayloadCacheManager,
+        category: core.TopicCategory,
 
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
+        const Runner = HostRnner;
 
-    const source_path = try ctx.newEntry("/path/to/test_file", 1);
-    defer source_path.deinit();
+        pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory) !RunnerTestContext {
+            const setting: Setting = .{
+                .arena = undefined,
+                .general = .{
+                    .runner_endpoints = core.DebugEndPoint.RunnerEndpoint,
+                    .stage_endpoints = core.DebugEndPoint.StageEndpoint,
+                    .log_level = .info,
+                    .scope = "default",
+                },
+                .command = undefined,
+            };
+            try core.makeIpcChannelRoot(setting.general.stage_endpoints);
+            defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" } }
-        );
-        defer topic_body.deinit();
+            var self: RunnerTestContext = .{
+                .allocator = allocator,
+                .runner = try Runner.init(allocator, setting),
+                .cache_manager = try PayloadCacheManager.init(allocator),
+                .category = category,
+            };
 
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+            try self.cache_manager.topics_map.addTopics(category, &.{"test1", "test2"});
 
-        try std.testing.expectEqual(false, next_event != null);
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(0, ctx.cache_manager.ready_queue.count());
-        break:receive;
+            return self;
+        }
+
+        pub fn deinit(self: *RunnerTestContext) void {
+            self.cache_manager.deinit();
+            self.runner.deinit();
+        }
+
+        pub fn newEntry(self: *RunnerTestContext, path: core.FilePath, item_count: usize) !core.Event.Payload.SourcePath {
+            const source_path = try core.Event.Payload.SourcePath.init(
+                self.allocator, 
+                .{
+                    self.category,
+                    "test",
+                    path,
+                    path,
+                    item_count,
+                }
+            );
+
+            const add_result = try self.cache_manager.addNewEntryGroup(source_path);
+            try std.testing.expect(add_result);
+
+            return source_path;
+        }
+    };
+
+    test "Event: Receive topic body/single" {
+        const allocator = std.testing.allocator;
+
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
+
+        receive: {
+            const source_path = try ctx.newEntry("/path/to/test_file", 1);
+            defer source_path.deinit();
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
     }
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
 
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+    test "Event: Receive topic body/single (incompleted)" {
+        const allocator = std.testing.allocator;
 
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-}
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
 
-test "Event: Receive topic body/multiple" {
-    const allocator = std.testing.allocator;
-
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
-
-    const source_path = try ctx.newEntry("/path/to/test_file", 2);
-    defer source_path.deinit();
-
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(1, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(2, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-}
-
-test "Event: Receive topic body/multiple (incompleted)" {
-    const allocator = std.testing.allocator;
-
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
-
-    const source_path = try ctx.newEntry("/path/to/test_file", 2);
-    defer source_path.deinit();
-
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(false, next_event != null);
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(0, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(1, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-    receive: {
-        var topic_body = try core.Event.Payload.TopicBody.init(
-            allocator,
-            source_path.values(),
-            &.{ .{ "test2", "test2" } }
-        );
-        defer topic_body.deinit();
-
-        const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
-
-        try std.testing.expectEqual(true, next_event != null);
-        try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
-
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(2, ctx.cache_manager.ready_queue.count());
-        break:receive;
-    }
-}
-
-test "Event: Receive cancel topic body/single" {
-    const allocator = std.testing.allocator;
-
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
-
-    receive: {
         const source_path = try ctx.newEntry("/path/to/test_file", 1);
         defer source_path.deinit();
 
-        const topic_body = try core.Event.Payload.SkipTopicBody.init(
-            allocator,
-            source_path.values(),
-            0,
-        );
-        defer topic_body.deinit();
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" } }
+            );
+            defer topic_body.deinit();
 
-        try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
-        break:receive;
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(false, next_event != null);
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(0, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
     }
-}
 
-test "Event: Receive cancel topic body/multiple" {
-    const allocator = std.testing.allocator;
+    test "Event: Receive topic body/multiple" {
+        const allocator = std.testing.allocator;
 
-    var ctx = try RunnerTestContext.init(allocator, .source);
-    defer ctx.deinit();
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
 
-    const source_path = try ctx.newEntry("/path/to/test_file", 2);
-    defer source_path.deinit();
+        const source_path = try ctx.newEntry("/path/to/test_file", 2);
+        defer source_path.deinit();
 
-    receive: {
-        const topic_body = try core.Event.Payload.SkipTopicBody.init(
-            allocator,
-            source_path.values(),
-            0,
-        );
-        defer topic_body.deinit();
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
 
-        try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
-        break:receive;
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(1, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(2, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
     }
-    receive: {
-        const topic_body = try core.Event.Payload.SkipTopicBody.init(
-            allocator,
-            source_path.values(),
-            0,
-        );
-        defer topic_body.deinit();
 
-        try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
-        try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
-        break:receive;
-    }
-    receive: {
-        const topic_body = try core.Event.Payload.SkipTopicBody.init(
-            allocator,
-            source_path.values(),
-            1,
-        );
-        defer topic_body.deinit();
+    test "Event: Receive topic body/multiple (incompleted)" {
+        const allocator = std.testing.allocator;
 
-        try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
-        try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
-        try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
-        break:receive;
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
+
+        const source_path = try ctx.newEntry("/path/to/test_file", 2);
+        defer source_path.deinit();
+
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(false, next_event != null);
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(0, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test1", "test1" }, .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(1, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(1, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
+        receive: {
+            var topic_body = try core.Event.Payload.TopicBody.init(
+                allocator,
+                source_path.values(),
+                &.{ .{ "test2", "test2" } }
+            );
+            defer topic_body.deinit();
+
+            const next_event = try ctx.runner.handleTopicBody(topic_body.withNewIndex(0, source_path.item_count), &ctx.cache_manager);
+
+            try std.testing.expectEqual(true, next_event != null);
+            try std.testing.expectEqual(.ready_topic_body, next_event.?.tag());
+
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(2, ctx.cache_manager.ready_queue.count());
+            break:receive;
+        }
     }
-}
+
+    test "Event: Receive cancel topic body/single" {
+        const allocator = std.testing.allocator;
+
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
+
+        receive: {
+            const source_path = try ctx.newEntry("/path/to/test_file", 1);
+            defer source_path.deinit();
+
+            const topic_body = try core.Event.Payload.SkipTopicBody.init(
+                allocator,
+                source_path.values(),
+                0,
+            );
+            defer topic_body.deinit();
+
+            try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
+            break:receive;
+        }
+    }
+
+    test "Event: Receive cancel topic body/multiple" {
+        const allocator = std.testing.allocator;
+
+        var ctx = try RunnerTestContext.init(allocator, .source);
+        defer ctx.deinit();
+
+        const source_path = try ctx.newEntry("/path/to/test_file", 2);
+        defer source_path.deinit();
+
+        receive: {
+            const topic_body = try core.Event.Payload.SkipTopicBody.init(
+                allocator,
+                source_path.values(),
+                0,
+            );
+            defer topic_body.deinit();
+
+            try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
+            break:receive;
+        }
+        receive: {
+            const topic_body = try core.Event.Payload.SkipTopicBody.init(
+                allocator,
+                source_path.values(),
+                0,
+            );
+            defer topic_body.deinit();
+
+            try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
+            try std.testing.expectEqual(true, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
+            break:receive;
+        }
+        receive: {
+            const topic_body = try core.Event.Payload.SkipTopicBody.init(
+                allocator,
+                source_path.values(),
+                1,
+            );
+            defer topic_body.deinit();
+
+            try ctx.runner.handleSkipTopicBody(topic_body, &ctx.cache_manager);
+            try std.testing.expectEqual(false, ctx.cache_manager.cache.contains(source_path.path));
+            try std.testing.expectEqual(false, ctx.cache_manager.ready_queue.peek() != null);
+            break:receive;
+        }
+    }
+};

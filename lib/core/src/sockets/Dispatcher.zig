@@ -254,7 +254,7 @@ pub const tests = struct {
         switch (entry.event) {
             .launching => {},
             .quit => {
-                d.phase = .terminating;
+                d.phase = .quitting;
             },
             else => unreachable,
         }
@@ -264,7 +264,7 @@ pub const tests = struct {
         switch (entry.event) {
             .launching => {},
             .quit_all => {
-                d.phase = .terminating;
+                d.phase = .quitting;
             },
             else => unreachable,
         }
@@ -323,7 +323,7 @@ pub const tests = struct {
 
         try dispatcher.run(serverHandler, .{});
 
-        try std.testing.expectEqual(.terminating, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
 
     test "receive event by REP" {
@@ -359,7 +359,7 @@ pub const tests = struct {
 
         try dispatcher.run(serverHandler, .{});
 
-        try std.testing.expectEqual(.terminating, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
 
     test "receive event by SUB" {
@@ -400,7 +400,7 @@ pub const tests = struct {
 
         try dispatcher.run(clientHandler, .{});
 
-        try std.testing.expectEqual(.terminating, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase);
     }
 
     test "Host/Guest communication" {
@@ -445,7 +445,7 @@ pub const tests = struct {
 
         try runConcurrent(&host_dispatcher, &guest_dispatcher);
 
-        try std.testing.expectEqual(.terminating, host_dispatcher.phase);
-        try std.testing.expectEqual(.terminating, guest_dispatcher.phase);
+        try std.testing.expectEqual(.quitting, host_dispatcher.phase);
+        try std.testing.expectEqual(.quitting, guest_dispatcher.phase);
     }
 };

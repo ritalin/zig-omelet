@@ -55,10 +55,14 @@ pub const EventType = enum (u8) {
     // Response events
     ack = 1,
     nack,
-    // Boot events
+    // periodically heartbeat
+    heartbeat,
+    // Boot phase event
     launching,
+    probe_launching,
     launched,
     failed_launching,
+    // Request phase ebent
     request_topic,
     topic,
     finish_topic,
@@ -290,10 +294,14 @@ pub const Event = union(EventType) {
     // Response
     ack: void,
     nack: void,
-    // Boot events
-    launching,
+    // periodically heartbeat
+    heartbeat: void,
+    // Boot phase event
+    launching: void,
+    probe_launching: void,
     launched: void,
     failed_launching: void,
+    // Request phase event
     request_topic: void,
     topic: Payload.Topic,
     finish_topic: void,
@@ -333,10 +341,14 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         // Response events
         .ack => {},
         .nack => {},
-        // Boot events
+        // periodically heartbeat
+        .heartbeat => {},
+        // Boot phase event
         .launching => {},
+        .probe_launching => {},
         .launched => {},
         .failed_launching => {},
+        // Request phase ebent
         .request_topic => {},
         .topic => |data| data.deinit(allocator),
         .finish_topic => {},
@@ -373,9 +385,14 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
         // Response events
         .ack => .ack,
         .nack => .nack,
-        // Boot events
+        // periodically heartbeat
+        .heartbeat => .heartbeat,
+        // Boot phase event
+        .launching => .launching,
+        .probe_launching => .probe_launching,
         .launched => .launched,
         .failed_launching => .failed_launching,
+        // Request phase ebent
         .request_topic => .request_topic,
         .topic => |payload| .{.topic = try payload.clone(allocator)},
         // Watch events
@@ -411,6 +428,7 @@ pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
     return cloned_event;
 }
 
+// TODO:
 // test "Clone events" {
 //     const allocator = std.testing.allocator;
 //     var buffer = std.Io.Writer.Allocating.init(allocator);

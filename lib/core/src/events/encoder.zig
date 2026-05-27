@@ -40,7 +40,11 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
     switch (event) {
         .ack => {},
         .nack => {},
-        .launching, .launched, .failed_launching => {},
+        // periodically heartbeat
+        .heartbeat => {},
+        // Boot phase event
+        .launching, .probe_launching, .launched, .failed_launching => {},
+        // Request phase event
         .request_topic => {},
         .topic => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Topic), payload.values());

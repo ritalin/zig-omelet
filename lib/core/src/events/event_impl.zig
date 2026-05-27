@@ -36,10 +36,14 @@ pub const EventHeader = union(EventType) {
     // Response events
     ack,
     nack,
-    // Boot events
+    // periodically heartbeat
+    heartbeat,
+    // Boot phase event
     launching,
+    probe_launching,
     launched,
     failed_launching,
+    // Request phase ebent
     request_topic,
     topic,
     finish_topic,

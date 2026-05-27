@@ -4,6 +4,7 @@ const nnng = @import("nnng");
 
 const types = root.types;
 const ReceiveEntry = root.sockets.ReceiveEntry;
+const RpcChannel = root.sockets.RpcChannel;
 const SendChannel = root.sockets.SendChannel;
 const Event = root.events.Event;
 const EventHeader = root.events.EventHeader;
@@ -57,6 +58,19 @@ pub fn Client(comptime stage_name: types.StageName) type {
             self.cmd_socket.close();
         }
 
+        pub fn sbscribe(self: *Self, topics: []EventHeader) !void {
+            var buffer: std.Io.Writer.Allocating = .init(self.context.allocator);
+            defer buffer.deinit();
+
+            var view = self.cmd_socket.subscriptionView();
+
+            for (topics) |topic| {
+                buffer.writer.end = 0;
+                try encodeSubscription(&buffer, topic);
+                try view.subscribe(buffer.written());
+            }
+        }
+
         pub fn connect(self: *Self) !void {
             try self.cmd_socket.transport.start(.{});
             try self.req_socket.transport.start(.{ .nonblocking = true });
@@ -90,8 +104,20 @@ pub fn Client(comptime stage_name: types.StageName) type {
             }
         }
 
-        pub fn requestChannel(self: *const Self) !SendChannel {
-            return SendChannel.init(self.context.allocator, stage_name, self.req_socket.pipe.item.sender());
+        pub fn requestChannel(self: *Self) !RpcChannel {
+            return RpcChannel.init(
+                stage_name, 
+                self.req_socket.pipe.item.sender(), 
+                self.req_socket.pipe.item.receiver()
+            );
+        }
+
+        pub fn postChannel(self: *Self) !SendChannel {
+            return SendChannel.init(
+                self.context.allocator, 
+                stage_name, 
+                self.push_socket.pipe.item.sender(), 
+            );
         }
 
         fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
@@ -117,24 +143,9 @@ pub fn Client(comptime stage_name: types.StageName) type {
         fn doQuit(ptr: *anyopaque) anyerror!void {
             const self: *Self = @ptrCast(@alignCast(ptr));
 
-            var rpc = try nnng.Rpc.create();
-            if (rpc.msg) |*msg| {
-                try writeEvent(msg, .quit);
-            }
-            var f = rpc.submit(self.context.io, self.req_socket.pipe.item.sender(), self.req_socket.pipe.item.receiver());
-            try f.await(self.context.io);
-            // var pipe = self.req_socket.pipe.item;
-            // var msg = try nnng.Message.create();
-            // try writeEvent(&msg, .quit);
-            // try pipe.sender().submit(msg, .{});
-
-            // msg = try pipe.receiver().drain(.{});
-            // defer msg.deinit();
-        }
-
-        fn writeEvent(msg: *nnng.Message, event: Event) !void {
-            msg.writer.end = 0;
-            try encodeToCbor(&msg.writer, .{ .header = EventHeader.fromEvent(event), .stage_name = stage_name, .event = event });
+            var channel = try self.requestChannel();
+            try channel.encode(.quit);
+            try channel.submit(self.context.io);
         }
     };
 }

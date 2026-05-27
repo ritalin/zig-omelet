@@ -23,9 +23,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
         const Self = @This();
 
-        pub fn create(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) !Self {
-            var parallel_limit = try std.Thread.getCpuCount() - 1; // std.io.Threaded default value
-
+        pub fn create(io: std.Io, allocator: std.mem.Allocator, parallel_limit: usize, endpoints: types.Endpoints) !Self {
             const context = nnng.Context.init(io, allocator);
 
             var pull_socket = socket: {
@@ -33,14 +31,12 @@ pub fn Server(comptime stage_name: types.StageName) type {
                 break:socket try b.as_listener(endpoints.push_pull);
             };
             errdefer pull_socket.close();
-            parallel_limit -= 1;
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
                 break:socket try b.as_dialer(endpoints.pub_sub);
             };
             errdefer cmd_socket.close();
-            parallel_limit -= 1;
 
             var reply_socket = socket: {
                 const b = try nnng.Rep.open(context);
@@ -72,6 +68,9 @@ pub fn Server(comptime stage_name: types.StageName) type {
             var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll);
             try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
+
+            const bootEntry = try ReceiveEntry.booting(stage_name);
+            try dispatcher.queue.pushReceiveQueue(bootEntry);
 
             return dispatcher;
         }
@@ -203,7 +202,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var conn = try Server("runner").create(std.testing.io, std.testing.allocator, ep);
+        var conn = try Server("runner").create(std.testing.io, std.testing.allocator, 1, ep);
         defer conn.deinit();
 
         try conn.bind();

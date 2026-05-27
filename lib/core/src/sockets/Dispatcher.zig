@@ -69,6 +69,10 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                 while (self.queue.receive_queue.popFront()) |e| {
                     var entry = e;
                     var dirty: EventDispatcher.DirtyState = .none;
+
+                    // TODO:
+                    // trace event log
+
                     try on_dispatch(self, entry, &dirty);
 
                     switch (dirty) {
@@ -77,6 +81,12 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                         },
                         .skipped => {
                             try skip_entries.append(self.queue.allocator, entry);
+                        },
+                        .unhandled => {
+                            defer entry.deinit(self.queue.allocator);
+
+                            // TODO:
+                            // log
                         }
                     }
                 }
@@ -198,7 +208,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
 }
 
 pub const Phase = enum { booting, request, ready, terminating, quitting };
-pub const DirtyState = enum { none, skipped };
+pub const DirtyState = enum { none, skipped, unhandled };
 
 pub const QuitHandler = struct {
     ptr: *anyopaque,
@@ -242,8 +252,9 @@ pub const tests = struct {
 
     fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
+            .launching => {},
             .quit => {
-                d.phase = .quitting;
+                d.phase = .terminating;
             },
             else => unreachable,
         }
@@ -253,7 +264,7 @@ pub const tests = struct {
         switch (entry.event) {
             .launching => {},
             .quit_all => {
-                d.phase = .quitting;
+                d.phase = .terminating;
             },
             else => unreachable,
         }
@@ -286,7 +297,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
         try conn.bind();
 
@@ -312,7 +323,7 @@ pub const tests = struct {
 
         try dispatcher.run(serverHandler, .{});
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.terminating, dispatcher.phase);
     }
 
     test "receive event by REP" {
@@ -322,7 +333,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
         try conn.bind();
 
@@ -348,7 +359,7 @@ pub const tests = struct {
 
         try dispatcher.run(serverHandler, .{});
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.terminating, dispatcher.phase);
     }
 
     test "receive event by SUB" {
@@ -358,7 +369,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
+        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer host.deinit();
 
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
@@ -389,7 +400,7 @@ pub const tests = struct {
 
         try dispatcher.run(clientHandler, .{});
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.terminating, dispatcher.phase);
     }
 
     test "Host/Guest communication" {
@@ -399,7 +410,7 @@ pub const tests = struct {
         const ep = try supports.createEndpoint(tmp_dir.dir);
         defer supports.releaseEndpoint(std.testing.allocator, ep);
 
-        var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, ep);
+        var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, 4, ep);
         // var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
         defer host.deinit();
 
@@ -434,7 +445,7 @@ pub const tests = struct {
 
         try runConcurrent(&host_dispatcher, &guest_dispatcher);
 
-        try std.testing.expectEqual(.quitting, host_dispatcher.phase);
-        try std.testing.expectEqual(.quitting, guest_dispatcher.phase);
+        try std.testing.expectEqual(.terminating, host_dispatcher.phase);
+        try std.testing.expectEqual(.terminating, guest_dispatcher.phase);
     }
 };

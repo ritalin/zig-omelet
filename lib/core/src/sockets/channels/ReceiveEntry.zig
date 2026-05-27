@@ -8,7 +8,7 @@ const Event = root.events.Event;
 const decodeFromCbor = @import("../../events/decoder.zig").decodeFromCbor;
 
 event: Event,
-from_state: StageName,
+from_stage: StageName,
 to_stage: StageName,
 buffer: []const u8,
 msg: nnng.Message,
@@ -24,7 +24,7 @@ pub fn create(allocator: std.mem.Allocator, stage_name: StageName, msg: nnng.Mes
 
     return .{
         .event = packet.event,
-        .from_state = packet.stage_name,
+        .from_stage = packet.stage_name,
         .to_stage = stage_name,
         .buffer = buffer,
         .msg = msg,
@@ -37,7 +37,7 @@ pub fn booting(stage_name: StageName) !Self {
 
     return .{
         .event = .launching,
-        .from_state = stage_name,
+        .from_stage = stage_name,
         .to_stage = stage_name,
         .buffer = &.{},
         .msg = msg,

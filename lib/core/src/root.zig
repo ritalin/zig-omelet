@@ -14,9 +14,9 @@ pub const sockets = struct {
     pub const EventDispatcher = @import("./sockets/Dispatcher.zig");
 };
 
-// TODO:
-// pub const Logger = @import("./Logger.zig");
+pub const Logger = @import("./Logger.zig");
 
+// TODO:
 // pub const settings = struct {
 //     pub usingnamespace @import("./settings/types.zig");
 //     pub usingnamespace @import("./settings/help.zig");

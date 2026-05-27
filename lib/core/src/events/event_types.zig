@@ -15,22 +15,32 @@ pub const LogLevel = enum(u8) {
     debug = c.log_level_debug,
     trace = c.log_level_trace,
 
-    pub fn toStdLevel(self: LogLevel) std.log.Level {
+    pub fn asText(self: LogLevel) Symbol {
         return switch (self) {
-            .err => .err,
-            .warn => .warn,
-            .info => .info,
-            .debug => .debug,
-            .trace => .debug,
+            .err => "ERROR",
+            .warn => "WARN",
+            .info => "INFO",
+            .debug => "DEBUG",
+            .trace => "TRACE",
         };
     }
+    // TODO:
+    // pub fn toStdLevel(self: LogLevel) std.log.Level {
+    //     return switch (self) {
+    //         .err => .err,
+    //         .warn => .warn,
+    //         .info => .info,
+    //         .debug => .debug,
+    //         .trace => .debug,
+    //     };
+    // }
 
-    pub fn ofScope(self: LogLevel) LogScope {
-        return switch (self) {
-            .trace => .trace,
-            else => .default,
-        };
-    }
+    // pub fn ofScope(self: LogLevel) LogScope {
+    //     return switch (self) {
+    //         .trace => .trace,
+    //         else => .default,
+    //     };
+    // }
 };
 pub const LogLevelSet = std.enums.EnumSet(LogLevel);
 

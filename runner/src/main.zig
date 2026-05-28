@@ -16,6 +16,10 @@ const exe_prefix = @import("build_options").exe_prefix;
 //     },
 // };
 
+pub const std_options: std.Options = .{
+    .logFn = core.Logger.forwardIntegratedLog,
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
@@ -30,6 +34,8 @@ pub fn main(init: std.process.Init) !void {
     // defer setting.deinit();
     const setting: Setting = .{
         .general = .{
+            .log_level = .trace,
+            .no_color = false,
             .stage_endpoints = .{
                 .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
                 .pub_sub = "ipc:///tmp/omelet/default/pub_sub.sock",
@@ -38,9 +44,9 @@ pub fn main(init: std.process.Init) !void {
         },
     };
 
-    // TODO:
-    // core.Logger.filterWith(setting.general.log_level);
+    core.Logger.filterWith(setting.general.log_level);
 
+    // TODO:
     // try core.makeIpcChannelRoot(setting.general.stage_endpoints);
     // defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
@@ -51,7 +57,9 @@ pub fn main(init: std.process.Init) !void {
     var connection = try Runner.Connection.create(init.io, allocator , guest_names.len, setting.general.stage_endpoints);
     defer connection.deinit();
 
-    var runner = try Runner.create(&connection, guest_names, &setting);
+    connection.enableIntegratedLog();
+
+    var runner = try Runner.create(allocator, &connection, guest_names, &setting);
     errdefer runner.deinit();
 
     // TODO:

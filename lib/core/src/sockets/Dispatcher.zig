@@ -93,7 +93,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                     }
                 }
                 if (self.phase == .quitting) {
-                    try self.log(.trace, stage_name, "Start quitting...", .{});
+                    try self.log(.debug, stage_name, "Start quitting...", .{});
                     if (self.on_quit) |q| {
                         try (q.handler)(q.ptr);
                     }

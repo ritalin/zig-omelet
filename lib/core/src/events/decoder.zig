@@ -123,6 +123,11 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
     }
 }
 
+pub fn decodeSubscription(data: types.Symbol) !types.Symbol {
+    var reader = CborStream.Reader.createFromSlice(data);
+    return reader.readString();
+}
+
 test "dencoder/decoder" {
     std.testing.refAllDecls(@This());
 }

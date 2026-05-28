@@ -14,19 +14,19 @@ const app_context = @import("build_options").app_context;
 
 const GuestStage = @This();
 
+allocator: std.mem.Allocator,
 setting: *const Setting,
 connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 state: State,
-// TODO:
-// logger: Logger,
 
 pub const Connection = core.sockets.Connection.Client(app_context);
 
-pub fn create(connection: *Connection, setting: *const Setting) !GuestStage {
+pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
 
     try connection.subscribe(&.{
+        .probe_launching,
         .ready_topic_body,
         .topic_body,
         .finish_topic_body,
@@ -34,9 +34,15 @@ pub fn create(connection: *Connection, setting: *const Setting) !GuestStage {
     });
     try connection.connect();
 
-    const dispatcher = try connection.configureDispatcher(1);
+    const options: EventDispatcher.Options = .{ 
+        .force_concurrent = false, 
+        .log_style = setting.log_style,
+        .no_color = setting.no_color, 
+    };
+    const dispatcher = try connection.configureDispatcher(1, options);
 
     return .{
+        .allocator = allocator,
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
@@ -51,10 +57,9 @@ pub fn deinit(self: *GuestStage) void {
 }
 
 pub fn run(self: *GuestStage) !void {
-    self.dispatcher.run(GuestStage.onDispatch, .{}) catch |err| {
+    self.dispatcher.run(app_context, GuestStage.onDispatch) catch |err| {
         // TODO:
         // try self.connection.dispatcher.postFatal(@errorReturnTrace());
-        self.doQuitPhase();
         return err;
     };
 }
@@ -64,7 +69,6 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
 
     switch (self.state) {
         .booting => |state| {
-            try state.bootLog(self, &self.setting.endpoints);
             try state.handle(self, entry, dirty);
         },
         .ready => |state| try state.handle(self, entry, dirty),
@@ -225,38 +229,47 @@ const BootPhaseState = struct {
     pub fn deinit(_: *Self) void {}
 
     pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-        _ = dirty;
-        std.debug.assert(entry.event == .launching);
+        switch (entry.event) {
+            .launching => {
+                try self.bootLog(stage);
 
-        handshake(stage.connection, self.retry_count) catch |err| {
-            if (err == error.LaunchFailed) {
-                var channel = try stage.connection.postChannel();
-                try channel.encode(.failed_launching);
-                try stage.dispatcher.queue.post(channel);
+                // TODO:
+                handshake(stage.connection, self.retry_count) catch |err| {
+                    if (err == error.LaunchFailed) {
+                        var channel = try stage.connection.postChannel();
+                        try channel.encode(.failed_launching);
+                        try stage.dispatcher.queue.post(channel);
+                    }
+                    return err;
+                };
+                stage.doReadyPhase();
+            },
+            else => {
+                try stage.defaultHandler(entry, dirty);
             }
-            return err;
-        };
-        stage.doReadyPhase();
+        }
     }
 
-    pub fn bootLog(self: *const BootPhaseState, stage: *GuestStage, ep: *const core.types.Endpoints) !void {
+    pub fn bootLog(self: *const BootPhaseState, stage: *GuestStage) !void {
         _ = self;
-        // TODO:
-        _ = stage;
-        _ = ep;
+        const ep = stage.setting.endpoints;
 
-        // TODO:
-        // try self.logger.log(.debug, "Beginning...", .{});
-        // try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
+        try stage.dispatcher.log(.debug, app_context, "Beginning...", .{});
 
-        // dump_setting: {
-        //     try self.logger.log(.debug, "CLI: Req/Rep Channel = {s}", .{self.endpoints.req_rep});
-        //     try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{self.endpoints.pub_sub});
-        //     try self.logger.log(.debug, "CLI: Push/pull Channel = {s}", .{self.endpoints.push_pull});
-        //     break :dump_setting;
-        // }
+        dump_subscription: {
+            var arena = std.heap.ArenaAllocator.init(stage.allocator);
+            defer arena.deinit();
+
+            try stage.dispatcher.log(.debug, app_context, "Subscriber filters: {s}", .{try stage.connection.listSubscriptions(arena.allocator())});
+            break:dump_subscription;
+        }
+        dump_setting: {
+            try stage.dispatcher.log(.debug, app_context, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
+            try stage.dispatcher.log(.debug, app_context, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
+            try stage.dispatcher.log(.debug, app_context, "CLI: Push/pull Channel = {s}", .{ep.push_pull});
+            break :dump_setting;
+        }
     }
-
 };
 
 fn handshake(conn: *Connection, retry_count: usize) !void {

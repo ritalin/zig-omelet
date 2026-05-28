@@ -31,16 +31,20 @@ guest_names: []const types.Symbol,
 // const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
 pub const Connection = core.sockets.Connection.Server(app_context);
 
-pub fn create(connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRnner {
-    const allocator = connection.context.allocator;
-
+pub fn create(allocator: std.mem.Allocator, connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRnner {
     try connection.bind();
+
+    const options: EventDispatcher.Options = .{ 
+        .force_concurrent = false, 
+        .log_style = .stderr,
+        .no_color = setting.general.no_color, 
+    };
 
     return .{
         .allocator = allocator,
         .setting = setting,
         .connection = connection,
-        .dispatcher = try connection.configureDispatcher(poller_size),
+        .dispatcher = try connection.configureDispatcher(poller_size, options),
         .guest_names = guest_names,
         .state = .{ .booting = try BootPhaseState.create(allocator, guest_names) }
     };
@@ -53,11 +57,9 @@ pub fn deinit(self: *HostRnner) void {
 
 pub fn run(self: *HostRnner) !void {
     // TODO:
-    // var left_launching = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
     // var left_topic_stage = stage_count.stage_extract;
-    // var left_launched = stage_count.stage_watch + stage_count.stage_extract + stage_count.stage_generate;
 
-    self.dispatcher.run(HostRnner.onDispatch, .{}) catch |err| {
+    self.dispatcher.run(app_context, HostRnner.onDispatch) catch |err| {
         // TODO:
         // try self.connection.dispatcher.postFatal(@errorReturnTrace());
         return err;
@@ -251,6 +253,7 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEnt
         else => {
             // TODO:
             // Invalid phase
+            unreachable;
         }
     }
 }
@@ -392,6 +395,7 @@ fn deinitState(self: *State) void {
 
 const BootPhaseState = struct {
     guests: std.BufSet,
+    left_guest: std.BufSet,
 
     const Self = @This();
 
@@ -403,51 +407,49 @@ const BootPhaseState = struct {
 
         return .{
             .guests = guests,
+            .left_guest = try guests.cloneWithAllocator(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.guests.deinit();
+        self.left_guest.deinit();
     }
 
     pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .launching => {
-                _ = stage.setting.general.stage_endpoints;
-                // TODO:
-                // systemLog.debug("Launched", .{});
+                const ep = stage.setting.general.stage_endpoints;
 
-                // dump_setting: {
-                //     systemLog.debug("CLI: Req/Rep Channel = {s}", .{setting.general.runner_endpoints.req_rep});
-                //     systemLog.debug("CLI: Pub/Sub Channel = {s}", .{setting.general.runner_endpoints.pub_sub});
-                //     systemLog.debug("CLI: Watch mode = {}", .{setting.command.watchModeEnabled()});
-                //     break :dump_setting;
-                // }
+                try stage.dispatcher.log(.debug, app_context, "Launched", .{});
+
+                dump_setting: {
+                    try stage.dispatcher.log(.debug, app_context, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
+                    try stage.dispatcher.log(.debug, app_context, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
+                    try stage.dispatcher.log(.debug, app_context, "CLI: Push/Pull Channel = {s}", .{ep.push_pull});
+                    //  TODO:
+                    // stage.dispatcher.log(.debug, app_context, "CLI: Watch mode = {}", .{stage.setting.command.watchModeEnabled()});
+                    break :dump_setting;
+                }
             },
             .failed_launching => {
                 if (self.guests.contains(entry.from_stage)) {
-                    // TODO:
-                    // log
+                    try stage.dispatcher.log(.warn, app_context, "Launching failed/guest: {s}", .{entry.from_stage});
                     try stage.doTerminatePhase();
                 }
             },
             .launched => {
                 if (! self.guests.contains(entry.from_stage)) {
-                    // TODO:
-                    // unexpected guest
-                    // try self.onAfterLaunch(item.socket, item.routing_id);
-
+                    try stage.dispatcher.log(.warn, app_context, "Unexpected boot/guest: {s}", .{entry.from_stage});
+                    return;
                 }
 
-                self.guests.remove(entry.from_stage);
+                self.left_guest.remove(entry.from_stage);
 
-                // TODO:
-                // Accept log
-                // systemLog.debug("Received launched: '{s}' (left: {})", .{item.from, left_launching});
+                try stage.dispatcher.log(.info, app_context, "Launch accepted/guest: {s}", .{entry.from_stage});
 
-                if (self.guests.count() == 0) {
-                    // TODO:
-                    // Accept log
+                if (self.left_guest.count() == 0) {
+                    try stage.dispatcher.log(.info, app_context, "All guests launched", .{});
                     try stage.doRequestPhase();
                 }
             },
@@ -472,6 +474,7 @@ const RequestPhaseState = struct {
 
 const TerminatePhaseState = struct {
     guests: std.BufSet,
+    left_guest: std.BufSet,
 
     const Self = @This();
 
@@ -483,29 +486,28 @@ const TerminatePhaseState = struct {
 
         return .{
             .guests = guests,
+            .left_guest = try guests.cloneWithAllocator(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.guests.deinit();
+        self.left_guest.deinit();
     }
 
     pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .quit => {
                 if (! self.guests.contains(entry.from_stage)) {
-                    // TODO:
-                    // unexpected guest
+                    try stage.dispatcher.log(.warn, app_context, "Unexpected shut down/guest: {s}", .{entry.from_stage});
                 }
 
-                self.guests.remove(entry.from_stage);
+                self.left_guest.remove(entry.from_stage);
 
-                // TODO:
-                // log
+                try stage.dispatcher.log(.info, app_context, "Shutdown accepted/guest: {s}", .{entry.from_stage});
 
-                if (self.guests.count() == 0) {
-                    // TODO:
-                    // log
+                if (self.left_guest.count() == 0) {
+                    try stage.dispatcher.log(.info, app_context, "All guests Exited", .{});
                     stage.dispatcher.phase = .quitting;
                 }
             },

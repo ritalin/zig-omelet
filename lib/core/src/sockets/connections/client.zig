@@ -15,6 +15,7 @@ const Logger = root.Logger;
 
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const encodeSubscription = @import("../../events/encoder.zig").encodeSubscription;
+const decodeSubscription = @import("../../events/decoder.zig").decodeSubscription;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
 pub fn Client(comptime stage_name: types.StageName) type {
@@ -74,6 +75,20 @@ pub fn Client(comptime stage_name: types.StageName) type {
                 try view.subscribe(buffer.written());
             }
         }
+
+        pub fn listSubscriptions(self: *Self, allocator: std.mem.Allocator) !types.Symbol {
+            var view = self.cmd_socket.subscriptionView();
+
+            var buffer: std.ArrayListUnmanaged(types.Symbol) = .empty;
+            defer buffer.deinit(allocator);
+            try view.extractSubscriptions(allocator, &buffer);
+
+            for (buffer.items) |*bytes| {
+                bytes.* = try decodeSubscription(bytes.*);
+            }
+
+            return std.mem.join(allocator, ", ", buffer.items);
+        } 
 
         pub fn connect(self: *Self) !void {
             try self.cmd_socket.transport.start(.{});

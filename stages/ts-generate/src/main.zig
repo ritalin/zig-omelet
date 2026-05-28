@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
 
     // TODO:
     const setting: Setting = .{
-        .log_level = .trace,
+        .log_level = .debug,
         .log_style = .stderr,
         .no_color = false,
         .endpoints = .{

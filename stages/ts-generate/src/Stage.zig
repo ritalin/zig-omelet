@@ -232,11 +232,11 @@ const BootPhaseState = struct {
         switch (entry.event) {
             .launching => {
                 try self.bootLog(stage);
-
-                // TODO:
+            },
+            .probe_launching => {
                 handshake(stage.connection, self.retry_count) catch |err| {
                     if (err == error.LaunchFailed) {
-                        var channel = try stage.connection.postChannel();
+                        var channel = try stage.connection.dataChannel();
                         try channel.encode(.failed_launching);
                         try stage.dispatcher.queue.post(channel);
                     }

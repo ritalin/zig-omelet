@@ -3,15 +3,19 @@ const root = @import("../../root.zig");
 const nnng = @import("nnng");
 
 const types = root.types;
+const events = root.events;
+
 const ReceiveEntry = root.sockets.ReceiveEntry;
 const RpcChannel = root.sockets.RpcChannel;
 const SendChannel = root.sockets.SendChannel;
 const Event = root.events.Event;
 const EventHeader = root.events.EventHeader;
 const EventDispatcher = root.sockets.EventDispatcher;
+const Logger = root.Logger;
 
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const encodeSubscription = @import("../../events/encoder.zig").encodeSubscription;
+const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
 pub fn Client(comptime stage_name: types.StageName) type {
     return struct {
@@ -77,8 +81,23 @@ pub fn Client(comptime stage_name: types.StageName) type {
             try self.push_socket.transport.start(.{ .nonblocking = true });
         }
 
-        pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int) !EventDispatcher.Sized(poller_size) {
-            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll);
+        pub fn enableIntegratedLog(self: *Self, log_integrated: bool) void {
+            if (log_integrated) {
+                Logger.enableIntegratedLog(.{
+                    .ptr = self,
+                    .handler = Self.doIntegratedLog,
+                });
+            }
+            else {
+                Logger.enableIntegratedLog(.{
+                    .ptr = self,
+                    .handler = Self.doNonIntegratedLog,
+                });
+            }
+        }
+
+        pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
+            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll, options);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe);
 
             dispatcher.on_quit = .{
@@ -146,6 +165,18 @@ pub fn Client(comptime stage_name: types.StageName) type {
             var channel = try self.requestChannel();
             try channel.encode(.quit);
             try channel.submit(self.context.io);
+        }
+
+        fn doIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8) anyerror!void {
+            _ = ptr;
+            _ = level;
+            _ = msg;
+            unreachable;
+        }
+
+        fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
+            _ = ptr;
+            try putConsoleLog(level, stage_name, "{s}", .{ msg });
         }
     };
 }

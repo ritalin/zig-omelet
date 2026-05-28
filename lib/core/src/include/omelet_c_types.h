@@ -5,7 +5,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    log_level_err = 1,
+    log_level_err = 0,
     log_level_warn,
     log_level_info,
     log_level_debug,

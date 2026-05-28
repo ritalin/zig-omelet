@@ -3,13 +3,17 @@ const root = @import("../../root.zig");
 const nnng = @import("nnng");
 
 const types = root.types;
+const events = root.events;
+
 const ReceiveEntry = root.sockets.ReceiveEntry;
 const SendChannel = root.sockets.SendChannel;
 const Event = root.events.Event;
 const EventHeader = root.events.EventHeader;
 const EventDispatcher = root.sockets.EventDispatcher;
+const Logger = root.Logger;
 
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
+const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
 pub fn Server(comptime stage_name: types.StageName) type {
 // pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
@@ -64,8 +68,15 @@ pub fn Server(comptime stage_name: types.StageName) type {
             try self.pull_socket.transport.start(.{});
         }
 
-        pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int) !EventDispatcher.Sized(poller_size) {
-            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll);
+        pub fn enableIntegratedLog(self: *Self) void {
+            Logger.enableIntegratedLog(.{
+                .ptr = self,
+                .handler = Self.doNonIntegratedLog,
+            });
+        }
+
+        pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
+            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll, options);
             try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
 
@@ -179,6 +190,11 @@ pub fn Server(comptime stage_name: types.StageName) type {
         //             }
         //         }
         //     }
+        }
+
+        fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
+            _ = ptr;
+            try putConsoleLog(level, stage_name, "{s}", .{ msg });
         }
 
         fn writeResponse(msg: *nnng.Message, event: Event) !void {

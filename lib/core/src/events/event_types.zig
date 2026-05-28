@@ -24,16 +24,16 @@ pub const LogLevel = enum(u8) {
             .trace => "TRACE",
         };
     }
-    // TODO:
-    // pub fn toStdLevel(self: LogLevel) std.log.Level {
-    //     return switch (self) {
-    //         .err => .err,
-    //         .warn => .warn,
-    //         .info => .info,
-    //         .debug => .debug,
-    //         .trace => .debug,
-    //     };
-    // }
+
+    pub fn toStdLevel(self: LogLevel) std.log.Level {
+        return switch (self) {
+            .err => .err,
+            .warn => .warn,
+            .info => .info,
+            .debug => .debug,
+            .trace => .debug,
+        };
+    }
 
     // pub fn ofScope(self: LogLevel) LogScope {
     //     return switch (self) {
@@ -267,20 +267,16 @@ const EventPayload = struct {
     };
 
     pub const Log = struct {
-        allocator: std.mem.Allocator,
         level: LogLevel,
         content: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, view: StructView(Log)) !@This() {
+        pub fn init(view: StructView(Log)) !@This() {
             return .{
-                .allocator = allocator,
                 .level = view[0],
-                .content = try allocator.dupe(u8, view[1]),
+                .content = view[1],
             };
         }
-        pub fn deinit(self: @This()) void {
-            self.allocator.free(self.content);
-        }
+        pub fn deinit(_: @This()) void {}
         pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
             return init(allocator, self.values());
         }

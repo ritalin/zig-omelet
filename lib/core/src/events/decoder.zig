@@ -109,14 +109,14 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
             const log = try reader.readTuple(StructView(Event.Payload.Log));
 
             return .{
-                .log = try Event.Payload.Log.init(allocator, log),
+                .log = try Event.Payload.Log.init(log),
             };
         },
         .report_fatal => {
             const log = try reader.readTuple(StructView(Event.Payload.Log));
 
             return .{
-                .report_fatal = try Event.Payload.Log.init(allocator, log),
+                .report_fatal = try Event.Payload.Log.init(log),
             };
         },
         .pending_fatal_quit => return .pending_fatal_quit,
@@ -157,7 +157,7 @@ pub const tests = struct {
         defer skip_topic_body.deinit(allocator);
         const worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"});
         defer worker_response.deinit();
-        const log = try Event.Payload.Log.init(allocator, .{.debug, "Test message😃"});
+        const log = try Event.Payload.Log.init(.{.debug, "Test message😃"});
         defer log.deinit();
 
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });

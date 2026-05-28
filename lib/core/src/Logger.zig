@@ -5,6 +5,16 @@ const root = @import("./root.zig");
 const types = root.types;
 const events = root.events;
 
+pub const LogStyle = enum {
+    stderr,
+    integrated,
+    discard,
+};
+
+pub fn accepted(level: events.LogLevel) bool {
+    return level_filter.contains(level);
+}
+
 var level_filter = resetFilter(if (builtin.mode == .Debug) .debug else .info);
 
 pub const IntegratedHandler = struct {
@@ -32,6 +42,7 @@ pub fn putAppLog(terminal: std.Io.Terminal, level: events.LogLevel, stage_name: 
 }
 
 fn putLogLevel(terminal: std.Io.Terminal, level: events.LogLevel) std.Io.Terminal.SetColorError!void {
+    try terminal.setColor(.bold);
     try terminal.setColor(switch (level) {
         .err => .red,
         .warn => .yellow,
@@ -184,9 +195,9 @@ fn putStageName(terminal: std.Io.Terminal, stage_name: types.StageName) std.Io.T
 //     return Direct(stage_name, .trace);
 // }
 
-// pub fn filterWith(level: events.LogLevel) void {
-//     level_filter = resetFilter(level);
-// }
+pub fn filterWith(level: events.LogLevel) void {
+    level_filter = resetFilter(level);
+}
 
 fn resetFilter(level: events.LogLevel) events.LogLevelSet {
     var filter = events.LogLevelSet.initFull();
@@ -204,6 +215,14 @@ pub fn enableIntegratedLog(handler: IntegratedHandler) void {
 }
 
 pub fn forwardIntegratedLog(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    const new_level = switch (level) {
+        .err => .err,
+        .warn => .warn,
+        .info => .info,
+        .debug => switch(scope) { .default, .trace => .trace, else => .debug },
+    };
+    if (! level_filter.contains(new_level)) return;
+
     if (on_integrated == null) {
         return std.log.defaultLog(level, scope, format, args);
     }
@@ -212,13 +231,6 @@ pub fn forwardIntegratedLog(comptime level: std.log.Level, comptime scope: @Enum
     defer buffer.deinit();
 
     buffer.writer.print(format, args) catch { return; };
-
-    const new_level = switch (level) {
-        .err => .err,
-        .warn => .warn,
-        .info => .info,
-        .debug => if (scope == .trace) .trace else .debug,
-    };
 
     (on_integrated.?.handler)(on_integrated.?.ptr, new_level, buffer.writer.buffered()) catch {};
 }
@@ -245,31 +257,31 @@ pub const tests = struct {
         err: {
             terminal.writer.end = 0;
             try putLogLevel(terminal, .err);
-            try std.testing.expectEqualStrings("\x1b[31mERROR", terminal.writer.buffered());
+            try std.testing.expectEqualStrings("\x1b[1m\x1b[31mERROR", terminal.writer.buffered());
             break:err;
         }
         warn: {
             terminal.writer.end = 0;
             try putLogLevel(terminal, .warn);
-            try std.testing.expectEqualStrings("\x1b[33mWARN", terminal.writer.buffered());
+            try std.testing.expectEqualStrings("\x1b[1m\x1b[33mWARN", terminal.writer.buffered());
             break:warn;
         }
         info: {
             terminal.writer.end = 0;
             try putLogLevel(terminal, .info);
-            try std.testing.expectEqualStrings("\x1b[32mINFO", terminal.writer.buffered());
+            try std.testing.expectEqualStrings("\x1b[1m\x1b[32mINFO", terminal.writer.buffered());
             break:info;
         }
         debug: {
             terminal.writer.end = 0;
             try putLogLevel(terminal, .debug);
-            try std.testing.expectEqualStrings("\x1b[34mDEBUG", terminal.writer.buffered());
+            try std.testing.expectEqualStrings("\x1b[1m\x1b[34mDEBUG", terminal.writer.buffered());
             break:debug;
         }
         trace: {
             terminal.writer.end = 0;
             try putLogLevel(terminal, .trace);
-            try std.testing.expectEqualStrings("\x1b[35mTRACE", terminal.writer.buffered());
+            try std.testing.expectEqualStrings("\x1b[1m\x1b[35mTRACE", terminal.writer.buffered());
             break:trace;
         }
     }
@@ -291,7 +303,7 @@ pub const tests = struct {
         const terminal: std.Io.Terminal = .{ .writer = &buffer.writer, .mode = .escape_codes };
 
         try putAppLog(terminal, .debug, "runner", "{} {s} {}", .{1, "foo", 3});
-        const expected = "\x1b[34mDEBUG \x1b[0m[\x1b[1mrunner\x1b[0m] 1 foo 3\n";
+        const expected = "\x1b[1m\x1b[34mDEBUG \x1b[0m[\x1b[1mrunner\x1b[0m] 1 foo 3\n";
         try std.testing.expectEqualStrings(expected, terminal.writer.buffered());
     }
 
@@ -321,20 +333,23 @@ pub const tests = struct {
         info: {
             buffer.writer.end = 0;
             forwardIntegratedLog(.info, .app, "{s}", .{ "quaxx" });
-            const expected = "\x1b[32mINFO \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
+            const expected = "\x1b[1m\x1b[32mINFO \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:info;
         }
         debug: {
             buffer.writer.end = 0;
             forwardIntegratedLog(.debug, .app, "{s}", .{ "quaxx" });
-            const expected = "\x1b[34mDEBUG \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
+            const expected = "\x1b[1m\x1b[34mDEBUG \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:debug;
         }
     }
 
     test "integrated trace log" {
+        filterWith(.trace);
+        defer filterWith(.debug);
+
         var buffer = std.Io.Writer.Allocating.init(std.testing.allocator);
         defer buffer.deinit();
 
@@ -345,15 +360,15 @@ pub const tests = struct {
 
         info: {
             buffer.writer.end = 0;
-            forwardIntegratedLog(.info, .trace, "{s}", .{ "quaxx" });
-            const expected = "\x1b[32mINFO \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
+            forwardIntegratedLog(.info, .default, "{s}", .{ "quaxx" });
+            const expected = "\x1b[1m\x1b[32mINFO \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:info;
         }
         debug: {
             buffer.writer.end = 0;
-            forwardIntegratedLog(.debug, .trace, "{s}", .{ "quaxx" });
-            const expected = "\x1b[35mTRACE \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
+            forwardIntegratedLog(.debug, .default, "{s}", .{ "quaxx" });
+            const expected = "\x1b[1m\x1b[35mTRACE \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:debug;
         }

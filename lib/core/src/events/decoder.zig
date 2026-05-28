@@ -35,7 +35,10 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .ack => return .ack,
         .nack => return .nack,
         // periodically heartbeat
-        .heartbeat => return .heartbeat,
+        .heartbeat => {
+            const view = try reader.readTupleWithAllocator(allocator, StructView(Event.Payload.Heartbeat));
+            return .{ .heartbeat = Event.Payload.Heartbeat.init(view) };
+        },
         // Boot phase event
         .launching => return .launching,
         .probe_launching => return .probe_launching,
@@ -142,6 +145,7 @@ pub const tests = struct {
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
 
+        const heartbeat = Event.Payload.Heartbeat.init(.{ .probe_launching, 1 });
         const topic = try Event.Payload.Topic.init(.{ .source, try allocator.dupe(types.Symbol, &.{"topic_a", "topic_b", "topic_c"}) });
         defer topic.deinit(allocator);
         const source_path = try Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "Some-content", 1 });
@@ -167,7 +171,7 @@ pub const tests = struct {
 
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.nack), .stage_name = test_context, .event = .nack });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.heartbeat), .stage_name = test_context, .event = .heartbeat });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.heartbeat), .stage_name = test_context, .event = .{.heartbeat = heartbeat} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launching), .stage_name = test_context, .event = .launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_launching), .stage_name = test_context, .event = .probe_launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launched), .stage_name = test_context, .event = .launched });
@@ -220,7 +224,7 @@ pub const tests = struct {
             try std.testing.expectEqual(.heartbeat, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.heartbeat);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.heartbeat);
+            try std.testing.expectEqualDeep(heartbeat, packet.event.heartbeat);
             break:heartbeat;
         }
         launching: {

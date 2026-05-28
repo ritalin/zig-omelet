@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 
 const types = core.types;
+const events = core.events;
 
 const app_context = @import("build_options").app_context;
 const poller_size = 6;
@@ -10,56 +11,68 @@ const ReceiveEntry = core.sockets.ReceiveEntry;
 const Setting = @import("./settings/Setting.zig");
 const StageCount = @import("./configs/Config.zig").StageCount;
 const PayloadCacheManager = @import("./cache_manager.zig").PayloadCacheManager(app_context);
+
+const HeartbeatTask = @import("./tasks/HeartbeatTask.zig");
+const TaskReaper = @import("./supports/TaskReaper.zig");
+
 const EventDispatcher = core.sockets.EventDispatcher;
+
 
 const Symbol = core.Symbol;
 const systemLog = core.Logger.SystemDirect(app_context);
 const traceLog = core.Logger.TraceDirect(app_context);
 const log = core.Logger.Stage.log;
 
-const HostRnner = @This();
+const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(50);
+
+const HostRunner = @This();
 
 allocator: std.mem.Allocator,
+io: std.Io,
 setting: *const Setting,
-connection: *HostRnner.Connection,
+connection: *HostRunner.Connection,
 dispatcher: EventDispatcher.Sized(poller_size),
 state: State,
 guest_names: []const types.Symbol,
+reapers: *TaskReaper,
 
 // TODO:
 // const CommandPallet = @import("./CommandPallet.zig");
 // const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
 pub const Connection = core.sockets.Connection.Server(app_context);
 
-pub fn create(allocator: std.mem.Allocator, connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRnner {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRunner {
     try connection.bind();
 
     const options: EventDispatcher.Options = .{ 
-        .force_concurrent = false, 
+        .force_concurrent = true, 
         .log_style = .stderr,
         .no_color = setting.general.no_color, 
     };
 
     return .{
         .allocator = allocator,
+        .io = io,
         .setting = setting,
         .connection = connection,
         .dispatcher = try connection.configureDispatcher(poller_size, options),
         .guest_names = guest_names,
-        .state = .{ .booting = try BootPhaseState.create(allocator, guest_names) }
+        .state = .{ .booting = try BootPhaseState.create(allocator, guest_names) },
+        .reapers = try TaskReaper.init(io, allocator),
     };
 }
 
-pub fn deinit(self: *HostRnner) void {
+pub fn deinit(self: *HostRunner) void {
     self.state.deinit();
+    self.reapers.deinit(self.allocator);
     self.dispatcher.deinit();
 }
 
-pub fn run(self: *HostRnner) !void {
+pub fn run(self: *HostRunner) !void {
     // TODO:
     // var left_topic_stage = stage_count.stage_extract;
 
-    self.dispatcher.run(app_context, HostRnner.onDispatch) catch |err| {
+    self.dispatcher.run(app_context, HostRunner.onDispatch) catch |err| {
         // TODO:
         // try self.connection.dispatcher.postFatal(@errorReturnTrace());
         return err;
@@ -241,7 +254,7 @@ pub fn run(self: *HostRnner) !void {
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
-    const self: *HostRnner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
+    const self: *HostRunner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
         .booting => |*state| {
@@ -258,12 +271,14 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEnt
     }
 }
 
-fn defaultHandler(self: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-    _ = self;
-    
+fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {    
     switch (entry.event) {
         .log => {
             unreachable;
+        },
+        .heartbeat => {
+            // discard
+            try self.dispatcher.log(.debug, app_context, "Discard/event:heartbeat, phase: {s}", .{@tagName(self.dispatcher.phase)});
         },
         else => {
             dirty.* = .unhandled;
@@ -271,7 +286,7 @@ fn defaultHandler(self: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher
     }
 }
 
-fn doRequestPhase(self: *HostRnner) !void {
+fn doRequestPhase(self: *HostRunner) !void {
     // TODO:
     // stub impl
     try self.doTerminatePhase();
@@ -283,9 +298,10 @@ fn doRequestPhase(self: *HostRnner) !void {
     // // Send command
 
     // self.dispatcher.phase = .request;
+    // try self.dispatcher.log(.debug, app_context, "Switched to phase: {s}", .{self.dispatcher.phase});
 }
 
-fn doTerminatePhase(self: *HostRnner) !void {
+fn doTerminatePhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, self.guest_names) };
 
@@ -294,6 +310,22 @@ fn doTerminatePhase(self: *HostRnner) !void {
     try self.dispatcher.queue.post(channel);
 
     self.dispatcher.phase = .terminating;
+    try self.dispatcher.log(.debug, app_context, "Switched to phase: {s}", .{@tagName(self.dispatcher.phase)});
+}
+
+fn sendProbe(stage: *HostRunner, event: events.Event, count: usize) !void {
+    var channel = try stage.connection.commandChannel();
+    try channel.encode(event);
+    try stage.dispatcher.queue.post(channel);
+
+    const args = .{
+        stage.io, 
+        try stage.connection.dataChannel(),
+        std.meta.activeTag(event),
+        count,
+        TIMER_INTERVAL,
+    };
+    try stage.reapers.detach(HeartbeatTask.spawn, args);
 }
 
 // TODO:
@@ -302,14 +334,9 @@ fn doTerminatePhase(self: *HostRnner) !void {
 //         traceLog.debug("Stopping launch process", .{});
 //         try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
 //     }
-//     else {
-//         traceLog.debug("Received launched all", .{});
-//         // collect topics
-//         try self.connection.dispatcher.post(.request_topic);
-//     }
 // }
 
-fn handleTopicBody(self: *const HostRnner, topic_body: core.events.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
+fn handleTopicBody(self: *const HostRunner, topic_body: core.events.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
     _ = self;
 
     switch (try source_cache.update(topic_body)) {
@@ -330,7 +357,7 @@ fn handleTopicBody(self: *const HostRnner, topic_body: core.events.Event.Payload
     return null;
 }
 
-fn handleSkipTopicBody(self: *const HostRnner, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
+fn handleSkipTopicBody(self: *const HostRunner, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
     _ = self;
     try source_cache.dismiss(topic_body.header, topic_body.index);
 }
@@ -416,7 +443,7 @@ const BootPhaseState = struct {
         self.left_guest.deinit();
     }
 
-    pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+    pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .launching => {
                 const ep = stage.setting.general.stage_endpoints;
@@ -431,10 +458,13 @@ const BootPhaseState = struct {
                     // stage.dispatcher.log(.debug, app_context, "CLI: Watch mode = {}", .{stage.setting.command.watchModeEnabled()});
                     break :dump_setting;
                 }
+
+                try stage.sendProbe(.probe_launching, 1);
             },
             .failed_launching => {
                 if (self.guests.contains(entry.from_stage)) {
                     try stage.dispatcher.log(.warn, app_context, "Launching failed/guest: {s}", .{entry.from_stage});
+                    try stage.dispatcher.log(.warn, app_context, "Stopping launch process", .{});
                     try stage.doTerminatePhase();
                 }
             },
@@ -451,6 +481,18 @@ const BootPhaseState = struct {
                 if (self.left_guest.count() == 0) {
                     try stage.dispatcher.log(.info, app_context, "All guests launched", .{});
                     try stage.doRequestPhase();
+                }
+            },
+            .heartbeat => |payload| {
+                if (self.left_guest.count() > 0) {
+                    switch (payload.event_type) {
+                        .probe_launching => {
+                            try stage.sendProbe(.probe_launching, payload.count);
+                        },
+                        else => {
+                            try stage.defaultHandler(entry, dirty);
+                        }
+                    }
                 }
             },
             else => {
@@ -495,7 +537,7 @@ const TerminatePhaseState = struct {
         self.left_guest.deinit();
     }
 
-    pub fn handle(self: *Self, stage: *HostRnner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+    pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .quit => {
                 if (! self.guests.contains(entry.from_stage)) {
@@ -529,7 +571,7 @@ pub const tests = struct {
         cache_manager: PayloadCacheManager,
         category: core.TopicCategory,
 
-        const Runner = HostRnner;
+        const Runner = HostRunner;
 
         pub fn init(allocator: std.mem.Allocator, category: core.TopicCategory) !RunnerTestContext {
             const setting: Setting = .{

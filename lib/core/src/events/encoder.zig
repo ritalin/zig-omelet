@@ -41,7 +41,9 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         .ack => {},
         .nack => {},
         // periodically heartbeat
-        .heartbeat => {},
+        .heartbeat => |payload| {
+            _ = try writer.writeTuple(StructView(Event.Payload.Heartbeat), payload.values());
+        },
         // Boot phase event
         .launching, .probe_launching, .launched, .failed_launching => {},
         // Request phase event

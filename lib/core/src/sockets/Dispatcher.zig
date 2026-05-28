@@ -72,7 +72,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                 defer skip_entries.deinit(self.queue.allocator);
 
                 while (self.queue.receive_queue.popFront()) |e| {
-                    try self.log(.trace, stage_name, "Next/event: {s}, from-stage: {s}", .{ @tagName(e.event), e.from_stage });
+                    try self.log(.trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
 
                     var entry = e;
                     var dirty: EventDispatcher.DirtyState = .none;
@@ -101,10 +101,11 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                 }
 
                 while (self.queue.send_queue.popFront()) |channel| {
+                    try self.log(.trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
                     try channel.sender.submit(channel.msg, .{ .flags = .{.nonblocking = true} });
                 }
 
-                _ = try self.poller.poll(Self.doPoll, .{ .force_concurrent = self.options.force_concurrent });
+                _ = try self.poller.poll(Self.doPoll);
                 try self.queue.entrySkipped(skip_entries.items);
             }
         }
@@ -287,7 +288,7 @@ pub const tests = struct {
         defer conn.deinit();
         try conn.bind();
 
-        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{});
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
         var push_socket = socket: {
@@ -323,7 +324,7 @@ pub const tests = struct {
         defer conn.deinit();
         try conn.bind();
 
-        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{});
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
         var push_socket = socket: {
@@ -371,7 +372,7 @@ pub const tests = struct {
         try guest.cmd_socket.transport.start(.{});
         try host.cmd_socket.transport.start(.{});
 
-        var dispatcher: Dispatcher = try guest.configureDispatcher(8, .{});
+        var dispatcher: Dispatcher = try guest.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
         dispatcher.on_quit = null;
 
@@ -413,10 +414,10 @@ pub const tests = struct {
         try guest.req_socket.transport.start(.{});
         try host.cmd_socket.transport.start(.{});
 
-        var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .force_concurrent = true });
+        var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .force_concurrent = true, .log_style = .discard });
         defer host_dispatcher.deinit();
 
-        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8, .{ .force_concurrent = true });
+        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8, .{ .force_concurrent = true, .log_style = .discard });
         defer guest_dispatcher.deinit();
 
         publisg_event: {

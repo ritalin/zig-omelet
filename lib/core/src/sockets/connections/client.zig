@@ -92,8 +92,13 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
         pub fn connect(self: *Self) !void {
             try self.cmd_socket.transport.start(.{});
+            errdefer self.cmd_socket.close();
+
             try self.req_socket.transport.start(.{ .nonblocking = true });
+            errdefer self.req_socket.close();
+
             try self.push_socket.transport.start(.{ .nonblocking = true });
+            errdefer self.push_socket.close();
         }
 
         pub fn enableIntegratedLog(self: *Self, log_integrated: bool) void {
@@ -146,9 +151,10 @@ pub fn Client(comptime stage_name: types.StageName) type {
             );
         }
 
-        pub fn postChannel(self: *Self) !SendChannel {
+        pub fn dataChannel(self: *Self) !SendChannel {
             return SendChannel.init(
                 self.context.allocator, 
+                self.push_socket.pipe.item.id,
                 stage_name, 
                 self.push_socket.pipe.item.sender(), 
             );
@@ -163,7 +169,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
                     },
                     .ready => |channel| {
                         const msg = try channel.receiver().drain(.{});
-                        if (ReceiveEntry.create(queue.allocator, stage_name, msg, channel.features)) |entry| {
+                        if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
                             try queue.pushReceiveQueue(entry);
                         }
                         else |_| {

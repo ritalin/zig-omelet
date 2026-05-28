@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
 
     connection.enableIntegratedLog();
 
-    var runner = try Runner.create(allocator, &connection, guest_names, &setting);
+    var runner = try Runner.create(init.io, allocator, &connection, guest_names, &setting);
     errdefer runner.deinit();
 
     // TODO:

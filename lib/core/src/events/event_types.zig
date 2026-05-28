@@ -116,6 +116,22 @@ pub const TopicCategory = enum {
 };
 
 const EventPayload = struct {
+    pub const Heartbeat = struct {
+        event_type: EventType,
+        count: usize,
+
+        pub fn init(view: StructView(Heartbeat)) @This() {
+            return .{
+                .event_type = view[0],
+                .count = view[1],
+            };
+        }
+        pub fn deinit(_: @This(), _: std.mem.Allocator) void {}
+        pub fn values(self: @This()) StructView(Heartbeat) {
+            return .{ self.event_type, self.count };
+        }
+    };
+
     pub const Topic = struct {
         category: TopicCategory,
         names: []const Symbol,
@@ -289,7 +305,7 @@ const EventPayload = struct {
 /// Event operation
 pub const EventOperation = struct {
     pub const deinit = deinitEvent;
-    pub const clone = cloneEvent;
+    // pub const clone = cloneEvent;
     pub fn tag(event: Event) std.meta.Tag(Event) {
         return std.meta.activeTag(event);
     }
@@ -301,7 +317,7 @@ pub const Event = union(EventType) {
     ack: void,
     nack: void,
     // periodically heartbeat
-    heartbeat: void,
+    heartbeat: Payload.Heartbeat,
     // Boot phase event
     launching: void,
     probe_launching: void,
@@ -386,53 +402,55 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .pending_fatal_quit => {},
     }
 }
-pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
-    const cloned_event: Event = switch (event) {
-        // Response events
-        .ack => .ack,
-        .nack => .nack,
-        // periodically heartbeat
-        .heartbeat => .heartbeat,
-        // Boot phase event
-        .launching => .launching,
-        .probe_launching => .probe_launching,
-        .launched => .launched,
-        .failed_launching => .failed_launching,
-        // Request phase ebent
-        .request_topic => .request_topic,
-        .topic => |payload| .{.topic = try payload.clone(allocator)},
-        // Watch events
-        .ready_watch_path => .ready_watch_path,
-        .finish_watch_path => .finish_watch_path,
-        // Source path events
-        .ready_source_path => .ready_source_path,
-        .source_path => |payload| .{.source_path = try payload.clone(allocator)},
-        .pending_finish_source_path => .pending_finish_source_path,
-        .finish_source_path => .finish_source_path,
-        // Topic body events
-        .ready_topic_body => .ready_topic_body,
-        .topic_body => |payload| .{.topic_body = try payload.clone(allocator)},
-        .skip_topic_body => |payload| .{.skip_topic_body = try payload.clone(allocator)},
-        .pending_finish_topic_body => .pending_finish_topic_body,
-        .finish_topic_body => .finish_topic_body,
-        // Generate events
-        .ready_generate => .ready_generate,
-        .finish_generate => .finish_generate,
-        // Worker event
-        .worker_response => |payload| .{.worker_response = try payload.clone(allocator)},
-        // Other events
-        .quit => .quit,
-        .quit_all => .quit_all,
-        .quit_accept => .quit_accept,
-        .log => |payload| .{.log = try payload.clone(allocator)},
-        .report_fatal => |payload| .{.log = try payload.clone(allocator)},
-        .pending_fatal_quit => .pending_fatal_quit,
-    };
 
-    std.debug.assert(event.tag() == cloned_event.tag());
+// TODO:
+// pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
+//     const cloned_event: Event = switch (event) {
+//         // Response events
+//         .ack => .ack,
+//         .nack => .nack,
+//         // periodically heartbeat
+//         .heartbeat => .heartbeat,
+//         // Boot phase event
+//         .launching => .launching,
+//         .probe_launching => .probe_launching,
+//         .launched => .launched,
+//         .failed_launching => .failed_launching,
+//         // Request phase ebent
+//         .request_topic => .request_topic,
+//         .topic => |payload| .{.topic = try payload.clone(allocator)},
+//         // Watch events
+//         .ready_watch_path => .ready_watch_path,
+//         .finish_watch_path => .finish_watch_path,
+//         // Source path events
+//         .ready_source_path => .ready_source_path,
+//         .source_path => |payload| .{.source_path = try payload.clone(allocator)},
+//         .pending_finish_source_path => .pending_finish_source_path,
+//         .finish_source_path => .finish_source_path,
+//         // Topic body events
+//         .ready_topic_body => .ready_topic_body,
+//         .topic_body => |payload| .{.topic_body = try payload.clone(allocator)},
+//         .skip_topic_body => |payload| .{.skip_topic_body = try payload.clone(allocator)},
+//         .pending_finish_topic_body => .pending_finish_topic_body,
+//         .finish_topic_body => .finish_topic_body,
+//         // Generate events
+//         .ready_generate => .ready_generate,
+//         .finish_generate => .finish_generate,
+//         // Worker event
+//         .worker_response => |payload| .{.worker_response = try payload.clone(allocator)},
+//         // Other events
+//         .quit => .quit,
+//         .quit_all => .quit_all,
+//         .quit_accept => .quit_accept,
+//         .log => |payload| .{.log = try payload.clone(allocator)},
+//         .report_fatal => |payload| .{.log = try payload.clone(allocator)},
+//         .pending_fatal_quit => .pending_fatal_quit,
+//     };
 
-    return cloned_event;
-}
+//     std.debug.assert(event.tag() == cloned_event.tag());
+
+//     return cloned_event;
+// }
 
 // TODO:
 // test "Clone events" {

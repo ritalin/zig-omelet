@@ -15,15 +15,18 @@ const Logger = root.Logger;
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
+const INPROC_URL = "inproc://sync-thread";
+
 pub fn Server(comptime stage_name: types.StageName) type {
+// TODO:
 // pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
-    // const Trace = Logger.TraceDirect(stage_name);
 
     return struct {
         context: nnng.Context,
         reply_socket: nnng.Rep.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),
         pull_socket: nnng.Pull.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
         cmd_socket: nnng.Pub.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
+        inproc_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
 
         const Self = @This();
 
@@ -35,6 +38,8 @@ pub fn Server(comptime stage_name: types.StageName) type {
                 break:socket try b.as_listener(endpoints.push_pull);
             };
             errdefer pull_socket.close();
+
+            try pull_socket.transport.addChannel(INPROC_URL);
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
@@ -48,24 +53,40 @@ pub fn Server(comptime stage_name: types.StageName) type {
             };
             errdefer reply_socket.close();
 
+            var inproc_socket = socket: {
+                const b = try nnng.Push.open(context);
+                break:socket try b.as_dialer(INPROC_URL);
+            };
+            errdefer inproc_socket.close();
+
             return .{
                 .context = context,
                 .reply_socket = reply_socket,
                 .pull_socket = pull_socket,
                 .cmd_socket = cmd_socket,
+                .inproc_socket = inproc_socket,
             };
         }
 
         pub fn deinit(self: *Self) void {
+            self.cmd_socket.close();
+            self.inproc_socket.close();
             self.reply_socket.close();
             self.pull_socket.close();
-            self.cmd_socket.close();
         }
 
         pub fn bind(self: *Self) !void {
-            try self.cmd_socket.transport.start(.{ .nonblocking = true });
             try self.reply_socket.transport.start(.{});
+            errdefer self.reply_socket.close();
+
             try self.pull_socket.transport.start(.{});
+            errdefer self.pull_socket.close();
+
+            try self.inproc_socket.transport.start(.{});
+            errdefer self.inproc_socket.close();
+
+            try self.cmd_socket.transport.start(.{ .nonblocking = true });
+            errdefer self.cmd_socket.close();
         }
 
         pub fn enableIntegratedLog(self: *Self) void {
@@ -87,10 +108,15 @@ pub fn Server(comptime stage_name: types.StageName) type {
         }
 
         pub fn commandChannel(self: *const Self) !SendChannel {
-            return SendChannel.init(self.context.allocator, stage_name, self.cmd_socket.pipe.item.sender());
+            return SendChannel.init(self.context.allocator, self.cmd_socket.pipe.item.id, stage_name, self.cmd_socket.pipe.item.sender());
+        }
+
+        pub fn dataChannel(self: *const Self) !SendChannel {
+            return SendChannel.init(self.context.allocator, self.inproc_socket.pipe.item.id, stage_name, self.inproc_socket.pipe.item.sender());
         }
 
         fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
+            // TODO: send try error log
             for (results) |result| {
                 switch (result) {
                     .failed => |err| {
@@ -99,7 +125,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
                     },
                     .ready => |channel| {
                         var msg = try channel.receiver().drain(.{});
-                        if (ReceiveEntry.create(queue.allocator, stage_name, msg, channel.features)) |entry| {
+                        if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
                             try queue.pushReceiveQueue(entry);
 
                             if (channel.features.replyable) {
@@ -108,7 +134,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
                             }
                         }
                         else |_| {
-                            // Todo: send error log
+                            // TODO: send error log
 
                             if (channel.features.replyable) {
                                 try writeResponse(&msg, .nack);
@@ -118,6 +144,8 @@ pub fn Server(comptime stage_name: types.StageName) type {
                     }
                 }
             }
+        
+        // TODO:
         //         while (dispatcher.receive_queue.dequeue()) |entry| {
         //             return entry;
         //         }
@@ -153,41 +181,6 @@ pub fn Server(comptime stage_name: types.StageName) type {
         //                 return null;
         //             }
         //             break:send_event;
-        //         }
-
-        //         receive_event: {
-        //             while (true) {
-        //                 var it = try dispatcher.polling.poll();
-        //                 defer it.deinit();
-
-        //                 while (it.next()) |item| {
-        //                     const routing_id = try events.receiveRoutingId(dispatcher.allocator, item.socket);
-
-        //                     const packet = events.receiveEventWithPayload(dispatcher.allocator, item.socket) catch |err| switch (err) {
-        //                         // error.InvalidResponse => {
-        //                         //     try events.sendEvent(dispatcher.allocator, item.socket, .nack);
-        //                         //     continue;
-        //                         // },
-        //                         else => return err,
-        //                     };
-
-        //                     Trace.debug("Received command: {} from [{s}]", .{
-        //                         packet.event.tag(),
-        //                         std.mem.sliceTo(packet.from, 0),
-        //                     });
-
-        //                     try dispatcher.receive_queue.enqueue(.{
-        //                         .allocator = dispatcher.allocator,
-        //                         .kind = .response,
-        //                         .socket = item.socket,
-        //                         .from = packet.from,
-        //                         .event = packet.event,
-        //                         .routing_id = routing_id,
-        //                     });
-        //                 }
-
-        //                 if (dispatcher.receive_queue.count() > 0) break:receive_event;
-        //             }
         //         }
         //     }
         }

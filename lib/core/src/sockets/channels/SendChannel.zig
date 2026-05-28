@@ -9,13 +9,15 @@ const types = root.types;
 
 const Self = @This();
 
+pipe_id: u64,
 buffer: std.Io.Writer.Allocating,
 msg: nnng.Message,
 sender: nnng.PipeSender,
 stage: types.StageName,
 
-pub fn init(allocator: std.mem.Allocator, stage_name: types.StageName, sender: nnng.PipeSender) !Self {
+pub fn init(allocator: std.mem.Allocator, pipe_id: u64, stage_name: types.StageName, sender: nnng.PipeSender) !Self {
     return .{
+        .pipe_id = pipe_id,
         .buffer = std.Io.Writer.Allocating.init(allocator),
         .msg = try nnng.Message.create(),
         .sender = sender,
@@ -28,6 +30,8 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn encode(self: *Self, event: events.Event) !void {
+    std.log.scoped(.app).debug("SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
+
     try encodeToCbor(&self.msg.writer, .{
         .header = events.EventHeader.fromEvent(event) ,
         .stage_name = self.stage,

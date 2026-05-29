@@ -6,25 +6,24 @@ const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const events = root.events;
 const types = root.types;
 
+pub const SendChannel = struct {
+    inner: InnerChannel,
 
-const SendChannel = @This();
+    pub fn init(allocator: std.mem.Allocator, pipe_id: u64, stage_name: types.StageName, sender: nnng.PipeSender) !SendChannel {
+        return .{
+            .inner = try InnerChannel.init(allocator, pipe_id, stage_name, sender),
+        };
+    }
 
-inner: InnerChannel,
+    pub fn deinit(self: *SendChannel) void {
+        self.inner.deinit();
+    }
 
-pub fn init(allocator: std.mem.Allocator, pipe_id: u64, stage_name: types.StageName, sender: nnng.PipeSender) !SendChannel {
-    return .{
-        .inner = try InnerChannel.init(allocator, pipe_id, stage_name, sender),
-    };
-}
-
-pub fn deinit(self: *SendChannel) void {
-    self.inner.deinit();
-}
-
-pub fn encode(self: *SendChannel, event: events.Event) !void {
-    std.log.scoped(.app).debug("SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
-    return self.inner.encode(event);
-}
+    pub fn encode(self: *SendChannel, event: events.Event) !void {
+        std.log.scoped(.app).debug("SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
+        return self.inner.encode(event);
+    }
+};
 
 const InnerChannel = struct {
     pipe_id: u64,
@@ -56,7 +55,7 @@ const InnerChannel = struct {
     }
 };
 
-const Log = struct {
+pub const Log = struct {
     inner: InnerChannel,
 
     pub fn init(allocator: std.mem.Allocator, pipe_id: u64, stage_name: types.StageName, sender: nnng.PipeSender) !SendChannel.Log {

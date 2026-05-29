@@ -23,7 +23,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
         context: nnng.Context,
         req_socket: nnng.Req.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
         push_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
-        cmd_socket: nnng.Sub.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
+        cmd_socket: nnng.Sub.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
         // cmd_socket: nnng.Sub.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
 
         const Self = @This();
@@ -44,7 +44,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
             var cmd_socket = socket: {
                 const b = try nnng.Sub.open(context);
-                break:socket try b.as_listener(endpoints.pub_sub);
+                break:socket try b.as_dialer(endpoints.pub_sub);
                 // break:socket try b.as_listener(endpoints.pub_sub);
             };
             errdefer cmd_socket.close();
@@ -91,7 +91,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
         } 
 
         pub fn connect(self: *Self) !void {
-            try self.cmd_socket.transport.start(.{});
+            try self.cmd_socket.transport.start(.{ .nonblocking = true });
             errdefer self.cmd_socket.close();
 
             try self.req_socket.transport.start(.{ .nonblocking = true });
@@ -117,7 +117,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
         }
 
         pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
-            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll, options);
+            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.PollHandler(poller_size).doPoll, options);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe);
 
             dispatcher.on_quit = .{
@@ -160,25 +160,25 @@ pub fn Client(comptime stage_name: types.StageName) type {
             );
         }
 
-        fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
-            for (results) |result| {
-                switch (result) {
-                    .failed => |err| {
-                        _ = err;
-                        // TODO: error handling
-                    },
-                    .ready => |channel| {
-                        const msg = try channel.receiver().drain(.{});
-                        if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
-                            try queue.pushReceiveQueue(entry);
-                        }
-                        else |_| {
-                            // Todo: send error log
-                        }
-                    }
-                }
-            }
-        }
+        // TODO: will remove
+        // fn onPoll(queue: *EventDispatcher.Queue, logger: *EventDispatcher.Logger, results: []const nnng.PollEvent) anyerror!void {
+        //     for (results) |result| {
+        //         switch (result) {
+        //             .failed => |payload| {
+        //                 try logger.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
+        //             },
+        //             .ready => |channel| {
+        //                 const msg = try channel.receiver().drain(.{});
+        //                 if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
+        //                     try queue.pushReceiveQueue(entry);
+        //                 }
+        //                 else |err| {
+        //                     try logger.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
 
         fn doQuit(ptr: *anyopaque) anyerror!void {
             const self: *Self = @ptrCast(@alignCast(ptr));
@@ -198,6 +198,29 @@ pub fn Client(comptime stage_name: types.StageName) type {
         fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
             _ = ptr;
             try putConsoleLog(level, stage_name, "{s}", .{ msg });
+        }
+
+        fn PollHandler(comptime poller_size: comptime_int) type {
+            return struct {
+                pub fn doPoll(dispatcher: *EventDispatcher.Sized(poller_size), results: []const nnng.PollEvent) !void {
+                    for (results) |result| {
+                        switch (result) {
+                            .failed => |payload| {
+                                try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
+                            },
+                            .ready => |channel| {
+                                const msg = try channel.receiver().drain(.{});
+                                if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
+                                    try dispatcher.queue.pushReceiveQueue(entry);
+                                }
+                                else |err| {
+                                    try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                }
+                            }
+                        }
+                    }
+                }
+            };
         }
     };
 }

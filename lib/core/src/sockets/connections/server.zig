@@ -25,7 +25,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
         context: nnng.Context,
         reply_socket: nnng.Rep.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),
         pull_socket: nnng.Pull.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
-        cmd_socket: nnng.Pub.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
+        cmd_socket: nnng.Pub.Protocol(nnng.Transport.Listener, nnng.Pipe.Sync),
         inproc_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
 
         const Self = @This();
@@ -43,7 +43,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
-                break:socket try b.as_dialer(endpoints.pub_sub);
+                break:socket try b.as_listener(endpoints.pub_sub);
             };
             errdefer cmd_socket.close();
 
@@ -85,7 +85,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             try self.inproc_socket.transport.start(.{});
             errdefer self.inproc_socket.close();
 
-            try self.cmd_socket.transport.start(.{ .nonblocking = true });
+            try self.cmd_socket.transport.start(.{});
             errdefer self.cmd_socket.close();
         }
 
@@ -97,7 +97,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
         }
 
         pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
-            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.onPoll, options);
+            var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.PollHandler(poller_size).onPoll, options);
             try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
 
@@ -115,76 +115,6 @@ pub fn Server(comptime stage_name: types.StageName) type {
             return SendChannel.init(self.context.allocator, self.inproc_socket.pipe.item.id, stage_name, self.inproc_socket.pipe.item.sender());
         }
 
-        fn onPoll(queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void {
-            // TODO: send try error log
-            for (results) |result| {
-                switch (result) {
-                    .failed => |err| {
-                        _ = err;
-                        // TODO: error handling
-                    },
-                    .ready => |channel| {
-                        var msg = try channel.receiver().drain(.{});
-                        if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
-                            try queue.pushReceiveQueue(entry);
-
-                            if (channel.features.replyable) {
-                                try writeResponse(&msg, .ack);
-                                try channel.sender().submit(msg, .{});
-                            }
-                        }
-                        else |_| {
-                            // TODO: send error log
-
-                            if (channel.features.replyable) {
-                                try writeResponse(&msg, .nack);
-                                try channel.sender().submit(msg, .{});
-                            }
-                        }
-                    }
-                }
-            }
-        
-        // TODO:
-        //         while (dispatcher.receive_queue.dequeue()) |entry| {
-        //             return entry;
-        //         }
-
-        //         send_event: {
-        //             while (dispatcher.send_queue.dequeue()) |entry| {
-        //                 defer entry.deinit();
-
-        //                 Trace.debug("{s}: {} from [{s}] to [{s}] ({}) ", .{
-        //                     if (entry.kind == .reply) "Reply" else "Post",
-        //                     std.meta.activeTag(entry.event),
-        //                     entry.from,
-        //                     if (entry.routing_id) |routing_id| routing_id else "all",
-        //                     dispatcher.send_queue.count()
-        //                 });
-
-        //                 if (entry.routing_id) |routing_id| {
-        //                     try events.sendRoutingId(dispatcher.allocator, entry.socket, routing_id);
-        //                 }
-
-        //                 events.sendEvent(
-        //                     dispatcher.allocator, entry.socket,
-        //                     .{ .kind = entry.kind, .from = stage_name, .event = entry.event }
-        //                 )
-        //                 catch |err| switch (err) {
-        //                     else => {
-        //                         // Logger.Server.traceLog.debug("Unexpected error on sending: {any}", .{err});
-        //                         return err;
-        //                     }
-        //                 };
-        //             }
-        //             else if (dispatcher.state.level.done) {
-        //                 return null;
-        //             }
-        //             break:send_event;
-        //         }
-        //     }
-        }
-
         fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
             _ = ptr;
             try putConsoleLog(level, stage_name, "{s}", .{ msg });
@@ -193,6 +123,39 @@ pub fn Server(comptime stage_name: types.StageName) type {
         fn writeResponse(msg: *nnng.Message, event: Event) !void {
             msg.writer.end = 0;
             try encodeToCbor(&msg.writer, .{ .header = EventHeader.fromEvent(event), .stage_name = stage_name, .event = event });
+        }
+
+        fn PollHandler(comptime poller_size: comptime_int) type {
+            return struct {
+                fn onPoll(dispatcher: *EventDispatcher.Sized(poller_size), results: []const nnng.PollEvent) anyerror!void {
+                    for (results) |result| {
+                        switch (result) {
+                            .failed => |payload| {
+                                try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
+                            },
+                            .ready => |channel| {
+                                var msg = try channel.receiver().drain(.{});
+                                if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
+                                    try dispatcher.queue.pushReceiveQueue(entry);
+
+                                    if (channel.features.replyable) {
+                                        try writeResponse(&msg, .ack);
+                                        try channel.sender().submit(msg, .{});
+                                    }
+                                }
+                                else |err| {
+                                    try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+
+                                    if (channel.features.replyable) {
+                                        try writeResponse(&msg, .nack);
+                                        try channel.sender().submit(msg, .{});
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
         }
     };
 }

@@ -8,7 +8,7 @@ pub const sockets = struct {
         pub const Server = @import("sockets/connections/server.zig").Server;
         pub const Client = @import("sockets/connections/client.zig").Client;
     };
-    pub const SendChannel = @import("./sockets/channels/SendChannel.zig");
+    pub const SendChannel = @import("./sockets/channels/send_channel.zig").SendChannel;
     pub const RpcChannel = @import("./sockets/channels/RpcChannel.zig");
     pub const ReceiveEntry = @import("./sockets/channels/ReceiveEntry.zig");
     pub const EventDispatcher = @import("./sockets/Dispatcher.zig");

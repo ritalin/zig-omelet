@@ -23,7 +23,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         const ReceivePoller = nnng.ReceivePoller(poller_size);
 
         pub const DispatchFn = *const fn (dispatcher: *Self, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
-        pub const PollFn = *const fn (queue: *EventDispatcher.Queue, results: []const nnng.PollEvent) anyerror!void;
+        pub const PollFn = *const fn (dispatcher: *Self, results: []const nnng.PollEvent) anyerror!void;
 
         // TODO:
         // pub const Phase = struct {
@@ -101,8 +101,8 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                 }
 
                 while (self.queue.send_queue.popFront()) |channel| {
-                    try self.log(.trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
-                    try channel.sender.submit(channel.msg, .{ .flags = .{.nonblocking = true} });
+                    try self.log(.trace, stage_name, "Send/pipe_id: {}", .{ channel.inner.pipe_id,  });
+                    try channel.inner.sender.submit(channel.inner.msg, .{ .flags = .{.nonblocking = true} });
                 }
 
                 _ = try self.poller.poll(Self.doPoll);
@@ -138,7 +138,12 @@ pub fn Sized(comptime poller_size: comptime_int) type {
 
         fn doPoll(poller: *ReceivePoller, results: []const nnng.PollEvent) !void {
             const self: *Self = @alignCast(@fieldParentPtr("poller", poller));
-            try (self.on_poll)(&self.queue, results);
+            try (self.on_poll)(self, results);
+        }
+
+        fn doLog(ptr: *anyopaque, level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.logInternal(level, stage_name, fmt, args);
         }
 
         // TODO:
@@ -201,6 +206,18 @@ pub const QuitHandler = struct {
     ptr: *anyopaque,
     handler: *const fn (ptr: *anyopaque) anyerror!void,
 };
+
+// TODO: will remove
+// pub fn Logger(comptime Owner: type) type {
+//     return struct {
+//         owner: *Owner,
+
+//         pub fn log(self: *Logger, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
+//             if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
+//             return self.owner.log(self.ptr, level, stage_name, fmt, args);
+//         }
+//     };
+// }
 
 pub const Queue = struct {
     allocator: std.mem.Allocator,
@@ -369,8 +386,8 @@ pub const tests = struct {
         // try view.enableWildcard();
         try view.extractSubscriptions(std.testing.allocator, &subscriptions);
 
-        try guest.cmd_socket.transport.start(.{});
         try host.cmd_socket.transport.start(.{});
+        try guest.cmd_socket.transport.start(.{});
 
         var dispatcher: Dispatcher = try guest.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
@@ -406,13 +423,13 @@ pub const tests = struct {
         try guest.subscribe(&.{ .quit_all });
 
         // listeners
-        try guest.cmd_socket.transport.start(.{});
         try host.pull_socket.transport.start(.{});
         try host.reply_socket.transport.start(.{});
+        try host.cmd_socket.transport.start(.{});
         // dialers
         try guest.push_socket.transport.start(.{});
         try guest.req_socket.transport.start(.{});
-        try host.cmd_socket.transport.start(.{});
+        try guest.cmd_socket.transport.start(.{});
 
         var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .force_concurrent = true, .log_style = .discard });
         defer host_dispatcher.deinit();

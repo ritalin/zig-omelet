@@ -21,11 +21,6 @@ pub const FilePath = []const u8;
 pub const Symbol = []const u8;
 pub const StageName = []const u8;
 
-// TODO:
-// pub const LogScope = enum {
-//     trace, app,
-// };
-
 pub const FilterKind = enum {include, exclude};
 
 pub const ConfigCategory = enum {

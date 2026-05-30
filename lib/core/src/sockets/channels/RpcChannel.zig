@@ -9,35 +9,44 @@ const types = root.types;
 
 const Self = @This();
 
-rpc: nnng.Rpc,
 sender: nnng.PipeSender,
 receiver: nnng.PipeReceiver,
 stage: types.StageName,
 
 pub fn init(stage_name: types.StageName, sender: nnng.PipeSender, receiver: nnng.PipeReceiver) !Self {
     return .{
-        .rpc = try nnng.Rpc.create(),
         .sender = sender,
         .receiver = receiver,
         .stage = stage_name,
     };
 }
 
-pub fn deinit(self: *Self) void {
-    self.rpc.deinit();
+pub fn submit(self: *const Self, io: std.Io, event: events.Event, options: Self.Options) !void {
+    const total_count = options.retry_count + 1;
+
+    for (0..total_count) |i| {
+        var rpc = try nnng.Rpc.create();
+        defer rpc.deinit();
+        
+        try encodeToCbor(&rpc.msg.?.writer, .{
+            .header = events.EventHeader.fromEvent(event) ,
+            .stage_name = self.stage,
+            .event = event,
+        });
+        
+        var f = rpc.submit(io, self.sender, self.receiver);
+
+        if (f.await(io)) {
+            return;
+        }
+        else |err| {
+            if (i > options.retry_count) return err;
+        }
+    }
 }
 
-pub fn encode(self: *Self, event: events.Event) !void {
-    var msg = self.rpc.msg.?;
+const DEFAULT_RETRY: u64 = 3;
 
-    try encodeToCbor(&msg.writer, .{
-        .header = events.EventHeader.fromEvent(event) ,
-        .stage_name = self.stage,
-        .event = event,
-    });
-}
-
-pub fn submit(self: *Self, io: std.Io) !void {
-    var f = self.rpc.submit(io, self.sender, self.receiver);
-    try f.await(io);
-}
+pub const Options = struct {
+    retry_count: u64 = DEFAULT_RETRY,
+};

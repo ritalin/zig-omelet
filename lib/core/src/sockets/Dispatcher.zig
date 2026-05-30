@@ -93,7 +93,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                     }
                 }
                 if (self.phase == .quitting) {
-                    try self.log(.debug, stage_name, "Start quitting...", .{});
                     if (self.on_quit) |q| {
                         try (q.handler)(q.ptr);
                     }
@@ -102,7 +101,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
 
                 while (self.queue.send_queue.popFront()) |channel| {
                     try self.log(.trace, stage_name, "Send/pipe_id: {}", .{ channel.inner.pipe_id,  });
-                    try channel.inner.sender.submit(channel.inner.msg, .{ .flags = .{.nonblocking = true} });
+                    try channel.submit(.{ .flags = .{.nonblocking = true} });
                 }
 
                 _ = try self.poller.poll(Self.doPoll);
@@ -197,7 +196,6 @@ pub const Phase = enum { booting, request, ready, terminating, quitting };
 pub const DirtyState = enum { none, skipped, unhandled };
 
 pub const Options = struct {
-    force_concurrent: bool = false,
     log_style: root.Logger.LogStyle = .stderr,
     no_color: bool = false,
 };
@@ -299,7 +297,7 @@ pub const tests = struct {
         defer tmp_dir.cleanup();
 
         const ep = try supports.createEndpoint(tmp_dir.dir);
-        defer supports.releaseEndpoint(std.testing.allocator, ep);
+        defer supports.releaseEndpoint(ep);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
@@ -335,7 +333,7 @@ pub const tests = struct {
         defer tmp_dir.cleanup();
 
         const ep = try supports.createEndpoint(tmp_dir.dir);
-        defer supports.releaseEndpoint(std.testing.allocator, ep);
+        defer supports.releaseEndpoint(ep);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
@@ -371,7 +369,7 @@ pub const tests = struct {
         defer tmp_dir.cleanup();
 
         const ep = try supports.createEndpoint(tmp_dir.dir);
-        defer supports.releaseEndpoint(std.testing.allocator, ep);
+        defer supports.releaseEndpoint(ep);
 
         var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer host.deinit();
@@ -412,7 +410,7 @@ pub const tests = struct {
         defer tmp_dir.cleanup();
 
         const ep = try supports.createEndpoint(tmp_dir.dir);
-        defer supports.releaseEndpoint(std.testing.allocator, ep);
+        defer supports.releaseEndpoint(ep);
 
         var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, 4, ep);
         // var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
@@ -431,10 +429,10 @@ pub const tests = struct {
         try guest.req_socket.transport.start(.{});
         try guest.cmd_socket.transport.start(.{});
 
-        var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .force_concurrent = true, .log_style = .discard });
+        var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .log_style = .discard });
         defer host_dispatcher.deinit();
 
-        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8, .{ .force_concurrent = true, .log_style = .discard });
+        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8, .{ .log_style = .discard });
         defer guest_dispatcher.deinit();
 
         publisg_event: {

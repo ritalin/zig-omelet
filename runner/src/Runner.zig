@@ -15,15 +15,15 @@ const PayloadCacheManager = @import("./cache_manager.zig").PayloadCacheManager(a
 const HeartbeatTask = @import("./tasks/HeartbeatTask.zig");
 const TaskReaper = @import("./supports/TaskReaper.zig");
 
+const BootPhaseState = @import("./phases/boot_phase.zig").BootPhaseState(HostRunner);
+const TerminatePhaseState = @import("./phases/terminate_phase.zig").TerminatePhaseState(HostRunner);
+
 const EventDispatcher = core.sockets.EventDispatcher;
 
-
 const Symbol = core.Symbol;
-const systemLog = core.Logger.SystemDirect(app_context);
-const traceLog = core.Logger.TraceDirect(app_context);
-const log = core.Logger.Stage.log;
-
 const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(50);
+
+const task_support = @import("./supports/task_support.zig");
 
 const HostRunner = @This();
 
@@ -45,8 +45,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
     try connection.bind();
 
     const options: EventDispatcher.Options = .{ 
-        .force_concurrent = true, 
-        .log_style = .stderr,
+        .log_style = setting.general.log_style,
         .no_color = setting.general.no_color, 
     };
 
@@ -57,7 +56,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .connection = connection,
         .dispatcher = try connection.configureDispatcher(poller_size, options),
         .guest_names = guest_names,
-        .state = .{ .booting = try BootPhaseState.create(allocator, guest_names) },
+        .state = .{ .booting = try BootPhaseState.create(allocator, guest_names, setting.general.boot_limit) },
         .reapers = try TaskReaper.init(io, allocator),
     };
 }
@@ -73,8 +72,7 @@ pub fn run(self: *HostRunner) !void {
     // var left_topic_stage = stage_count.stage_extract;
 
     self.dispatcher.run(app_context, HostRunner.onDispatch) catch |err| {
-        // TODO:
-        // try self.connection.dispatcher.postFatal(@errorReturnTrace());
+        // TODO: fatal error log
         return err;
     };    
 
@@ -86,28 +84,8 @@ pub fn run(self: *HostRunner) !void {
     // if (watch_mode) {
     //     try self.spawnCommandPallet();
     // }
-
-    // try self.connection.dispatcher.state.ready();
     
-    // while (self.connection.dispatcher.isReady()) {
-    //     const _item = try self.connection.dispatcher.dispatch();
-
-    //     if (_item) |*item| {
-    //         defer item.deinit();
-
     //         switch (item.event) {
-    //             .failed_launching => {
-    //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
-    //                 try self.connection.dispatcher.state.receiveTerminate();
-
-    //                 if (left_launching > 0) {
-    //                     left_launching -= 1;
-    //                     systemLog.debug("Received to failed launching: '{s}' (left: {})", .{item.from, left_launching});
-    //                 }
-    //                 if (left_launching <= 0) {
-    //                     try self.onAfterLaunch(item.socket, item.routing_id);
-    //                 }
-    //             },
     //             .topic => |payload| {
     //                 try self.connection.dispatcher.reply(item.socket, .ack, item.routing_id);
 
@@ -253,12 +231,17 @@ pub fn run(self: *HostRunner) !void {
     // systemLog.debug("terminated", .{});
 }
 
+pub fn log(self: *HostRunner, comptime level: events.LogLevel, comptime fmt: []const u8, args: anytype) !void {
+    if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
+    try self.dispatcher.log(level, app_context, fmt, args);
+}
+
 fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *HostRunner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
         .booting => |*state| {
-            try state.handle(self, entry, dirty);
+            try state.handle(self, self.setting, entry, dirty);
         },
         .terminating => |*state| {
             try state.handle(self, entry, dirty);
@@ -271,7 +254,7 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEnt
     }
 }
 
-fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {    
+pub fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {    
     switch (entry.event) {
         .log => {
             unreachable;
@@ -283,6 +266,17 @@ fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatche
         else => {
             dirty.* = .unhandled;
         }
+    }
+}
+
+pub fn transitPhase(self: *HostRunner, phase: EventDispatcher.Phase) !void {
+    switch (phase) {
+        .request => try self.doRequestPhase(),
+        .terminating => try self.doTerminatePhase(),
+        .quitting => {
+            self.dispatcher.phase = .quitting;
+        },
+        else => unreachable,
     }
 }
 
@@ -303,29 +297,21 @@ fn doRequestPhase(self: *HostRunner) !void {
 
 fn doTerminatePhase(self: *HostRunner) !void {
     self.state.deinit();
-    self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, self.guest_names) };
+    self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, self.guest_names, .unlimited) };
 
-    var channel = try self.connection.commandChannel();
-    try channel.encode(.quit_all);
-    try self.dispatcher.queue.post(channel);
+    try self.sendProbe(.quit_all, 1, self.state.terminating.limit);
 
     self.dispatcher.phase = .terminating;
-    try self.dispatcher.log(.debug, app_context, "Switched to phase: {s}", .{@tagName(self.dispatcher.phase)});
+    try self.log(.debug, "Start quitting...", .{});
 }
 
-fn sendProbe(stage: *HostRunner, event: events.Event, count: usize) !void {
-    var channel = try stage.connection.commandChannel();
-    try channel.encode(event);
-    try stage.dispatcher.queue.post(channel);
-
-    const args = .{
-        stage.io, 
-        try stage.connection.dataChannel(),
-        std.meta.activeTag(event),
-        count,
-        TIMER_INTERVAL,
-    };
-    try stage.reapers.detach(HeartbeatTask.spawn, args);
+pub fn sendProbe(stage: *HostRunner, event: events.Event, count: usize, limit: HeartbeatTask.Limit) !void {
+    return task_support.sendProbe(
+        stage.io, stage.reapers, 
+        app_context, stage.connection, 
+        poller_size, &stage.dispatcher, 
+        event, count, limit, TIMER_INTERVAL
+    );
 }
 
 // TODO:
@@ -337,17 +323,15 @@ fn sendProbe(stage: *HostRunner, event: events.Event, count: usize) !void {
 // }
 
 fn handleTopicBody(self: *const HostRunner, topic_body: core.events.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
-    _ = self;
-
     switch (try source_cache.update(topic_body)) {
         .expired => {
-            systemLog.debug("Content expired: {s}", .{topic_body.header.path});
+            self.log(.debug, "Content expired: {s}", .{topic_body.header.path});
         },
         .missing => {
-            systemLog.debug("Waiting left content: {s}", .{topic_body.header.path});
+            self.log(.debug, "Waiting left content: {s}", .{topic_body.header.path});
         },
         .fulfil => {
-            systemLog.debug("Source is ready: {s}", .{topic_body.header.name});
+            self.log(.debug, "Source is ready: {s}", .{topic_body.header.name});
             if (try source_cache.ready(topic_body.header, topic_body.index)) {
                 return .ready_topic_body;
             }
@@ -420,88 +404,6 @@ fn deinitState(self: *State) void {
     }
 }
 
-const BootPhaseState = struct {
-    guests: std.BufSet,
-    left_guest: std.BufSet,
-
-    const Self = @This();
-
-    pub fn create(allocator: std.mem.Allocator, guest_names: []const types.StageName) !Self {
-        var guests = std.BufSet.init(allocator);
-        for (guest_names) |name| {
-            try guests.insert(name);
-        }
-
-        return .{
-            .guests = guests,
-            .left_guest = try guests.cloneWithAllocator(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.guests.deinit();
-        self.left_guest.deinit();
-    }
-
-    pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-        switch (entry.event) {
-            .launching => {
-                const ep = stage.setting.general.stage_endpoints;
-
-                try stage.dispatcher.log(.debug, app_context, "Launched", .{});
-
-                dump_setting: {
-                    try stage.dispatcher.log(.debug, app_context, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
-                    try stage.dispatcher.log(.debug, app_context, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
-                    try stage.dispatcher.log(.debug, app_context, "CLI: Push/Pull Channel = {s}", .{ep.push_pull});
-                    //  TODO:
-                    // stage.dispatcher.log(.debug, app_context, "CLI: Watch mode = {}", .{stage.setting.command.watchModeEnabled()});
-                    break :dump_setting;
-                }
-
-                try stage.sendProbe(.probe_launching, 1);
-            },
-            .failed_launching => {
-                if (self.guests.contains(entry.from_stage)) {
-                    try stage.dispatcher.log(.warn, app_context, "Launching failed/guest: {s}", .{entry.from_stage});
-                    try stage.dispatcher.log(.warn, app_context, "Stopping launch process", .{});
-                    try stage.doTerminatePhase();
-                }
-            },
-            .launched => {
-                if (! self.guests.contains(entry.from_stage)) {
-                    try stage.dispatcher.log(.warn, app_context, "Unexpected boot/guest: {s}", .{entry.from_stage});
-                    return;
-                }
-
-                self.left_guest.remove(entry.from_stage);
-
-                try stage.dispatcher.log(.info, app_context, "Launch accepted/guest: {s}", .{entry.from_stage});
-
-                if (self.left_guest.count() == 0) {
-                    try stage.dispatcher.log(.info, app_context, "All guests launched", .{});
-                    try stage.doRequestPhase();
-                }
-            },
-            .heartbeat => |payload| {
-                if (self.left_guest.count() > 0) {
-                    switch (payload.event_type) {
-                        .probe_launching => {
-                            try stage.sendProbe(.probe_launching, payload.count);
-                        },
-                        else => {
-                            try stage.defaultHandler(entry, dirty);
-                        }
-                    }
-                }
-            },
-            else => {
-                try stage.defaultHandler(entry, dirty);
-            }
-        }
-    }
-};
-
 const RequestPhaseState = struct {
     const Self = @This();
 
@@ -511,52 +413,6 @@ const RequestPhaseState = struct {
 
     pub fn deinit(self: *Self) void {
         _ = self;
-    }
-};
-
-const TerminatePhaseState = struct {
-    guests: std.BufSet,
-    left_guest: std.BufSet,
-
-    const Self = @This();
-
-    pub fn create(allocator: std.mem.Allocator, guest_names: []const types.StageName) !Self {
-        var guests = std.BufSet.init(allocator);
-        for (guest_names) |name| {
-            try guests.insert(name);
-        }
-
-        return .{
-            .guests = guests,
-            .left_guest = try guests.cloneWithAllocator(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.guests.deinit();
-        self.left_guest.deinit();
-    }
-
-    pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-        switch (entry.event) {
-            .quit => {
-                if (! self.guests.contains(entry.from_stage)) {
-                    try stage.dispatcher.log(.warn, app_context, "Unexpected shut down/guest: {s}", .{entry.from_stage});
-                }
-
-                self.left_guest.remove(entry.from_stage);
-
-                try stage.dispatcher.log(.info, app_context, "Shutdown accepted/guest: {s}", .{entry.from_stage});
-
-                if (self.left_guest.count() == 0) {
-                    try stage.dispatcher.log(.info, app_context, "All guests Exited", .{});
-                    stage.dispatcher.phase = .quitting;
-                }
-            },
-            else => {
-                try stage.defaultHandler(entry, dirty);
-            }
-        }
     }
 };
 

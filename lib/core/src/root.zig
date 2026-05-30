@@ -14,6 +14,10 @@ pub const sockets = struct {
     pub const EventDispatcher = @import("./sockets/Dispatcher.zig");
 };
 
+pub const guest_phases = struct {
+    pub const BootPhaseState = @import("./guest_phases/boot_phase.zig").BootPhaseState;
+};
+
 pub const Logger = @import("./Logger.zig");
 
 // TODO:
@@ -28,6 +32,8 @@ pub const Logger = @import("./Logger.zig");
 // };
 
 // pub const DebugEndPoint = @import("./builder_supports/DebugEndpoint.zig");
+
+pub const test_support = @import("./supports/test_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());

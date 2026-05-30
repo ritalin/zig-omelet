@@ -118,7 +118,7 @@ pub const TopicCategory = enum {
 const EventPayload = struct {
     pub const Heartbeat = struct {
         event_type: EventType,
-        count: usize,
+        count: u64,
 
         pub fn init(view: StructView(Heartbeat)) @This() {
             return .{

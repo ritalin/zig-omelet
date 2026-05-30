@@ -7,15 +7,6 @@ const Setting = @import("./settings/Setting.zig");
 // const log = core.Logger.TraceDirect(@import("build_options").app_context);
 const exe_prefix = @import("build_options").exe_prefix;
 
-// TODO:
-// const default_log_level = .debug;
-// const std_options = .{
-//     .scope_levels = &.{
-//         .{.scope = .default, .level = default_log_level}, 
-//         .{.scope = .trace, .level = default_log_level},
-//     },
-// };
-
 pub const std_options: std.Options = .{
     .logFn = core.Logger.forwardIntegratedLog,
 };
@@ -34,13 +25,16 @@ pub fn main(init: std.process.Init) !void {
     // defer setting.deinit();
     const setting: Setting = .{
         .general = .{
-            .log_level = .trace,
+            .log_level = .debug,
+            .log_style = .stderr,
             .no_color = false,
             .stage_endpoints = .{
                 .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
                 .pub_sub = "ipc:///tmp/omelet/default/pub_sub.sock",
                 .push_pull = "ipc:///tmp/omelet/default/push_pull.sock",
             },
+            // .boot_limit = .{ .count = 8 },
+            .boot_limit = .unlimited,
         },
     };
 
@@ -51,6 +45,9 @@ pub fn main(init: std.process.Init) !void {
     // defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
     const guest_names = &.{
+        "configuration-init",
+        "extract",
+        "watch-files",
         "ts-generate",
     };
 
@@ -81,6 +78,7 @@ pub fn main(init: std.process.Init) !void {
 
 test "main" {
     // TODO:
-    // core.Logger.disable();
-    std.testing.refAllDecls(@This());
+    // std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("./phases/boot_phase.zig"));
+    std.testing.refAllDecls(@import("./phases/terminate_phase.zig"));
 }

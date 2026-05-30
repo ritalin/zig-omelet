@@ -184,8 +184,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
             const self: *Self = @ptrCast(@alignCast(ptr));
 
             var channel = try self.requestChannel();
-            try channel.encode(.quit);
-            try channel.submit(self.context.io);
+            try channel.submit(self.context.io, .quit, .{});
         }
 
         fn doIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8) anyerror!void {

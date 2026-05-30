@@ -172,7 +172,7 @@ pub const tests = struct {
         defer tmp_dir.cleanup();
 
         const ep = try supports.createEndpoint(tmp_dir.dir);
-        defer supports.releaseEndpoint(std.testing.allocator, ep);
+        defer supports.releaseEndpoint(ep);
 
         var conn = try Server("runner").create(std.testing.io, std.testing.allocator, 1, ep);
         defer conn.deinit();

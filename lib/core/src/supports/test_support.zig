@@ -46,7 +46,8 @@ fn createEndpointInternal(io: std.Io, allocator: std.mem.Allocator, dir: std.Io.
     return std.fmt.allocPrint(allocator, "{s}://{s}/{s}", .{ schema, dir_path, name });
 }
 
-pub fn releaseEndpoint(allocator: std.mem.Allocator, endpoint: types.Endpoints) void {
+pub fn releaseEndpoint(endpoint: types.Endpoints) void {
+    const allocator = std.testing.allocator;
     allocator.free(endpoint.req_rep);
     allocator.free(endpoint.pub_sub);
     allocator.free(endpoint.push_pull);

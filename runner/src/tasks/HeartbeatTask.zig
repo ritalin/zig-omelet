@@ -10,12 +10,17 @@ pub fn spawn(io: std.Io, channel: core.sockets.SendChannel, event_type: EventTyp
     
     var channel_mut = channel;
 
-    sendHeartbeatInternal(&channel_mut, .{ .event_type = event_type, .count = count }) catch {
+    sendHeartbeatInternal(&channel_mut, .{ .event_type = event_type, .count = count + 1 }) catch {
         return error.Canceled;
     };
 }
 
 fn sendHeartbeatInternal(channel: *core.sockets.SendChannel, heartbeat: Event.Payload.Heartbeat) !void {
     try channel.encode(.{ .heartbeat = heartbeat });
-    try channel.sender.submit(channel.msg, .{});
+    try channel.submit(.{});
 }
+
+pub const Limit = union(enum) {
+    unlimited: void,
+    count: u64,
+};

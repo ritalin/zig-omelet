@@ -23,6 +23,11 @@ pub const SendChannel = struct {
         std.log.scoped(.app).debug("SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
         return self.inner.encode(event);
     }
+
+    pub fn submit(self: *const SendChannel, options: nnng.PipeSender.Options) nnng.SendError!void {
+        var sender = self.inner.sender;
+        return sender.submit(self.inner.msg, options);
+    }
 };
 
 const InnerChannel = struct {
@@ -70,5 +75,10 @@ pub const Log = struct {
 
     pub fn encode(self: *SendChannel.Log, event: events.Event) !void {
         return self.inner.encode(event);
+    }
+
+    pub fn submit(self: *const SendChannel.Log, options: nnng.PipeSender.Options) nnng.SendError!void {
+        var sender = self.inner.sender;
+        return sender.submit(self.inner.msg, options);
     }
 };

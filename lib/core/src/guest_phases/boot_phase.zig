@@ -6,9 +6,7 @@ const types = root.types;
 const ReceiveEntry = root.sockets.ReceiveEntry;
 const EventDispatcher = root.sockets.EventDispatcher;
 
-pub fn BootPhaseState(comptime GuestStage: type, comptime stage_name: types.StageName) type {
-    const Connection = root.sockets.Connection.Client(stage_name);
-
+pub fn BootPhaseState(comptime GuestStage: type) type {
     return struct {
         const Self = @This();
 
@@ -55,21 +53,6 @@ pub fn BootPhaseState(comptime GuestStage: type, comptime stage_name: types.Stag
                 try stage.log(.debug, "CLI: Push/pull Channel = {s}", .{ep.push_pull});
                 break :dump_setting;
             }
-        }
-
-        fn handshake(conn: *Connection, retry_count: usize) !void {
-            // TODO:
-            // Retrying itself
-            var i: usize = 0;
-            while (i < retry_count) {
-                var channel = try conn.requestChannel();
-                defer channel.deinit();
-                try channel.encode(.launched);
-
-                return (channel.submit(conn.context.io)) catch { i += 1; };
-            }
-
-            return error.LaunchFailed;
         }
     };
 }

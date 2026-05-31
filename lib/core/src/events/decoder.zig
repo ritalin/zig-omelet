@@ -44,19 +44,23 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .probe_launching => return .probe_launching,
         .launched => return .launched,
         .failed_launching => return .failed_launching,
-        // Request phase ebent
-        .request_topic => return .request_topic,
+        // Request phase event
+        .probe_request => return .probe_request,
         .topic => {
             const view = try reader.readTupleWithAllocator(allocator, StructView(Event.Payload.Topic));
 
             return .{
-                .topic = try Event.Payload.Topic.init(view),
+                .topic = Event.Payload.Topic.init(view),
             };
         },
         .finish_topic => return .finish_topic,
+        // Ready phase event
+        .probe_ready => return .probe_ready,
+        .ready => return .ready,
         // Watch event
-        .ready_watch_path => return .ready_watch_path,
-        .finish_watch_path => return .finish_watch_path,
+        .request_watch_path => return .request_watch_path,
+        // .finish_watch_path => return .finish_watch_path, // TODO:deprecated
+
         // Source path event
         .ready_source_path => return .ready_source_path,
         .source_path => {
@@ -146,8 +150,7 @@ pub const tests = struct {
         defer buffer.deinit();
 
         const heartbeat = Event.Payload.Heartbeat.init(.{ .probe_launching, 1 });
-        const topic = try Event.Payload.Topic.init(.{ .source, try allocator.dupe(types.Symbol, &.{"topic_a", "topic_b", "topic_c"}) });
-        defer topic.deinit(allocator);
+        const topic = Event.Payload.Topic.init(.{ .source, &.{"topic_a", "topic_b", "topic_c"} });
         const source_path = try Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "Some-content", 1 });
         defer source_path.deinit(allocator);
         const topic_body = try Event.Payload.TopicBody.init(allocator,
@@ -176,11 +179,16 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_launching), .stage_name = test_context, .event = .probe_launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launched), .stage_name = test_context, .event = .launched });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.failed_launching), .stage_name = test_context, .event = .failed_launching });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.request_topic), .stage_name = test_context, .event = .request_topic });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_request), .stage_name = test_context, .event = .probe_request });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.topic), .stage_name = test_context, .event = .{.topic = topic} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_topic), .stage_name = test_context, .event = .finish_topic });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_watch_path), .stage_name = test_context, .event = .ready_watch_path });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_watch_path), .stage_name = test_context, .event = .finish_watch_path });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_ready), .stage_name = test_context, .event = .probe_ready });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready), .stage_name = test_context, .event = .ready });
+
+        // TODO:
+        // try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_watch_path), .stage_name = test_context, .event = .ready_watch_path });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.request_watch_path), .stage_name = test_context, .event = .request_watch_path });
+
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_source_path), .stage_name = test_context, .event = .ready_source_path });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.source_path), .stage_name = test_context, .event = .{.source_path = source_path} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_source_path), .stage_name = test_context, .event = .finish_source_path });
@@ -263,14 +271,14 @@ pub const tests = struct {
             try std.testing.expectEqualDeep({}, packet.event.failed_launching);
             break:failure_launching;
         }
-        request_topic: {
+        probe_request: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.request_topic, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.request_topic);
+            try std.testing.expectEqual(.probe_request, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.probe_request);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.request_topic);
-            break:request_topic;
+            try std.testing.expectEqualDeep({}, packet.event.probe_request);
+            break:probe_request;
         }
         topic: {
             const packet = try decodeFromCborInternal(allocator, &reader);
@@ -290,23 +298,42 @@ pub const tests = struct {
             try std.testing.expectEqualDeep({}, packet.event.finish_topic);
             break:finish_topic;
         }
-        ready_watch_path: {
+        probe_ready: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_watch_path, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.ready_watch_path);
+            try std.testing.expectEqual(.probe_ready, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.probe_ready);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.ready_watch_path);
-            break:ready_watch_path;
+            try std.testing.expectEqualDeep({}, packet.event.probe_ready);
+            break:probe_ready;
         }
-        finish_watch_path: {
+        ready: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_watch_path, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.finish_watch_path);
+            try std.testing.expectEqual(.ready, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.ready);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.finish_watch_path);
-            break:finish_watch_path;
+            try std.testing.expectEqualDeep({}, packet.event.ready);
+            break:ready;
+        }
+        // TODO:
+        // ready_watch_path: {
+        //     const packet = try decodeFromCborInternal(allocator, &reader);
+        //     defer packet.event.deinit(allocator);
+        //     try std.testing.expectEqual(.ready_watch_path, std.meta.activeTag(packet.header));
+        //     try std.testing.expectEqual({}, packet.header.ready_watch_path);
+        //     try std.testing.expectEqualStrings(test_context, packet.stage_name);
+        //     try std.testing.expectEqualDeep({}, packet.event.ready_watch_path);
+        //     break:ready_watch_path;
+        // }
+        request_watch_path: {
+            const packet = try decodeFromCborInternal(allocator, &reader);
+            defer packet.event.deinit(allocator);
+            try std.testing.expectEqual(.request_watch_path, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.request_watch_path);
+            try std.testing.expectEqualStrings(test_context, packet.stage_name);
+            try std.testing.expectEqualDeep({}, packet.event.request_watch_path);
+            break:request_watch_path;
         }
         ready_source_path: {
             const packet = try decodeFromCborInternal(allocator, &reader);

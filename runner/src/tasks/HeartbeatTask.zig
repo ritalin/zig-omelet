@@ -4,8 +4,7 @@ const core = @import("core");
 const EventType = core.events.EventType;
 const Event = core.events.Event;
 
-pub fn spawn(io: std.Io, channel: core.sockets.SendChannel, event_type: EventType, count: usize, unit: std.Io.Duration) std.Io.Cancelable!void {
-    const interval: std.Io.Duration = .fromNanoseconds(unit.nanoseconds * count);
+pub fn spawn(io: std.Io, channel: core.sockets.SendChannel, event_type: EventType, count: usize, interval: std.Io.Duration) std.Io.Cancelable!void {
     try io.sleep(interval, .real);
     
     var channel_mut = channel;

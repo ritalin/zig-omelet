@@ -36,7 +36,6 @@ pub fn main(init: std.process.Init) !void {
 
     var stage = try Stage.create(allocator, &connection, &setting);
     defer stage.deinit();
-
     try stage.run();
 }
 

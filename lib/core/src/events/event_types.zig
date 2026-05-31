@@ -4,9 +4,10 @@ const core_types = @import("../types.zig");
 const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
 const FilePath = core_types.FilePath;
-const StructView = @import("./event_impl.zig").StructView;
 
 const c = @import("interop_c");
+
+pub const StructView = @import("./event_impl.zig").StructView;
 
 pub const LogLevel = enum(u8) {
     err = c.log_level_err,
@@ -72,13 +73,17 @@ pub const EventType = enum (u8) {
     probe_launching,
     launched,
     failed_launching,
-    // Request phase ebent
-    request_topic,
+    // Request phase event
+    probe_request,
     topic,
     finish_topic,
+    // Ready phase event
+    probe_ready,
+    ready,
     // watch event
-    ready_watch_path,
-    finish_watch_path,
+    request_watch_path,
+    // finish_watch_path, TODO:deprecated
+
     // Source path event
     ready_source_path,
     source_path,
@@ -136,7 +141,7 @@ const EventPayload = struct {
         category: TopicCategory,
         names: []const Symbol,
 
-        pub fn init(view: StructView(Topic)) !@This() {
+        pub fn init(view: StructView(Topic)) @This() {
             return .{
                 .category = view[0],
                 .names = view[1],
@@ -324,12 +329,16 @@ pub const Event = union(EventType) {
     launched: void,
     failed_launching: void,
     // Request phase event
-    request_topic: void,
+    probe_request: void,
     topic: Payload.Topic,
     finish_topic: void,
+    // Ready phase event
+    probe_ready: void,
+    ready: void,
     // Watch event
-    ready_watch_path: void,
-    finish_watch_path: void,
+    request_watch_path: void,
+
+    // finish_watch_path: void,
     // Source path event
     ready_source_path: void,
     source_path: Payload.SourcePath,
@@ -370,13 +379,17 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .probe_launching => {},
         .launched => {},
         .failed_launching => {},
-        // Request phase ebent
-        .request_topic => {},
+        // Request topic phase event
+        .probe_request => {},
         .topic => |data| data.deinit(allocator),
         .finish_topic => {},
+        // Ready phase event
+        .probe_ready => {},
+        .ready => {},
         // Watch event
-        .ready_watch_path => {},
-        .finish_watch_path => {},
+        .request_watch_path => {},
+        // .finish_watch_path => {}, // TODO:deprecate?
+
         // Source path event
         .ready_source_path => {},
         .source_path => |data| data.deinit(allocator),

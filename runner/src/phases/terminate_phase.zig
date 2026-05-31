@@ -10,52 +10,48 @@ const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 
 pub fn TerminatePhaseState(comptime HostRunner: type) type {
     return struct {
-        guests: std.BufSet,
-        left_guest: std.BufSet,
+        guests: *const std.BufSet,
+        left_guests: std.BufSet,
         limit: HeartbeatTask.Limit,
 
         const Self = @This();
 
-        pub fn create(allocator: std.mem.Allocator, guest_names: []const types.StageName, heartbeat_limit: HeartbeatTask.Limit) !Self {
-            var guests = std.BufSet.init(allocator);
-            for (guest_names) |name| {
-                try guests.insert(name);
-            }
-
+        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet, heartbeat_limit: HeartbeatTask.Limit) !Self {
             return .{
                 .guests = guests,
-                .left_guest = try guests.cloneWithAllocator(allocator),
+                .left_guests = try guests.cloneWithAllocator(allocator),
                 .limit = heartbeat_limit,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.guests.deinit();
-            self.left_guest.deinit();
+            self.left_guests.deinit();
         }
 
         pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
             switch (entry.event) {
                 .quit => {
                     if (! self.guests.contains(entry.from_stage)) {
-                        try stage.log(.warn, "Unexpected shut down/guest: {s}", .{entry.from_stage});
+                        try stage.log(.debug, "External guest terminate/name: {s}", .{entry.from_stage});
                         return;
                     }
 
-                    self.left_guest.remove(entry.from_stage);
+                    if (! self.left_guests.contains(entry.from_stage)) return;
+                    self.left_guests.remove(entry.from_stage);
 
                     try stage.log(.info, "Shutdown accepted/guest: {s}", .{entry.from_stage});
 
-                    if (self.left_guest.count() == 0) {
+                    if (self.left_guests.count() == 0) {
                         try stage.log(.info, "All guests Exited", .{});
                         try stage.transitPhase(.quitting);
                     }
                 },
                 .heartbeat => |payload| {
-                    if (self.left_guest.count() > 0) {
+                    if (self.left_guests.count() > 0) {
                         switch (payload.event_type) {
                             .quit_all => {
-                                try stage.sendProbe(.quit_all, payload.count, self.limit);
+                                const interval = HostRunner.nextInterval(payload.count);
+                                try stage.sendProbe(.quit_all, payload.count, self.limit, interval);
                             },
                             else => {
                                 try stage.defaultHandler(entry, dirty);
@@ -143,6 +139,6 @@ pub const tests = struct {
 
         try std.testing.expectEqual(null, runner.stage.err);
         try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase);
-        try std.testing.expectEqual(0, runner.state.left_guest.count());
+        try std.testing.expectEqual(0, runner.state.left_guests.count());
     }
 };

@@ -4,12 +4,9 @@ const core = @import("core");
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
-// const log = core.Logger.TraceDirect(@import("build_options").app_context);
-
 pub const std_options: std.Options = .{
     .logFn = core.Logger.forwardIntegratedLog,
 };
-
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -41,9 +38,6 @@ pub fn main(init: std.process.Init) !void {
     defer stage.deinit();
 
     try stage.run();
-
-    // TODO:
-    // log.debug("Finished", .{});
 }
 
 test "main" {

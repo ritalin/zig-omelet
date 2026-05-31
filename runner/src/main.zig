@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
                 .push_pull = "ipc:///tmp/omelet/default/push_pull.sock",
             },
             // .boot_limit = .{ .count = 8 },
-            .boot_limit = .unlimited,
+            .heartbeat_limit = .unlimited,
         },
     };
 
@@ -45,10 +45,10 @@ pub fn main(init: std.process.Init) !void {
     // defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
 
     const guest_names = &.{
-        "configuration-init",
-        "extract",
+        // "configuration-init",
+        // "duckdb-extract",
         "watch-files",
-        "ts-generate",
+        // "ts-generate",
     };
 
     var connection = try Runner.Connection.create(init.io, allocator , guest_names.len, setting.general.stage_endpoints);
@@ -69,11 +69,13 @@ pub fn main(init: std.process.Init) !void {
     // };
     // defer stages.deinit();
 
+    try runner.transitPhase(.booting);
     try runner.run();
     runner.deinit();
     
     // TODO:
     // try stages.wait();
+    // try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(1000), .awake);
 }
 
 test "main" {

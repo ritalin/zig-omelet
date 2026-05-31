@@ -8,10 +8,12 @@ const EventDispatcher = core.sockets.EventDispatcher;
 const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
 
-const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage, app_context);
+const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
 
 const Setting = @import("./Setting.zig");
 // const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
+
+const NewConfigurationState = @import("./phases/ready_phase.zig").NewConfigurationState(GuestStage);
 
 const GuestStage = @This();
 
@@ -30,8 +32,8 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
 
     try connection.subscribe(&.{
         .probe_launching,
-        .request_topic,
-        .ready_watch_path,
+        .probe_request,
+        .probe_ready,
         .quit_all,
     });
     try connection.connect();
@@ -70,14 +72,21 @@ pub fn log(self: *GuestStage, comptime level: events.LogLevel, comptime fmt: []c
 }
 
 pub fn transitPhase(self: *GuestStage, phase: EventDispatcher.Phase) !void {
+    if (self.dispatcher.phase == phase) return;
     switch (phase) {
-        .request, .ready => try self.doReadyPhase(),
+        .request => {}, 
+        .ready => try self.doReadyPhase(),
         else => unreachable,
     }
 }
 
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
+        .probe_request => {
+            var channel = try self.connection.requestChannel();
+            try channel.submit(self.connection.context.io, .finish_topic, .{});
+            try self.transitPhase(.ready);
+        },
         .quit_all => {
             self.dispatcher.phase = .quitting;
         },
@@ -89,6 +98,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
 
 fn doReadyPhase(self: *GuestStage) !void {
     self.state.deinit();
+    self.state = .{ .ready = NewConfigurationState.create };
     self.dispatcher.phase = .ready;    
 }
 
@@ -99,11 +109,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
         .booting => |state| {
             try state.handle(self, entry, dirty);
         },
-        // TODO:
-        // .ready => |state| try state.handle(self, entry, dirty),
+        .ready => |state| {
+            try state.handle(self, entry, dirty);
+        },
         else => {
-            // TODO:
-            // Invalid phase
             unreachable;
         }
     }
@@ -112,7 +121,7 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
 const State = union(EventDispatcher.Phase) {
     booting: BootPhaseState,
     request: void,
-    ready: void,
+    ready: NewConfigurationState,
     terminating: void,
     quitting: void,
 
@@ -122,92 +131,7 @@ const State = union(EventDispatcher.Phase) {
 fn deinitState(self: *State) void {
     switch (self.*) {
         .booting => |*state| state.deinit(),
-        // TODO:
-        // .ready => |*state| state.deinit(),
+        .ready => |*state| state.deinit(),
         else => unreachable,
     }
 }
-    // TODO:
-    // try self.connection.dispatcher.state.ready();
-    // .request_topic => {
-    //     topics: {
-    //         const topic = try core.Event.Payload.Topic.init(
-    //             self.allocator, 
-    //             .source,
-    //             &.{},
-    //             true,
-    //         );
-            
-    //         try self.connection.dispatcher.post(.{.topic = topic});
-    //         break :topics;
-    //     }
-    // },
-    // .ready_watch_path => {
-    //     try self.handleGenerate(setting);
-    //     try self.connection.dispatcher.post(.finish_generate);
-    // },
-
-
-// fn handleGenerate(self: *GuestStage, setting: Setting) !void {
-//     const source_dir_path = path: {
-//         if (setting.from_scope) |scope| {
-//             break:path try std.fs.path.join(self.allocator, &.{setting.output_dir_path, scope, setting.category.destPath()});
-//         }
-//         else {
-//             break:path try std.fs.path.join(self.allocator, &.{setting.source_dir_path, setting.category.templateDir()});
-//         }
-//     };
-//     defer self.allocator.free(source_dir_path);
-
-//     var source_dir = std.fs.cwd().openDir(source_dir_path, .{}) 
-//     catch {
-//         try self.logger.log(.err, "Failed to access template root dir: `{s}`", .{setting.source_dir_path});
-//         return;
-//     };
-//     defer source_dir.close();
-
-//     const config_file_name = try std.fmt.allocPrint(self.allocator, "{s}.zon", .{@tagName(setting.command)});
-//     defer self.allocator.free(config_file_name);
-
-//     var file = source_dir.openFile(config_file_name, .{})
-//     catch {
-//         const full_path = try std.fs.path.join(self.allocator, &.{source_dir_path, config_file_name});
-//         defer self.allocator.free(full_path);
-
-//         try self.logger.log(.warn, "Failed to access template file: `{s}`", .{config_file_name});
-//         return;
-//     };
-//     defer file.close();
-
-//     for (setting.scope_set) |scope| {
-//         try self.handleGenerateInternal(setting, source_dir, scope, config_file_name);
-//     }
-// }
-
-// fn handleGenerateInternal(self: *GuestStage, setting: Setting, source_dir: std.fs.Dir, scope: core.Symbol, config_file_name: core.Symbol) !void {
-//     const out_dir_path = try std.fs.path.join(self.allocator, &.{
-//         setting.output_dir_path, scope, setting.category.destPath()
-//     });
-//     defer self.allocator.free(out_dir_path);
-
-//     var out_dir = std.fs.cwd().makeOpenPath(out_dir_path, .{}) 
-//     catch {
-//         try self.logger.log(.err, "Failed to access destination dir: `{s}`", .{setting.output_dir_path});
-//         return;
-//     };
-//     defer out_dir.close();
-
-//     var file = out_dir.openFile(config_file_name, .{})
-//     catch |err0| switch (err0) {
-//         error.FileNotFound => {
-//             return try std.fs.Dir.copyFile(source_dir, config_file_name, out_dir, config_file_name, .{});
-//         },
-//         else => return err0,
-//     };
-//     defer file.close();
-
-//     const full_path = try std.fs.path.join(self.allocator, &.{out_dir_path, config_file_name});
-//     defer self.allocator.free(full_path);
-
-//     try self.logger.log(.warn, "Already exists: `{s}`", .{full_path});
-// }

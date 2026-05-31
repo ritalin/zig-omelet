@@ -1,3 +1,3 @@
 const std = @import("std");
 
-pub usingnamespace @import("./catch2_runner.zig");
+pub const runner = @import("./catch2_runner.zig");

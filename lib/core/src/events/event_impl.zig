@@ -43,13 +43,18 @@ pub const EventHeader = union(EventType) {
     probe_launching,
     launched,
     failed_launching,
-    // Request phase ebent
-    request_topic,
+    // Request phase event
+    probe_request,
     topic,
     finish_topic,
+    // Ready phase event
+    probe_ready,
+    ready,
     // watch event
-    ready_watch_path,
-    finish_watch_path,
+    request_watch_path,
+
+    // finish_watch_path,
+
     // Source path event
     ready_source_path,
     source_path,

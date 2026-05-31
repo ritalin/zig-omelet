@@ -47,14 +47,18 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         // Boot phase event
         .launching, .probe_launching, .launched, .failed_launching => {},
         // Request phase event
-        .request_topic => {},
+        .probe_request => {},
         .topic => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Topic), payload.values());
         },
         .finish_topic => {},
+        // Ready phase event
+        .probe_ready => {},
+        .ready => {},
         // Watch event
-        .ready_watch_path => {},
-        .finish_watch_path => {},
+        .request_watch_path => {},
+        // .finish_watch_path => {}, // TODO:deprecated
+
         // Source path event
         .ready_source_path => {},
         .source_path => |payload| {

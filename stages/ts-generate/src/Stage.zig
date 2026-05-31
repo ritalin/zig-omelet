@@ -1,16 +1,19 @@
 const std = @import("std");
 const core = @import("core");
+const app_context = @import("build_options").app_context;
 
-// TODO:
-// const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
+const events = core.events;
+
 const EventDispatcher = core.sockets.EventDispatcher;
 const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
 
+const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ReadyPhaseState = @import("./phases/ready_phase.zig").ReadyPhaseState(GuestStage);
+
 const GenerateWorker = @import("./GenerateWorker.zig");
 const Setting = @import("./Setting.zig");
 const CodeBuilder = @import("./CodeBuilder.zig");
-const app_context = @import("build_options").app_context;
 
 const GuestStage = @This();
 
@@ -20,6 +23,8 @@ connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 state: State,
 
+// TODO:
+// pub const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
 pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
@@ -27,6 +32,9 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
 
     try connection.subscribe(&.{
         .probe_launching,
+        .probe_request,
+        .probe_ready,
+
         .ready_topic_body,
         .topic_body,
         .finish_topic_body,
@@ -35,7 +43,6 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     try connection.connect();
 
     const options: EventDispatcher.Options = .{ 
-        .force_concurrent = false, 
         .log_style = setting.log_style,
         .no_color = setting.no_color, 
     };
@@ -46,7 +53,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        .state = .{ .booting = BootPhaseState.init(3) },
+        .state = .{ .booting = BootPhaseState.init },
         // .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
     };
 }
@@ -58,10 +65,54 @@ pub fn deinit(self: *GuestStage) void {
 
 pub fn run(self: *GuestStage) !void {
     self.dispatcher.run(app_context, GuestStage.onDispatch) catch |err| {
-        // TODO:
+        // TODO: fatal error log
         // try self.connection.dispatcher.postFatal(@errorReturnTrace());
         return err;
     };
+}
+
+pub fn log(self: *GuestStage, comptime level: events.LogLevel, comptime fmt: []const u8, args: anytype) !void {
+    if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
+    try self.dispatcher.log(level, app_context, fmt, args);
+}
+
+pub fn transitPhase(self: *GuestStage, phase: EventDispatcher.Phase) !void {
+    if (self.dispatcher.phase == phase) return;
+    switch (phase) {
+        .request => {},
+        .ready => try self.doReadyPhase(),
+        .quitting => self.doQuitPhase(),
+        else => unreachable,
+    }
+}
+
+pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+    switch (entry.event) {
+        .probe_request => {
+            if (self.dispatcher.phase != .ready) {
+                var channel = try self.connection.requestChannel();
+                try channel.submit(self.connection.context.io, .finish_topic, .{});
+                try self.transitPhase(.ready);
+            }
+        },
+        .quit_all => {
+            self.dispatcher.phase = .quitting;
+        },
+        else => {
+            dirty.* = .unhandled;
+        }
+    }
+}
+
+fn doReadyPhase(self: *GuestStage) !void {
+    self.state.deinit();
+    self.state = .{ .ready = ReadyPhaseState.create() };
+    self.dispatcher.phase = .ready;
+}
+
+fn doQuitPhase(self: *GuestStage) void {
+    self.state.deinit();
+    self.dispatcher.phase = .quitting;
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
@@ -71,10 +122,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
         .booting => |state| {
             try state.handle(self, entry, dirty);
         },
-        .ready => |state| try state.handle(self, entry, dirty),
+        .ready => |*state| {
+            try state.handle(self, entry, dirty);
+        },
         else => {
-            // TODO:
-            // Invalid phase
             unreachable;
         }
     }
@@ -128,45 +179,8 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     //                 try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
     //             }
     //         },
-    //         .quit => {
-    //             if (lookup.count() == 0) {
-    //                 try self.connection.dispatcher.quitAccept();
-    //             }
-    //         },
-    //         .quit_all => {
-    //             try self.connection.dispatcher.quitAccept();
-    //             try self.connection.pull_sink_socket.stop();
-    //         },
-    //         .log => |log| {
-    //             try self.logger.log(log.level, "{s}", .{log.content});
-    //         },
-    //         else => {
-    //             try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
-    //         },
     //     }
     // }
-}
-
-fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-    switch (entry.event) {
-        .quit_all => {
-            self.dispatcher.phase = .quitting;
-        },
-        else => {
-            dirty.* = .unhandled;
-        }
-    }
-}
-
-fn doReadyPhase(self: *GuestStage) void {
-    self.state.deinit();
-    self.state = .{ .ready = ReadyPhaseState.init() };
-    self.dispatcher.phase = .ready;
-}
-
-fn doQuitPhase(self: *GuestStage) void {
-    self.state.deinit();
-    self.dispatcher.phase = .quitting;
 }
 
 fn processWorkResult(self: *GuestStage, result_content: core.Symbol, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
@@ -214,101 +228,3 @@ fn deinitState(self: *State) void {
         else => unreachable,
     }
 }
-
-const BootPhaseState = struct {
-    retry_count: usize,
-
-    const Self = @This();
-
-    pub fn init(retry_count: usize) Self {
-        return .{
-            .retry_count = retry_count,
-        };
-    }
-
-    pub fn deinit(_: *Self) void {}
-
-    pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-        switch (entry.event) {
-            .launching => {
-                try self.bootLog(stage);
-            },
-            .probe_launching => {
-                handshake(stage.connection, self.retry_count) catch |err| {
-                    if (err == error.LaunchFailed) {
-                        var channel = try stage.connection.dataChannel();
-                        try channel.encode(.failed_launching);
-                        try stage.dispatcher.queue.post(channel);
-                    }
-                    return err;
-                };
-                stage.doReadyPhase();
-            },
-            else => {
-                try stage.defaultHandler(entry, dirty);
-            }
-        }
-    }
-
-    pub fn bootLog(self: *const BootPhaseState, stage: *GuestStage) !void {
-        _ = self;
-        const ep = stage.setting.endpoints;
-
-        try stage.dispatcher.log(.debug, app_context, "Beginning...", .{});
-
-        dump_subscription: {
-            var arena = std.heap.ArenaAllocator.init(stage.allocator);
-            defer arena.deinit();
-
-            try stage.dispatcher.log(.debug, app_context, "Subscriber filters: {s}", .{try stage.connection.listSubscriptions(arena.allocator())});
-            break:dump_subscription;
-        }
-        dump_setting: {
-            try stage.dispatcher.log(.debug, app_context, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
-            try stage.dispatcher.log(.debug, app_context, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
-            try stage.dispatcher.log(.debug, app_context, "CLI: Push/pull Channel = {s}", .{ep.push_pull});
-            break :dump_setting;
-        }
-    }
-};
-
-fn handshake(conn: *Connection, retry_count: usize) !void {
-    // TODO:
-    // Retrying itself
-    var i: usize = 0;
-    while (i < retry_count) {
-        var channel = try conn.requestChannel();
-        defer channel.deinit();
-        try channel.encode(.launched);
-
-        return (channel.submit(conn.context.io)) catch { i += 1; };
-    }
-
-    return error.LunchFailed;
-}
-
-const ReadyPhaseState = struct {
-    const Self = @This();
-
-    pub fn init() Self {
-        return .{};
-    }
-
-    pub fn deinit(self: *Self) void {
-        _ = self;
-    }
-
-    pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-        // TODO:
-        // var lookup = std.StringHashMap(core.Event.Payload.SourcePath).init(self.allocator);
-        // defer lookup.deinit();
-
-        _ = self;
-
-        switch (entry.event) {
-            else => {
-                try stage.defaultHandler(entry, dirty);
-            }
-        }
-    }
-};

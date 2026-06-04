@@ -12,18 +12,14 @@ const putConsoleLog = @import("../supports/log_support.zig").putConsoleLog;
 
 pub fn Sized(comptime poller_size: comptime_int) type {
     return struct {
+        allocator: std.mem.Allocator,
         queue: Queue,
         poller: ReceivePoller,
-        phase: Phase,
-        options: Options,
-        on_poll: PollFn,
-        on_quit: ?QuitHandler = null,
-
-        const Self = @This();
+        phase: events.EventPhase,
+        log_router: LogRouter,
+        vtable: VTable,
+        const Dispatcher = @This();
         const ReceivePoller = nnng.ReceivePoller(poller_size);
-
-        pub const DispatchFn = *const fn (dispatcher: *Self, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
-        pub const PollFn = *const fn (dispatcher: *Self, results: []const nnng.PollEvent) anyerror!void;
 
         // TODO:
         // pub const Phase = struct {
@@ -46,33 +42,36 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         //     }
         // };
 
-        pub fn create(context: nnng.Context, on_poll: Self.PollFn, options: Options) !Self {
+        pub fn create(context: nnng.Context, on_poll: Dispatcher.VTable.PollFn, options: Options) !Dispatcher {
             return .{
+                .allocator = context.allocator,
                 .queue = .{
                     .allocator = context.allocator,
                     .send_queue = .empty,
                     .receive_queue = .empty,
                 },
                 .poller = try ReceivePoller.create(context),
-                .phase = .booting,
-                .options = options,
-                .on_poll = on_poll,
+                .phase = .{ .kind = .launching, .agreement = .pending },
+                .log_router = .{ .style = options.log_style, .no_color = options.no_color },
+                .vtable = .{
+                    .on_poll = on_poll,
+                },
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Dispatcher) void {
             self.queue.send_queue.deinit(self.queue.allocator);
             self.queue.receive_queue.deinit(self.queue.allocator);
             self.poller.deinit();
         }
 
-        pub fn run(self: *Self, stage_name: types.StageName, on_dispatch: DispatchFn) !void {
+        pub fn run(self: *Dispatcher, stage_name: types.StageName, on_dispatch: VTable.DispatchFn) !void {
             while (true) {
                 var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
                 defer skip_entries.deinit(self.queue.allocator);
 
                 while (self.queue.receive_queue.popFront()) |e| {
-                    try self.log(.trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
+                    try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
 
                     var entry = e;
                     var dirty: EventDispatcher.DirtyState = .none;
@@ -92,58 +91,100 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                         }
                     }
                 }
-                if (self.phase == .quitting) {
-                    if (self.on_quit) |q| {
+                if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
+                    // TODO: about daemon boot or managed boot
+                    if (self.vtable.on_quit) |q| {
                         try (q.handler)(q.ptr);
                     }
                     break;
                 }
 
+                const batch_sender_log = self.log_router.as_sender();
+                
                 while (self.queue.send_queue.popFront()) |channel| {
-                    try self.log(.trace, stage_name, "Send/pipe_id: {}", .{ channel.inner.pipe_id,  });
-                    try channel.submit(.{ .flags = .{.nonblocking = true} });
+                    try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
+                    channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
+                        error.WouldBlock => {
+                            try self.queue.postPriority(channel);
+                            break;
+                        },
+                        else => return err,
+                    };
                 }
 
-                _ = try self.poller.poll(Self.doPoll);
+                _ = try self.poller.poll(Dispatcher.doPoll);
                 try self.queue.entrySkipped(skip_entries.items);
             }
         }
 
-        pub fn log(self: *Self, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
+        pub fn log(self: *Dispatcher, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
             if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
-            try self.logInternal(level, stage_name, fmt, args);
-        }
-
-        pub fn handleLogEvent(self: *Self, from_stage: types.StageName, log_event: events.Event.Payload.Log) !void {
-            try self.logInternal(log_event.level, from_stage, "{s}", .{ log_event.content });
-        }
-        
-        fn logInternal(self: *Self, level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
-            if (self.options.log_style == .discard) return;
-            if (!root.Logger.accepted(level)) return;
-
-            switch (self.options.log_style) {
-                .discard => {
-                    // noop
-                },
-                .integrated => {
-                    unreachable;
-                },
-                .stderr => { 
-                    try putConsoleLog(level, stage_name, fmt, args);
-                }
-            }
+            try self.log_router.log(self, level, stage_name, fmt, args);
         }
 
         fn doPoll(poller: *ReceivePoller, results: []const nnng.PollEvent) !void {
-            const self: *Self = @alignCast(@fieldParentPtr("poller", poller));
-            try (self.on_poll)(self, results);
+            const self: *Dispatcher = @alignCast(@fieldParentPtr("poller", poller));
+            try (self.vtable.on_poll)(self, results);
         }
 
-        fn doLog(ptr: *anyopaque, level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) anyerror!void {
-            const self: *Self = @ptrCast(@alignCast(ptr));
-            try self.logInternal(level, stage_name, fmt, args);
-        }
+        pub const LogForwarder = struct {
+            ptr: *anyopaque,
+            handler: *const fn (ptr: *anyopaque, dispatcher: *Dispatcher, log_event: events.Event.Payload.Log, mode: root.Logger.LogIntegratedMode) anyerror!void,
+        };
+
+        pub const VTable = struct {
+            on_poll: PollFn,
+            on_log: ?LogForwarder = null,
+            on_quit: ?QuitHandler = null,
+
+            pub const DispatchFn = *const fn (dispatcher: *Dispatcher, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
+            pub const PollFn = *const fn (dispatcher: *Dispatcher, results: []const nnng.PollEvent) anyerror!void;
+            pub const QuitHandler = struct {
+                ptr: *anyopaque,
+                handler: *const fn (ptr: *anyopaque) anyerror!void,
+            };
+        };
+
+        pub const LogRouter = struct {
+            style: root.Logger.LogStyle,
+            no_color: bool,
+
+            pub fn log(self: *const LogRouter, dispatcher: *Dispatcher, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
+                if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
+                if (!root.Logger.accepted(level)) return;
+
+                switch (self.style) {
+                    .discard => {
+                        // noop
+                    },
+                    .integrated => |mode| {
+                        if (dispatcher.vtable.on_log) |on_log| {
+                            const content = try std.fmt.allocPrint(dispatcher.allocator, fmt, args);
+                            defer dispatcher.allocator.free(content);
+
+                            const log_event = events.Event.Payload.Log.init(.{level, content});
+                            return (on_log.handler)(on_log.ptr, dispatcher, log_event, mode);
+                        }
+                        unreachable;
+                    },
+                    .stderr => { 
+                        try putConsoleLog(level, stage_name, fmt, args);
+                    }
+                }
+            }
+
+            pub fn handleLogEvent(self: *const LogRouter, from_stage: types.StageName, log_event: events.Event.Payload.Log) !void {
+                _ = self;
+                try putConsoleLog(log_event.level, from_stage, "{s}", .{log_event.content});
+            }
+
+            fn as_sender(self: *const LogRouter) LogRouter {
+                return .{
+                    .style = if (std.meta.activeTag(self.style) == .integrated) .{ .integrated = .direct } else self.style,
+                    .no_color = self.no_color,
+                };
+            }
+        };
 
         // TODO:
         // pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: events.Event, routing_id: ?types.Symbol) !void {
@@ -189,20 +230,42 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         //         try self.send_queue.prepend(entry);
         //     }
         // }
+        pub const Queue = struct {
+            allocator: std.mem.Allocator,
+            send_queue: std.Deque(sockets.SendChannel),
+            receive_queue: std.Deque(sockets.ReceiveEntry),
+
+            pub fn post(self: *Queue, event: events.Event, channel: sockets.SendChannel) !void {
+                if (std.meta.activeTag(event) != .log) {
+                    const d: *Dispatcher = @alignCast(@fieldParentPtr("queue", self));
+                    try d.log_router.log(d, .debug, channel.stage, "SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
+                }
+
+                var channel_mut = channel;
+                try channel_mut.encode(event);
+                try self.send_queue.pushBack(self.allocator, channel_mut);
+            }
+
+            pub fn pushReceiveQueue(self: *Queue, entry: sockets.ReceiveEntry) !void {
+                try self.receive_queue.pushBack(self.allocator, entry);
+            }
+
+            pub fn postPriority(self: *Queue, channel: sockets.SendChannel) !void {
+                try self.send_queue.pushFront(self.allocator, channel);
+            }
+
+            pub fn entrySkipped(self: *Queue, entries: []const sockets.ReceiveEntry) !void {
+                try self.receive_queue.pushBackSlice(self.allocator, entries);
+            }
+        };
     };
 }
 
-pub const Phase = enum { booting, request, ready, terminating, quitting };
 pub const DirtyState = enum { none, skipped, unhandled };
 
 pub const Options = struct {
     log_style: root.Logger.LogStyle = .stderr,
     no_color: bool = false,
-};
-
-pub const QuitHandler = struct {
-    ptr: *anyopaque,
-    handler: *const fn (ptr: *anyopaque) anyerror!void,
 };
 
 // TODO: will remove
@@ -216,28 +279,6 @@ pub const QuitHandler = struct {
 //         }
 //     };
 // }
-
-pub const Queue = struct {
-    allocator: std.mem.Allocator,
-    send_queue: std.Deque(sockets.SendChannel),
-    receive_queue: std.Deque(sockets.ReceiveEntry),
-
-    pub fn post(self: *Queue, channel: sockets.SendChannel) !void {
-        try self.send_queue.pushBack(self.allocator, channel);
-    }
-
-    pub fn pushReceiveQueue(self: *Queue, entry: sockets.ReceiveEntry) !void {
-        try self.receive_queue.pushBack(self.allocator, entry);
-    }
-
-    pub fn postPriority(self: *Queue, channel: sockets.SendChannel) !void {
-        try self.send_queue.pushFront(self.allocator, channel);
-    }
-
-    pub fn entrySkipped(self: *Queue, entries: []const sockets.ReceiveEntry) !void {
-        try self.receive_queue.pushBackSlice(self.allocator, entries);
-    }
-};
 
 test "dispatcher test" {
     std.testing.refAllDecls(@This());
@@ -256,7 +297,7 @@ pub const tests = struct {
         switch (entry.event) {
             .launching => {},
             .quit => {
-                d.phase = .quitting;
+                d.phase = .{.kind = .quitting, .agreement = .confirmed};
             },
             else => unreachable,
         }
@@ -265,8 +306,8 @@ pub const tests = struct {
     fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .launching => {},
-            .quit_all => {
-                d.phase = .quitting;
+            .probe => {
+                d.phase = .{.kind = .quitting, .agreement = .confirmed};
             },
             else => unreachable,
         }
@@ -275,7 +316,7 @@ pub const tests = struct {
     fn runConcurrent(host_dispatcher: *Dispatcher, guest_dispatcher: *Dispatcher) (std.Io.ConcurrentError || std.Io.Cancelable)!void {
         const Runnable = struct {
             d: *Dispatcher,
-            callback: Dispatcher.DispatchFn,
+            callback: Dispatcher.VTable.DispatchFn,
 
             fn run(self: *const @This(), stage_name: types.StageName) void {
                 self.d.run(stage_name, self.callback) catch |err| {
@@ -321,11 +362,11 @@ pub const tests = struct {
             break:send_event;
         }
 
-        try std.testing.expectEqual(.booting, dispatcher.phase);
+        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
 
         try dispatcher.run("runner", serverHandler);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
     }
 
     test "receive event by REP" {
@@ -357,11 +398,11 @@ pub const tests = struct {
             break:send_event;
         }
 
-        try std.testing.expectEqual(.booting, dispatcher.phase);
+        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
 
         try dispatcher.run("runner", serverHandler);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
     }
 
     test "receive event by SUB" {
@@ -376,7 +417,7 @@ pub const tests = struct {
 
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer guest.deinit();
-        try guest.subscribe(&.{ .quit_all });
+        try guest.subscribe(&.{ .probe });
 
         var subscriptions: std.ArrayListUnmanaged(types.Symbol) = .empty;
         defer subscriptions.deinit(std.testing.allocator);
@@ -389,20 +430,20 @@ pub const tests = struct {
 
         var dispatcher: Dispatcher = try guest.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
-        dispatcher.on_quit = null;
+        dispatcher.vtable.on_quit = null;
 
         var msg = try nnng.Message.create();
         send_event: {
-            try encodeToCbor(&msg.writer, .{ .header = .quit_all, .stage_name = "test-stage", .event = .quit_all });
+            try encodeToCbor(&msg.writer, .{ .header = .probe, .stage_name = "test-stage", .event = .{.probe = .terminating} });
             try host.cmd_socket.pipe.item.sender().submit(msg, .{});
             break:send_event;
         }
 
-        try std.testing.expectEqual(.booting, dispatcher.phase);
+        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
 
         try dispatcher.run("guest", clientHandler);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase);
+        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
     }
 
     test "Host/Guest communication" {
@@ -418,7 +459,7 @@ pub const tests = struct {
 
         var guest = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer guest.deinit();
-        try guest.subscribe(&.{ .quit_all });
+        try guest.subscribe(&.{ .probe });
 
         // listeners
         try host.pull_socket.transport.start(.{});
@@ -436,18 +477,17 @@ pub const tests = struct {
         defer guest_dispatcher.deinit();
 
         publisg_event: {
-            var cmd = try host.commandChannel();
-            try cmd.encode(.quit_all);
-            try host_dispatcher.queue.post(cmd);
+            const cmd = try host.commandChannel();
+            try host_dispatcher.queue.post(.{.probe = .terminating}, cmd);
             break:publisg_event;
         }
 
-        try std.testing.expectEqual(.booting, host_dispatcher.phase);
-        try std.testing.expectEqual(.booting, guest_dispatcher.phase);
+        try std.testing.expectEqual(.launching, host_dispatcher.phase.kind);
+        try std.testing.expectEqual(.launching, guest_dispatcher.phase.kind);
 
         try runConcurrent(&host_dispatcher, &guest_dispatcher);
 
-        try std.testing.expectEqual(.quitting, host_dispatcher.phase);
-        try std.testing.expectEqual(.quitting, guest_dispatcher.phase);
+        try std.testing.expectEqual(.quitting, host_dispatcher.phase.kind);
+        try std.testing.expectEqual(.quitting, guest_dispatcher.phase.kind);
     }
 };

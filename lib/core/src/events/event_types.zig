@@ -61,6 +61,14 @@ pub const ChannelType = enum {
     channel_generate,
 };
 
+pub const EventPhase = struct {
+    kind: EventPhase.Kind,
+    agreement: EventPhase.Agreement,
+
+    pub const Kind = enum { launching, request, ready, terminating, quitting };
+    pub const Agreement = enum { pending, confirmed };
+};
+
 /// Event types
 pub const EventType = enum (u8) {
     // Response events
@@ -68,17 +76,15 @@ pub const EventType = enum (u8) {
     nack,
     // periodically heartbeat
     heartbeat,
+    probe,
     // Boot phase event
     launching,
-    probe_launching,
     launched,
     failed_launching,
     // Request phase event
-    probe_request,
     topic,
     finish_topic,
     // Ready phase event
-    probe_ready,
     ready,
     // watch event
     request_watch_path,
@@ -101,9 +107,7 @@ pub const EventType = enum (u8) {
     // Worker event
     worker_response,
     // Other event
-    quit_all,
     quit,
-    quit_accept,
     log,
     report_fatal,
     pending_fatal_quit,
@@ -291,7 +295,7 @@ const EventPayload = struct {
         level: LogLevel,
         content: Symbol,
 
-        pub fn init(view: StructView(Log)) !@This() {
+        pub fn init(view: StructView(Log)) @This() {
             return .{
                 .level = view[0],
                 .content = view[1],
@@ -323,17 +327,15 @@ pub const Event = union(EventType) {
     nack: void,
     // periodically heartbeat
     heartbeat: Payload.Heartbeat,
+    probe: EventPhase.Kind,
     // Boot phase event
     launching: void,
-    probe_launching: void,
     launched: void,
     failed_launching: void,
     // Request phase event
-    probe_request: void,
     topic: Payload.Topic,
     finish_topic: void,
     // Ready phase event
-    probe_ready: void,
     ready: void,
     // Watch event
     request_watch_path: void,
@@ -356,9 +358,7 @@ pub const Event = union(EventType) {
     // Worker event
     worker_response: Payload.WorkerResponse,
     // Other event
-    quit_all: void,
     quit: void,
-    quit_accept: void,
     log: Payload.Log,
     report_fatal: Payload.Log,
     pending_fatal_quit: void,
@@ -374,17 +374,15 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .nack => {},
         // periodically heartbeat
         .heartbeat => {},
+        .probe => {},
         // Boot phase event
         .launching => {},
-        .probe_launching => {},
         .launched => {},
         .failed_launching => {},
         // Request topic phase event
-        .probe_request => {},
         .topic => |data| data.deinit(allocator),
         .finish_topic => {},
         // Ready phase event
-        .probe_ready => {},
         .ready => {},
         // Watch event
         .request_watch_path => {},
@@ -407,9 +405,7 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         // Worker event
         .worker_response => |data| data.deinit(),
         // Other events
-        .quit_all => {},
         .quit => {},
-        .quit_accept => {},
         .log => |data| data.deinit(),
         .report_fatal => |data| data.deinit(),
         .pending_fatal_quit => {},

@@ -38,17 +38,15 @@ pub const EventHeader = union(EventType) {
     nack,
     // periodically heartbeat
     heartbeat,
+    probe,
     // Boot phase event
     launching,
-    probe_launching,
     launched,
     failed_launching,
     // Request phase event
-    probe_request,
     topic,
     finish_topic,
     // Ready phase event
-    probe_ready,
     ready,
     // watch event
     request_watch_path,
@@ -72,9 +70,7 @@ pub const EventHeader = union(EventType) {
     // Worker event
     worker_response,
     // Other event
-    quit_all,
     quit,
-    quit_accept,
     log,
     report_fatal,
     pending_fatal_quit,

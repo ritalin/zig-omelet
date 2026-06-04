@@ -101,7 +101,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
             errdefer self.push_socket.close();
         }
 
-        pub fn enableIntegratedLog(self: *Self, log_integrated: bool) void {
+        fn enableIntegratedLog(self: *Self, log_integrated: bool) void {
             if (log_integrated) {
                 Logger.enableIntegratedLog(.{
                     .ptr = self,
@@ -117,13 +117,22 @@ pub fn Client(comptime stage_name: types.StageName) type {
         }
 
         pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
+            self.enableIntegratedLog(options.log_style == .integrated);
+
             var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.PollHandler(poller_size).doPoll, options);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe);
 
-            dispatcher.on_quit = .{
+            dispatcher.vtable.on_quit = .{
                 .ptr = self,
                 .handler = Self.doQuit,
             };
+
+            if (options.log_style == .integrated) {
+                dispatcher.vtable.on_log = .{
+                    .ptr = self,
+                    .handler = Self.ForwardLogHandler(poller_size).doLog,
+                };
+            }
 
             const bootEntry = try ReceiveEntry.booting(stage_name);
             try dispatcher.queue.pushReceiveQueue(bootEntry);
@@ -160,26 +169,6 @@ pub fn Client(comptime stage_name: types.StageName) type {
             );
         }
 
-        // TODO: will remove
-        // fn onPoll(queue: *EventDispatcher.Queue, logger: *EventDispatcher.Logger, results: []const nnng.PollEvent) anyerror!void {
-        //     for (results) |result| {
-        //         switch (result) {
-        //             .failed => |payload| {
-        //                 try logger.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
-        //             },
-        //             .ready => |channel| {
-        //                 const msg = try channel.receiver().drain(.{});
-        //                 if (ReceiveEntry.create(queue.allocator, channel.id, msg, channel.features)) |entry| {
-        //                     try queue.pushReceiveQueue(entry);
-        //                 }
-        //                 else |err| {
-        //                     try logger.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-
         fn doQuit(ptr: *anyopaque) anyerror!void {
             const self: *Self = @ptrCast(@alignCast(ptr));
 
@@ -188,10 +177,12 @@ pub fn Client(comptime stage_name: types.StageName) type {
         }
 
         fn doIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8) anyerror!void {
-            _ = ptr;
-            _ = level;
-            _ = msg;
-            unreachable;
+            const self: *Self = @ptrCast(@alignCast(ptr));
+
+            const log_event = events.Event.Payload.Log.init(.{level, msg});
+            var channel = try self.dataChannel();
+            try channel.encode(.{ .log = log_event });
+            try channel.submit(.{ .flags = .{ .nonblocking = true } });
         }
 
         fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
@@ -208,15 +199,41 @@ pub fn Client(comptime stage_name: types.StageName) type {
                                 try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
                             },
                             .ready => |channel| {
-                                const msg = try channel.receiver().drain(.{});
-                                if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
-                                    try dispatcher.queue.pushReceiveQueue(entry);
-                                }
-                                else |err| {
-                                    try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                const receiver = channel.receiver();
+                                while (try receiver.tryDrain(.{})) |msg| {
+                                    if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
+                                        try dispatcher.queue.pushReceiveQueue(entry);
+                                    }
+                                    else |err| {
+                                        try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                    }
                                 }
                             }
                         }
+                    }
+                }
+            };
+        }
+
+        fn ForwardLogHandler(comptime poller_size: comptime_int) type {
+            return struct {
+                pub fn doLog(ptr: *anyopaque, dispatcher: *EventDispatcher.Sized(poller_size), log_event: events.Event.Payload.Log, mode: root.Logger.LogIntegratedMode) !void {
+                    const self: *Self = @ptrCast(@alignCast(ptr));
+                    var channel = try self.dataChannel();
+                    const g = channel.sender.lock();
+                    defer g.unlock();
+
+                    switch (mode) {
+                        .batch => try dispatcher.queue.post(.{ .log = log_event }, channel),
+                        .direct => {
+                            try channel.encode(.{ .log = log_event });
+                            channel.submit(.{ .flags = .{ .nonblocking = true } }) catch |err| switch (err) {
+                                error.WouldBlock => {
+                                    try dispatcher.queue.postPriority(channel);
+                                },
+                                else => return err,
+                            };
+                        },
                     }
                 }
             };

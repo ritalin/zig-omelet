@@ -134,21 +134,25 @@ pub fn Server(comptime stage_name: types.StageName) type {
                                 try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
                             },
                             .ready => |channel| {
-                                var msg = try channel.receiver().drain(.{});
-                                if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
-                                    try dispatcher.queue.pushReceiveQueue(entry);
+                                const receiver = channel.receiver();
+                                while (try receiver.tryDrain(.{})) |msg| {
+                                    if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
+                                        try dispatcher.queue.pushReceiveQueue(entry);
 
-                                    if (channel.features.replyable) {
-                                        try writeResponse(&msg, .ack);
-                                        try channel.sender().submit(msg, .{});
+                                        if (channel.features.replyable) {
+                                            var msg_mut = msg;
+                                            try writeResponse(&msg_mut, .ack);
+                                            try channel.sender().submit(msg_mut, .{});
+                                        }
                                     }
-                                }
-                                else |err| {
-                                    try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                    else |err| {
+                                        try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
 
-                                    if (channel.features.replyable) {
-                                        try writeResponse(&msg, .nack);
-                                        try channel.sender().submit(msg, .{});
+                                        if (channel.features.replyable) {
+                                            var msg_mut = msg;
+                                            try writeResponse(&msg_mut, .nack);
+                                            try channel.sender().submit(msg_mut, .{});
+                                        }
                                     }
                                 }
                             }

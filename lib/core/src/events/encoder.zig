@@ -12,6 +12,7 @@ const StructView = impl.StructView;
 
 const Event = root.events.Event;
 const EventType = root.events.EventType;
+const EventPhase = root.events.EventPhase;
 
 pub fn encodeToCbor(writer: *std.Io.Writer, packet: EventPacket) !void {
     var cbor_writer = try CborStream.Writer.init(writer);
@@ -44,16 +45,17 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         .heartbeat => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Heartbeat), payload.values());
         },
+        .probe => |payload| {
+            _ = try writer.writeEnum(EventPhase.Kind, payload);
+        },
         // Boot phase event
-        .launching, .probe_launching, .launched, .failed_launching => {},
+        .launching, .launched, .failed_launching => {},
         // Request phase event
-        .probe_request => {},
         .topic => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Topic), payload.values());
         },
         .finish_topic => {},
         // Ready phase event
-        .probe_ready => {},
         .ready => {},
         // Watch event
         .request_watch_path => {},
@@ -92,8 +94,6 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
             _ = try writer.writeString(payload.content);
         },
         // Other event
-        .quit_all => {},
-        .quit_accept => {},
         .quit => {},
         .log, .report_fatal => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Log), payload.values());

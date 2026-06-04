@@ -39,13 +39,15 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
             const view = try reader.readTupleWithAllocator(allocator, StructView(Event.Payload.Heartbeat));
             return .{ .heartbeat = Event.Payload.Heartbeat.init(view) };
         },
+        .probe => {
+            const phase = try reader.readEnum(events.EventPhase.Kind);
+            return .{.probe = phase};
+        },
         // Boot phase event
         .launching => return .launching,
-        .probe_launching => return .probe_launching,
         .launched => return .launched,
         .failed_launching => return .failed_launching,
         // Request phase event
-        .probe_request => return .probe_request,
         .topic => {
             const view = try reader.readTupleWithAllocator(allocator, StructView(Event.Payload.Topic));
 
@@ -55,7 +57,6 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         },
         .finish_topic => return .finish_topic,
         // Ready phase event
-        .probe_ready => return .probe_ready,
         .ready => return .ready,
         // Watch event
         .request_watch_path => return .request_watch_path,
@@ -109,21 +110,19 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
             };
         },
         // Other event
-        .quit_all => return .quit_all,
         .quit => return .quit,
-        .quit_accept => return .quit_accept,
         .log => {
             const log = try reader.readTuple(StructView(Event.Payload.Log));
 
             return .{
-                .log = try Event.Payload.Log.init(log),
+                .log = Event.Payload.Log.init(log),
             };
         },
         .report_fatal => {
             const log = try reader.readTuple(StructView(Event.Payload.Log));
 
             return .{
-                .report_fatal = try Event.Payload.Log.init(log),
+                .report_fatal = Event.Payload.Log.init(log),
             };
         },
         .pending_fatal_quit => return .pending_fatal_quit,
@@ -149,7 +148,7 @@ pub const tests = struct {
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
 
-        const heartbeat = Event.Payload.Heartbeat.init(.{ .probe_launching, 1 });
+        const heartbeat = Event.Payload.Heartbeat.init(.{ .probe, 1 });
         const topic = Event.Payload.Topic.init(.{ .source, &.{"topic_a", "topic_b", "topic_c"} });
         const source_path = try Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "Some-content", 1 });
         defer source_path.deinit(allocator);
@@ -169,20 +168,18 @@ pub const tests = struct {
         defer skip_topic_body.deinit(allocator);
         const worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"});
         defer worker_response.deinit();
-        const log = try Event.Payload.Log.init(.{.debug, "Test message😃"});
+        const log = Event.Payload.Log.init(.{.debug, "Test message😃"});
         defer log.deinit();
 
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.nack), .stage_name = test_context, .event = .nack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.heartbeat), .stage_name = test_context, .event = .{.heartbeat = heartbeat} });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe), .stage_name = test_context, .event = .{.probe = .launching} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launching), .stage_name = test_context, .event = .launching });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_launching), .stage_name = test_context, .event = .probe_launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launched), .stage_name = test_context, .event = .launched });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.failed_launching), .stage_name = test_context, .event = .failed_launching });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_request), .stage_name = test_context, .event = .probe_request });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.topic), .stage_name = test_context, .event = .{.topic = topic} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_topic), .stage_name = test_context, .event = .finish_topic });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe_ready), .stage_name = test_context, .event = .probe_ready });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready), .stage_name = test_context, .event = .ready });
 
         // TODO:
@@ -201,9 +198,7 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_generate), .stage_name = test_context, .event = .ready_generate });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_generate), .stage_name = test_context, .event = .finish_generate });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.worker_response), .stage_name = test_context, .event = .{.worker_response = worker_response} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.quit_all), .stage_name = test_context, .event = .quit_all });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.quit), .stage_name = test_context, .event = .quit });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.quit_accept), .stage_name = test_context, .event = .quit_accept });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.log), .stage_name = test_context, .event = .{.log = log} });
 
         var reader = CborStream.Reader.createFromSlice(buffer.written());
@@ -235,6 +230,15 @@ pub const tests = struct {
             try std.testing.expectEqualDeep(heartbeat, packet.event.heartbeat);
             break:heartbeat;
         }
+        probe_launching: {
+            const packet = try decodeFromCborInternal(allocator, &reader);
+            defer packet.event.deinit(allocator);
+            try std.testing.expectEqual(.probe, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.probe);
+            try std.testing.expectEqualStrings(test_context, packet.stage_name);
+            try std.testing.expectEqualDeep(.launching, packet.event.probe);
+            break:probe_launching;
+        }
         launching: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
@@ -243,15 +247,6 @@ pub const tests = struct {
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.launching);
             break:launching;
-        }
-        probe_launching: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.probe_launching, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.probe_launching);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.probe_launching);
-            break:probe_launching;
         }
         launched: {
             const packet = try decodeFromCborInternal(allocator, &reader);
@@ -271,15 +266,6 @@ pub const tests = struct {
             try std.testing.expectEqualDeep({}, packet.event.failed_launching);
             break:failure_launching;
         }
-        probe_request: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.probe_request, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.probe_request);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.probe_request);
-            break:probe_request;
-        }
         topic: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
@@ -297,15 +283,6 @@ pub const tests = struct {
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.finish_topic);
             break:finish_topic;
-        }
-        probe_ready: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.probe_ready, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.probe_ready);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.probe_ready);
-            break:probe_ready;
         }
         ready: {
             const packet = try decodeFromCborInternal(allocator, &reader);
@@ -443,15 +420,6 @@ pub const tests = struct {
             try std.testing.expectEqualDeep(worker_response, packet.event.worker_response);
             break:worker_response;
         }
-        quit_all: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.quit_all, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.quit_all);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.quit_all);
-            break:quit_all;
-        }
         quit: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
@@ -460,15 +428,6 @@ pub const tests = struct {
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.quit);
             break:quit;
-        }
-        quit_accept: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.quit_accept, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.quit_accept);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.quit_accept);
-            break:quit_accept;
         }
         log: {
             const packet = try decodeFromCborInternal(allocator, &reader);

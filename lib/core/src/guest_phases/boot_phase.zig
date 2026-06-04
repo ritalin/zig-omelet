@@ -18,15 +18,18 @@ pub fn BootPhaseState(comptime GuestStage: type) type {
                 .launching => {
                     try self.bootLog(stage);
                 },
-                .probe_launching => {
-                    var channel = try stage.connection.requestChannel();
-                    channel.submit(stage.connection.context.io, .launched, .{}) catch {
-                        var push_channel = try stage.connection.dataChannel();
-                        try push_channel.encode(.failed_launching);
-                        try stage.dispatcher.queue.post(push_channel);
-                        return;
-                    };
-                    try stage.transitPhase(.request);
+                .probe => |phase| {
+                    if ((phase == .launching) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .launching, .agreement = .pending}))) {
+                        var channel = try stage.connection.requestChannel();
+                        channel.submit(stage.connection.context.io, .launched, .{}) catch {
+                            try stage.dispatcher.queue.post(.failed_launching, try stage.connection.dataChannel());
+                            return;
+                        };
+                        try stage.transitPhase(.request, .pending);
+                    }
+                    else {
+                        try stage.defaultHandler(entry, dirty);
+                    }
                 },
                 else => {
                     try stage.defaultHandler(entry, dirty);

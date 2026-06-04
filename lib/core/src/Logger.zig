@@ -5,15 +5,23 @@ const root = @import("./root.zig");
 const types = root.types;
 const events = root.events;
 
-pub const LogStyle = enum {
-    stderr,
-    integrated,
-    discard,
+pub const LogIntegratedMode = enum {
+    batch, 
+    direct,
+};
+
+pub const LogStyle = union(enum) {
+    stderr: void,
+    integrated: LogIntegratedMode,
+    discard: void,
 };
 
 pub fn accepted(level: events.LogLevel) bool {
     return level_filter.contains(level);
 }
+
+pub const AppLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .Debug) .debug else .info, .scope = .app };
+pub const TraceLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .Debug) .debug else .info, .scope = .app_trace };
 
 var level_filter = resetFilter(if (builtin.mode == .Debug) .debug else .info);
 
@@ -88,7 +96,7 @@ pub fn forwardIntegratedLog(comptime level: std.log.Level, comptime scope: @Enum
         .err => .err,
         .warn => .warn,
         .info => .info,
-        .debug => switch(scope) { .default, .trace => .trace, else => .debug },
+        .debug => switch(scope) { .trace => .trace, else => .debug },
     };
     if (! level_filter.contains(new_level)) return;
 
@@ -96,21 +104,24 @@ pub fn forwardIntegratedLog(comptime level: std.log.Level, comptime scope: @Enum
         return std.log.defaultLog(level, scope, format, args);
     }
 
-    var buffer: std.Io.Writer.Allocating = .init(std.heap.c_allocator);
-    defer buffer.deinit();
+    if (comptime isAllowScope(scope)) {
+        var buffer: std.Io.Writer.Allocating = .init(std.heap.c_allocator);
+        defer buffer.deinit();
 
-    buffer.writer.print(format, args) catch { return; };
+        buffer.writer.print(format, args) catch { return; };
 
-    (on_integrated.?.handler)(on_integrated.?.ptr, new_level, buffer.writer.buffered()) catch {};
+        (on_integrated.?.handler)(on_integrated.?.ptr, new_level, buffer.writer.buffered()) catch {};
+    }
 }
 
-// pub fn stringToLogLevel(s: types.Symbol) events.LogLevel {
-//     return std.meta.stringToEnum(events.LogLevel, s) orelse .err;
-// }
+fn isAllowScope(comptime scope: @EnumLiteral()) bool {
+    if (builtin.is_test) return true;
 
-// pub fn disable() void {
-//     log_disabled = true;
-// }
+    inline for (std.options.log_scope_levels) |levels| {
+        if (levels.scope == scope) return true;
+    }
+    return false;
+}
 
 test "log test" {
     std.testing.refAllDecls(@This());
@@ -229,14 +240,14 @@ pub const tests = struct {
 
         info: {
             buffer.writer.end = 0;
-            forwardIntegratedLog(.info, .default, "{s}", .{ "quaxx" });
+            forwardIntegratedLog(.info, .trace, "{s}", .{ "quaxx" });
             const expected = "\x1b[1m\x1b[32mINFO \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:info;
         }
         debug: {
             buffer.writer.end = 0;
-            forwardIntegratedLog(.debug, .default, "{s}", .{ "quaxx" });
+            forwardIntegratedLog(.debug, .trace, "{s}", .{ "quaxx" });
             const expected = "\x1b[1m\x1b[35mTRACE \x1b[0m[\x1b[1mstage\x1b[0m] quaxx\n";
             try std.testing.expectEqualStrings(expected, buffer.writer.buffered());
             break:debug;

@@ -18,46 +18,48 @@ pub fn RequestTopicPhaseState(comptime GuestStage: type) type {
             _ = self;
 
             switch (entry.event) {
-                .probe_request => {
-                    topics: {
-                        const topic: StructView(Event.Payload.Topic) = .{
-                            .source,
-                            &.{
-                                c.topic_query, 
-                                c.topic_placeholder, 
-                                c.topic_placeholder_order, 
-                                c.topic_select_list, 
-                                c.topic_bound_user_type, 
-                                c.topic_anon_user_type,
-                            },
-                        };
-                        var channel = try stage.connection.dataChannel();
-                        try channel.encode(.{.topic = Event.Payload.Topic.init(topic)});
-                        try stage.dispatcher.queue.post(channel);
-                        break :topics;
-                    }
-                    topics: {
-                        const topic: StructView(Event.Payload.Topic) = .{
-                            .schema,
-                            &.{ c.topic_user_type },
-                        };
-                        var channel = try stage.connection.dataChannel();
-                        try channel.encode(.{.topic = Event.Payload.Topic.init(topic)});
-                        try stage.dispatcher.queue.post(channel);
-                        break :topics;
-                    }
-                    finish_topic: {
-                        var channel = try stage.connection.dataChannel();
-                        try channel.encode(.finish_topic);
-                        try stage.dispatcher.queue.post(channel);
-                        try stage.transitPhase(.ready);
-                        break:finish_topic;
+                .probe => |phase| {
+                    if ((phase == .request) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .request, .agreement = .pending}))) {
+                        topics: {
+                            const topic: StructView(Event.Payload.Topic) = .{
+                                .source,
+                                &.{
+                                    c.topic_query, 
+                                    c.topic_placeholder, 
+                                    c.topic_placeholder_order, 
+                                    c.topic_select_list, 
+                                    c.topic_bound_user_type, 
+                                    c.topic_anon_user_type,
+                                },
+                            };
+                            try stage.dispatcher.queue.post(
+                                .{.topic = Event.Payload.Topic.init(topic)}, 
+                                try stage.connection.dataChannel()
+                            );
+                            break :topics;
+                        }
+                        topics: {
+                            const topic: StructView(Event.Payload.Topic) = .{
+                                .schema,
+                                &.{ c.topic_user_type },
+                            };
+                            try stage.dispatcher.queue.post(
+                                .{.topic = Event.Payload.Topic.init(topic)},
+                                try stage.connection.dataChannel()
+                            );
+                            break :topics;
+                        }
+                        finish_topic: {
+                            try stage.dispatcher.queue.post(.finish_topic, try stage.connection.dataChannel());
+                            try stage.transitPhase(.ready, .pending);
+                            break:finish_topic;
+                        }
+                        return;
                     }
                 },
-                else => {
-                    try stage.defaultHandler(entry, dirty);
-                }
+                else => {}
             }
+            try stage.defaultHandler(entry, dirty);
         }
     };
 }

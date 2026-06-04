@@ -1,4 +1,5 @@
 const std = @import("std");
+const nnng = @import("nnng");
 const core = @import("core");
 const TaskReaper = @import("./TaskReaper.zig");
 const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
@@ -21,11 +22,11 @@ pub fn sendProbe(
         if (limit.count < count) return error.Timeout;
     }
 
-    var channel = try connection.commandChannel();
-    try channel.encode(event);
-    try dispatcher.queue.post(channel);
-
+    try dispatcher.queue.post(event, try connection.commandChannel());
+    
+    const task: HeartbeatTask = .{};
     const args = .{
+        task,
         io, 
         try connection.dataChannel(),
         std.meta.activeTag(event),

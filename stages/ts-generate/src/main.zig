@@ -5,6 +5,10 @@ const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
 pub const std_options: std.Options = .{
+    .log_scope_levels = &.{
+        core.Logger.AppLevel,
+        core.Logger.TraceLevel,
+    },
     .logFn = core.Logger.forwardIntegratedLog,
 };
 
@@ -13,8 +17,9 @@ pub fn main(init: std.process.Init) !void {
 
     // TODO:
     const setting: Setting = .{
-        .log_level = .debug,
-        .log_style = .stderr,
+        .log_level = .trace,
+        // .log_style = .stderr,
+        .log_style = .{.integrated = .batch},
         .no_color = false,
         .endpoints = .{
             .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
@@ -32,11 +37,9 @@ pub fn main(init: std.process.Init) !void {
 
     var connection = try Stage.Connection.create(init.io, allocator, setting.endpoints);
     defer connection.deinit();
-    connection.enableIntegratedLog(setting.log_style == .integrated);
 
     var stage = try Stage.create(allocator, &connection, &setting);
     defer stage.deinit();
-
     try stage.run();
 }
 

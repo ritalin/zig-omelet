@@ -14,11 +14,10 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
         allocator: std.mem.Allocator,
         topics: CacheManager.TopicsMap,
         guest_statuses: std.StringHashMap(Status),
-        limit: HeartbeatTask.Limit,
 
         const Self = @This();
 
-        pub fn create(allocator: std.mem.Allocator, guest_names: *std.BufSet, topics: CacheManager.TopicsMap, heartbeat_limit: HeartbeatTask.Limit) !Self {
+        pub fn create(allocator: std.mem.Allocator, guest_names: *std.BufSet, topics: CacheManager.TopicsMap) !Self {
             var guest_statuses = std.StringHashMap(Status).init(allocator);
             var iter = guest_names.iterator();
             while (iter.next()) |name| {
@@ -29,7 +28,6 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                 .allocator = allocator,
                 .topics = topics,
                 .guest_statuses = guest_statuses,
-                .limit = heartbeat_limit,
             };
         }
 
@@ -55,23 +53,22 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                         status.* = .ready;
                     }
 
-                    // TODO: stub impl
                     if (self.checkStatus(.ready)) {
                         // All guests is ready
-                        try stage.transitPhase(.terminating);
+                        try stage.transitPhase(.ready, .confirmed);
+
+                        // TODO: stub impl
+                        try stage.transitPhase(.terminating, .pending);
                     }
                 },
                 .heartbeat => |payload| {
                     if (!self.checkStatus(.ready)) {
-                        switch (payload.event_type) {
-                            .probe_ready => {
-                                const interval = HostRunner.nextInterval(payload.count);
-                                try stage.sendProbe(.probe_ready, payload.count, self.limit, interval);
+                        stage.sendProbeHeartbeat(payload.event_type, .ready, payload.count) catch |err| switch (err) {
+                            error.DiscardProbe => {
+                                dirty.* = .unhandled;
                             },
-                            else => {
-                                try stage.defaultHandler(entry, dirty);
-                            }
-                        }
+                            else => return err,
+                        };
                     }
                 },
                 else => {

@@ -16,14 +16,16 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
         pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
             _ = self;
             switch (entry.event) {
-                .probe_ready => {
-                    var channel = try stage.connection.requestChannel();
-                    try channel.submit(stage.connection.context.io, .ready, .{});
+                .probe => |phase| {
+                    if ((phase == .ready) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .ready, .agreement = .pending}))) {
+                        var channel = try stage.connection.requestChannel();
+                        try channel.submit(stage.connection.context.io, .ready, .{});
+                        return;
+                    }
                 },
-                else => {
-                    try stage.defaultHandler(entry, dirty);
-                }
+                else => {}
             }
+            try stage.defaultHandler(entry, dirty);
         }
     };
 }

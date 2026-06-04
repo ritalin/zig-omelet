@@ -14,16 +14,14 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
     return struct {
         guests: *const std.BufSet,
         left_guests: std.BufSet,
-        limit: HeartbeatTask.Limit,
         topics: TopicsMap,
 
         const Self = @This();
 
-        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet, heartbeat_limit: HeartbeatTask.Limit) !Self {
+        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet) !Self {
             return .{
                 .guests = guests,
                 .left_guests = try guests.cloneWithAllocator(allocator),
-                .limit = heartbeat_limit,
                 .topics = TopicsMap.init(allocator),
             };
         }
@@ -55,20 +53,17 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
                             }
                         }
 
-                        try stage.transitPhase(.ready);
+                        try stage.transitPhase(.ready, .pending);
                     }
                 },
                 .heartbeat => |payload| {
                     if (self.left_guests.count() > 0) {
-                        switch (payload.event_type) {
-                            .probe_request => {
-                                const interval = HostRunner.nextInterval(payload.count);
-                                try stage.sendProbe(.probe_request, payload.count, self.limit, interval);
+                        stage.sendProbeHeartbeat(payload.event_type, .request, payload.count) catch |err| switch (err) {
+                            error.DiscardProbe => {
+                                dirty.* = .unhandled;
                             },
-                            else => {
-                                try stage.defaultHandler(entry, dirty);
-                            }
-                        }
+                            else => return err,
+                        };
                     }
                 },
                 else => {

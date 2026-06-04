@@ -42,7 +42,7 @@ pub const TestStage = struct {
                     .log_style = .discard,
                     .no_color = false,
                     .stage_endpoints = ep,
-                    .boot_limit = limit,
+                    .heartbeat_limit = limit,
                 },
             },
             .connection = connection,
@@ -56,12 +56,22 @@ pub const TestStage = struct {
         self.dispatcher.deinit();
     }
 
-    pub fn sendProbe(stage: *TestStage, event: events.Event, count: usize, limit: HeartbeatTask.Limit) !void {
+    pub fn sendProbe(stage: *TestStage, event: events.Event, count: u64, limit: HeartbeatTask.Limit, interval: std.Io.Duration) !void {
         return task_support.sendProbe(
             std.testing.io, stage.reaper, 
             stage_name, stage.connection, 
             4, &stage.dispatcher, 
-            event, count, limit, std.Io.Duration.fromMilliseconds(50)
+            event, count, limit, interval
+        );
+    }
+
+    pub fn sendProbeHeartbeat(stage: *TestStage, _: events.EventType, phase: events.EventPhase.Kind, count: u64) !void {
+        const interval = TestStage.nextInterval(0);
+        return stage.sendProbe(
+            .{.probe = phase},
+            count,
+            stage.setting.general.heartbeat_limit,
+            interval
         );
     }
 
@@ -69,15 +79,16 @@ pub const TestStage = struct {
         return self.dispatcher.log(level, stage_name, fmt, args);
     }
 
-    pub fn run(self: *TestStage, on_dispatch: EventDispatcher.Sized(4).DispatchFn) void {
+    pub fn run(self: *TestStage, on_dispatch: EventDispatcher.Sized(4).VTable.DispatchFn) void {
         self.dispatcher.run(stage_name, on_dispatch) catch |err| {
             self.err = err;
         };
     }
 
-    pub fn transitPhase(self: *TestStage, phase: EventDispatcher.Phase) !void {
-        _ = phase;
-        self.dispatcher.phase = .quitting;
+    pub fn transitPhase(self: *TestStage, phase_kind: events.EventPhase.Kind, phase_agree: events.EventPhase.Agreement) !void {
+        _ = phase_kind;
+        _ = phase_agree;
+        self.dispatcher.phase = .{.kind = .quitting, .agreement = .confirmed};
     }
 
     pub fn defaultHandler(self: *TestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
@@ -86,6 +97,10 @@ pub const TestStage = struct {
         if (self.on_default) |on_default| {
             try on_default(self, entry);
         }
+    }
+
+    pub fn nextInterval(_: u64) std.Io.Duration {
+        return .fromMilliseconds(50);
     }
 };
 

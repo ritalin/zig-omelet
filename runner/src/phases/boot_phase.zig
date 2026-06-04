@@ -14,15 +14,13 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
     return struct {
         guests: *const std.BufSet,
         left_guests: std.BufSet,
-        limit: HeartbeatTask.Limit,
 
         const Self = @This();
 
-        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet, heartbeat_limit: HeartbeatTask.Limit) !Self {
+        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet) !Self {
             return .{
                 .guests = guests,
                 .left_guests = try guests.cloneWithAllocator(allocator),
-                .limit = heartbeat_limit,
             };
         }
 
@@ -46,14 +44,13 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
                         break :dump_setting;
                     }
 
-                    const interval = HostRunner.nextInterval(0);
-                    try stage.sendProbe(.probe_launching, 1, self.limit, interval);
+                    try stage.sendProbeHeartbeat(.probe, .launching, 1);
                 },
                 .failed_launching => {
                     if (self.guests.contains(entry.from_stage)) {
                         try stage.log(.warn, "Launching failed/guest: {s}", .{entry.from_stage});
                         try stage.log(.warn, "Stopping launch process", .{});
-                        try stage.transitPhase(.terminating);
+                        try stage.transitPhase(.terminating, .pending);
                     }
                 },
                 .launched => {
@@ -69,20 +66,17 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
 
                     if (self.left_guests.count() == 0) {
                         try stage.log(.info, "All guests launched", .{});
-                        try stage.transitPhase(.request);
+                        try stage.transitPhase(.request, .pending);
                     }
                 },
                 .heartbeat => |payload| {
                     if (self.left_guests.count() > 0) {
-                        switch (payload.event_type) {
-                            .probe_launching => {
-                                const interval = HostRunner.nextInterval(payload.count);
-                                try stage.sendProbe(.probe_launching, payload.count, self.limit, interval);
+                        stage.sendProbeHeartbeat(payload.event_type, .launching, payload.count) catch |err| switch (err) {
+                            error.DiscardProbe => {
+                                dirty.* = .unhandled;
                             },
-                            else => {
-                                try stage.defaultHandler(entry, dirty);
-                            }
-                        }
+                            else => return err,
+                        };
                     }
                 },
                 else => {
@@ -116,7 +110,7 @@ pub const tests = struct {
         fn onDispatch(dispatcher: *EventDispatcher.Sized(test_support.POLLER_SIZE), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
             const stage: *TestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
             const self: *PhaseTestHarness = @alignCast(@fieldParentPtr("stage", stage));
-            try self.state.handle(stage, &stage.setting, entry, dirty);
+            try self.state.handle(stage, entry, dirty);
         }
     };
 
@@ -129,19 +123,21 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const guest_names = &.{ "guest-a", "guest-b" };
-        var connection = try Connection.create(io, allocator , guest_names.len, ep);
+        const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
+        var guests = std.BufSet.init(allocator);
+        defer guests.deinit();
+        for (guest_names) |name| { try guests.insert(name); }
+
+        var connection = try Connection.create(io, allocator , guests.count(), ep);
         defer connection.deinit();
         try connection.bind();
 
         var runner: PhaseTestHarness = .{
             .stage = try TestStage.init(&connection, ep, .unlimited),
-            .state = try BootPhaseState(TestStage).create(allocator, guest_names, .unlimited),
+            .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();
         defer runner.state.deinit();
-
-        runner.stage.dispatcher.phase = .booting;
 
         var client1 = try Client("guest-a").create(io, allocator , ep);
         defer client1.deinit();
@@ -158,7 +154,7 @@ pub const tests = struct {
         try tasks.await(io);
 
         try std.testing.expectEqual(null, runner.stage.err);
-        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase);
+        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase.kind);
         try std.testing.expectEqual(0, runner.state.left_guests.count());
     }
 
@@ -171,26 +167,28 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const guest_names = &.{ "guest-a", "guest-b" };
-        var connection = try Connection.create(io, allocator , guest_names.len, ep);
+        const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
+        var guests = std.BufSet.init(allocator);
+        defer guests.deinit();
+        for (guest_names) |name| { try guests.insert(name); }
+
+        var connection = try Connection.create(io, allocator , guests.count(), ep);
         defer connection.deinit();
         try connection.bind();
 
         var runner: PhaseTestHarness = .{
             .stage = try TestStage.init(&connection, ep, .{ .count = 1 }),
-            .state = try BootPhaseState(TestStage).create(allocator, guest_names, .{ .count = 1 }),
+            .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();
         defer runner.state.deinit();
-
-        runner.stage.dispatcher.phase = .booting;
 
         var tasks: std.Io.Group = .init;
         try tasks.concurrent(io, PhaseTestHarness.run, .{ &runner });
         try tasks.await(io);
 
         try std.testing.expectEqual(error.Timeout, runner.stage.err.?);
-        try std.testing.expectEqual(.booting, runner.stage.dispatcher.phase);
+        try std.testing.expectEqual(.launching, runner.stage.dispatcher.phase.kind);
         try std.testing.expectEqual(2, runner.state.left_guests.count());
     }
 
@@ -203,8 +201,12 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const guest_names = &.{ "guest-a", "guest-b" };
-        var connection = try Connection.create(io, allocator , guest_names.len, ep);
+        const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
+        var guests = std.BufSet.init(allocator);
+        defer guests.deinit();
+        for (guest_names) |name| { try guests.insert(name); }
+
+        var connection = try Connection.create(io, allocator , guests.count(), ep);
         defer connection.deinit();
         try connection.bind();
 
@@ -214,12 +216,10 @@ pub const tests = struct {
 
         var runner: PhaseTestHarness = .{
             .stage = try TestStage.init(&connection, ep, .{ .count = 1 }),
-            .state = try BootPhaseState(TestStage).create(allocator, guest_names, .{ .count = 1 }),
+            .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();
         defer runner.state.deinit();
-
-        runner.stage.dispatcher.phase = .booting;
 
         var tasks: std.Io.Group = .init;
         try tasks.concurrent(io, test_support.sendMessage, .{ try client1.requestChannel(), .failed_launching });
@@ -227,7 +227,7 @@ pub const tests = struct {
         try tasks.await(io);
 
         try std.testing.expectEqual(null, runner.stage.err);
-        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase);
+        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase.kind);
         try std.testing.expectEqual(2, runner.state.left_guests.count());
     }
 };

@@ -12,15 +12,13 @@ pub fn TerminatePhaseState(comptime HostRunner: type) type {
     return struct {
         guests: *const std.BufSet,
         left_guests: std.BufSet,
-        limit: HeartbeatTask.Limit,
 
         const Self = @This();
 
-        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet, heartbeat_limit: HeartbeatTask.Limit) !Self {
+        pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet) !Self {
             return .{
                 .guests = guests,
                 .left_guests = try guests.cloneWithAllocator(allocator),
-                .limit = heartbeat_limit,
             };
         }
 
@@ -43,20 +41,17 @@ pub fn TerminatePhaseState(comptime HostRunner: type) type {
 
                     if (self.left_guests.count() == 0) {
                         try stage.log(.info, "All guests Exited", .{});
-                        try stage.transitPhase(.quitting);
+                        try stage.transitPhase(.quitting, .confirmed);
                     }
                 },
                 .heartbeat => |payload| {
                     if (self.left_guests.count() > 0) {
-                        switch (payload.event_type) {
-                            .quit_all => {
-                                const interval = HostRunner.nextInterval(payload.count);
-                                try stage.sendProbe(.quit_all, payload.count, self.limit, interval);
+                        stage.sendProbeHeartbeat(payload.event_type, .terminating, payload.count) catch |err| switch (err) {
+                            error.DiscardProbe => {
+                                dirty.* = .unhandled;
                             },
-                            else => {
-                                try stage.defaultHandler(entry, dirty);
-                            }
-                        }
+                            else => return err,
+                        };
                     }
                 },
                 else => {
@@ -94,9 +89,8 @@ pub const tests = struct {
         }
 
         fn doDefault(stage: *TestStage, entry: ReceiveEntry) !void {
-            const self: *PhaseTestHarness = @alignCast(@fieldParentPtr("stage", stage));
             if (entry.event == .launching) {
-                try stage.sendProbe(.quit_all, 1, self.state.limit);
+                try stage.sendProbeHeartbeat(.probe, .terminating, 1);
             }
         }
     };
@@ -110,14 +104,18 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const guest_names = &.{ "guest-a", "guest-b" };
-        var connection = try Connection.create(io, allocator , guest_names.len, ep);
+        const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
+        var guests = std.BufSet.init(allocator);
+        defer guests.deinit();
+        for (guest_names) |name| { try guests.insert(name); }
+
+        var connection = try Connection.create(io, allocator , guests.count(), ep);
         defer connection.deinit();
         try connection.bind();
 
         var runner: PhaseTestHarness = .{
             .stage = try TestStage.init(&connection, ep, .unlimited),
-            .state = try TerminatePhaseState(TestStage).create(allocator, guest_names, .unlimited),
+            .state = try TerminatePhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.state.deinit();
         defer runner.stage.deinit();
@@ -138,7 +136,7 @@ pub const tests = struct {
         try tasks.await(io);
 
         try std.testing.expectEqual(null, runner.stage.err);
-        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase);
+        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase.kind);
         try std.testing.expectEqual(0, runner.state.left_guests.count());
     }
 };

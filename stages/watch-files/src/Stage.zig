@@ -7,6 +7,7 @@ const events = core.events;
 const EventDispatcher = core.sockets.EventDispatcher;
 const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
+const EventPhase = core.events.EventPhase;
 
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
 const ReadyWatchFileState = @import("./phases/ready_phase.zig").ReadyWatchFileState(GuestStage);
@@ -29,12 +30,9 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     errdefer connection.deinit();
 
     try connection.subscribe(&.{
-        .probe_launching,
-        .probe_request,
-        .probe_ready,
+        .probe,
 
         .request_watch_path,
-        .quit_all,
     });
     try connection.connect();
 
@@ -49,7 +47,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        .state = .{ .booting = BootPhaseState.init },
+        .state = .{ .launching = BootPhaseState.init },
     };
 }
 
@@ -71,26 +69,51 @@ pub fn log(self: *GuestStage, comptime level: events.LogLevel, comptime fmt: []c
     try self.dispatcher.log(level, app_context, fmt, args);
 }
 
-pub fn transitPhase(self: *GuestStage, phase: EventDispatcher.Phase) !void {
-    if (self.dispatcher.phase == phase) return;
-    switch (phase) {
-        .request => try self.doRequestPhase(),
-        .ready => try self.doReadyPhase(),
-        .quitting => {},
-        else => unreachable,
+pub fn transitPhase(self: *GuestStage, phase_kind: EventPhase.Kind, phase_agree: EventPhase.Agreement) !void {
+    const phase: EventPhase = .{ .kind = phase_kind, .agreement = phase_agree};
+    if (std.meta.eql(self.dispatcher.phase, phase)) return;
+
+    if (phase_agree == .pending) {
+        switch (phase_kind) {
+            .request => try self.doRequestPhase(),
+            .ready => try self.doReadyPhase(),
+            .quitting => {},
+            else => unreachable,
+        }
     }
+    self.dispatcher.phase = phase;
 }
 
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
-        .probe_request => {
-            var channel = try self.connection.dataChannel();
-            try channel.encode(.finish_topic);
-            try self.dispatcher.queue.post(channel);
-            try self.transitPhase(.ready);
-        },
-        .quit_all => {
-            self.dispatcher.phase = .quitting;
+        .probe => |phase| {
+            // TODO: stum impl
+            if ((phase == .terminating)) {
+                try self.transitPhase(.quitting, .confirmed);
+                return;
+            }
+
+            if (self.dispatcher.phase.kind != phase) {
+                try self.log(.debug, "Phase unmatched/phase: {s}, current-phase: {s}, ack: {s}", .{@tagName(phase), @tagName(self.dispatcher.phase.kind), @tagName(self.dispatcher.phase.agreement)});
+                return;
+            }
+            if (self.dispatcher.phase.agreement == .confirmed) {
+                try self.log(.debug, "Discard probe/phase: {s}", .{@tagName(phase)});
+                return;
+            }
+            switch (phase) {
+                .request => {
+                    try self.dispatcher.queue.post(.finish_topic, try self.connection.dataChannel());
+                    try self.transitPhase(.ready, .pending);
+                },
+                .terminating => {
+                    // TODO: pending -> confirmed
+                    try self.transitPhase(.quitting, .confirmed);
+                },
+                else => {
+                    dirty.* = .unhandled;
+                }
+            }
         },
         else => {
             dirty.* = .unhandled;
@@ -100,20 +123,18 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
 
 fn doRequestPhase(self: *GuestStage) !void {
     self.state.deinit();
-    self.dispatcher.phase = .request;    
 }
 
 fn doReadyPhase(self: *GuestStage) !void {
     self.state.deinit();
     self.state = .{ .ready = ReadyWatchFileState.create };
-    self.dispatcher.phase = .ready;    
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
-        .booting => |state| {
+        .launching => |state| {
             try state.handle(self, entry, dirty);
         },
         .ready => |*state| {
@@ -125,8 +146,8 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     }
 }
 
-const State = union(EventDispatcher.Phase) {
-    booting: BootPhaseState,
+const State = union(EventPhase.Kind) {
+    launching: BootPhaseState,
     request: void,
     ready: ReadyWatchFileState,
     terminating: void,
@@ -137,7 +158,7 @@ const State = union(EventDispatcher.Phase) {
 
 fn deinitState(self: *State) void {
     switch (self.*) {
-        .booting => |*state| state.deinit(),
+        .launching => |*state| state.deinit(),
         .ready => |*state| state.deinit(),
         else => unreachable,
     }

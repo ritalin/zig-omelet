@@ -39,7 +39,7 @@ reapers: *TaskReaper,
 // const CommandPallet = @import("./CommandPallet.zig");
 // const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
 pub const Connection = core.sockets.Connection.Server(app_context);
-pub const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(100);
+pub const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(200);
 
 pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRunner {
     try connection.bind();
@@ -73,9 +73,6 @@ pub fn deinit(self: *HostRunner) void {
 }
 
 pub fn run(self: *HostRunner) !void {
-    // TODO:
-    // var left_topic_stage = stage_count.stage_extract;
-
     self.dispatcher.run(app_context, HostRunner.onDispatch) catch |err| {
         // TODO: fatal error log
         return err;
@@ -226,19 +223,16 @@ pub fn log(self: *HostRunner, comptime level: events.LogLevel, comptime fmt: []c
     try self.dispatcher.log(level, app_context, fmt, args);
 }
 
-pub fn nextInterval(order: u64) std.Io.Duration {
-    return std.Io.Duration.fromNanoseconds(TIMER_INTERVAL.nanoseconds <<| order);
-}
-
 pub fn isHost(stag_name: types.StageName) bool {
     return std.mem.eql(u8, stag_name, app_context);
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *HostRunner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
+    try self.reapers.tick();
 
     switch (self.state) {
-        .booting => |*state| {
+        .launching => |*state| {
             try state.handle(self, entry, dirty);
         },
         .request => |*state| {
@@ -260,12 +254,12 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEnt
 
 pub fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {    
     switch (entry.event) {
-        .log => {
-            unreachable;
+        .log => |payload| {
+            try self.dispatcher.log_router.handleLogEvent(entry.from_stage, payload);
         },
         .heartbeat => |payload| {
             // discard
-            try self.log(.debug, "Discard/event:heartbeat.{s}, phase: {s}", .{@tagName(payload.event_type), @tagName(self.dispatcher.phase)});
+            try self.log(.debug, "Discard/event:heartbeat.{s}, phase: {s}", .{@tagName(payload.event_type), @tagName(self.dispatcher.phase.kind)});
         },
         else => {
             dirty.* = .unhandled;
@@ -273,40 +267,45 @@ pub fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispa
     }
 }
 
-pub fn transitPhase(self: *HostRunner, phase: EventDispatcher.Phase) !void {
-    switch (phase) {
-        .booting => try self.doBootingPhase(),
-        .request => try self.doRequestPhase(),
-        .ready => try self.doReadyPhase(),
-        .terminating => try self.doTerminatePhase(),
-        .quitting => {
-            self.dispatcher.phase = .quitting;
-        },
+pub fn transitPhase(self: *HostRunner, phase_kind: events.EventPhase.Kind, phase_agree: events.EventPhase.Agreement) !void {
+    const phase: events.EventPhase = .{ .kind = phase_kind, .agreement = phase_agree};
+
+    if (phase_agree == .pending) {
+        switch (phase_kind) {
+            .launching => try self.doBootingPhase(),
+            .request => try self.doRequestPhase(),
+            .ready => try self.doReadyPhase(),
+            .terminating => try self.doTerminatePhase(),
+            .quitting => {},
+        }
     }
+    else {
+        // TODO: move to on_quit callback
+        if (phase_kind == .quitting) {
+            self.reapers.cancel(self.io);
+        }
+    }
+    self.dispatcher.phase = phase;
 }
 
 fn doBootingPhase(self: *HostRunner) !void {
     const next_state = try BootPhaseState.create(
         self.allocator, 
-        &self.guest_names, 
-        self.setting.general.heartbeat_limit
+        &self.guest_names
     ); 
-    self.state = .{ .booting = next_state };
-    self.dispatcher.phase = .booting;
+    self.state = .{ .launching = next_state };
 }
 
 fn doRequestPhase(self: *HostRunner) !void {
     const next_state = try RequestPhaseState.create(
         self.allocator, 
-        &self.guest_names, 
-        self.setting.general.heartbeat_limit
+        &self.guest_names
     );
 
     self.state.deinit();
     self.state = .{ .request = next_state };
-    self.dispatcher.phase = .request;
 
-    try self.sendProbe(.probe_request, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe =.request}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
 
 }
 
@@ -314,22 +313,19 @@ fn doReadyPhase(self: *HostRunner) !void {
     const next_state = try ReadyPhaseState.create(
         self.allocator,
         &self.guest_names,
-        try self.state.request.drainTopics(self.allocator),
-        self.setting.general.heartbeat_limit
+        try self.state.request.drainTopics(self.allocator)
     );
     self.state.deinit();
     self.state = .{ .ready = next_state };
-    self.dispatcher.phase = .ready;
 
-    try self.sendProbe(.probe_ready, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe = .ready}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
 }
 
 fn doTerminatePhase(self: *HostRunner) !void {
     self.state.deinit();
-    self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, &self.guest_names, .unlimited) };
-    self.dispatcher.phase = .terminating;
+    self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, &self.guest_names) };
 
-    try self.sendProbe(.quit_all, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe = .terminating}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
     try self.log(.debug, "Start quitting...", .{});
 }
 
@@ -340,6 +336,16 @@ pub fn sendProbe(self: *HostRunner, event: events.Event, count: usize, limit: He
         poller_size, &self.dispatcher, 
         event, count, limit, interval
     );
+}
+
+pub fn sendProbeHeartbeat(self: *HostRunner, event_type: events.EventType, phase: events.EventPhase.Kind, count: u64) !void {
+    if ((event_type == .probe) and (std.meta.eql(self.dispatcher.phase, .{.kind = phase, .agreement = .pending}))) {
+        const interval = TIMER_INTERVAL;
+        try self.sendProbe(.{.probe = phase}, count, self.setting.general.heartbeat_limit, interval);
+    }
+    else {
+        return error.DiscardProbe;
+    }
 }
 
 // TODO:
@@ -413,8 +419,8 @@ fn handleSkipTopicBody(self: *const HostRunner, topic_body: core.Event.Payload.S
 //     }
 // }
 
-const State = union(EventDispatcher.Phase) {
-    booting: BootPhaseState,
+const State = union(events.EventPhase.Kind) {
+    launching: BootPhaseState,
     request: RequestPhaseState,
     ready: ReadyPhaseState,
     terminating: TerminatePhaseState,
@@ -425,7 +431,7 @@ const State = union(EventDispatcher.Phase) {
 
 fn deinitState(self: *State) void {
     switch (self.*) {
-        .booting => |*state| state.deinit(),
+        .launching => |*state| state.deinit(),
         .request => |*state| state.deinit(),
         .ready => |*state| state.deinit(),
         .terminating => |*state| state.deinit(),

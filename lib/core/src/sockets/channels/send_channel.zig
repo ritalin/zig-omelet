@@ -23,6 +23,16 @@ pub const SendChannel = struct {
         };
     }
 
+    pub fn fromMessage(allocator: std.mem.Allocator, pipe_id: u64, stage_name: types.StageName, sender: nnng.PipeSender, msg: nnng.Message) SendChannel {
+        return .{
+            .pipe_id = pipe_id,
+            .buffer = std.Io.Writer.Allocating.init(allocator),
+            .msg = msg,
+            .sender = sender,
+            .stage = stage_name,
+        };
+    }
+
     pub fn deinit(self: *SendChannel) void {
         self.buffer.deinit();
     }
@@ -37,6 +47,6 @@ pub const SendChannel = struct {
 
     pub fn submit(self: *const SendChannel, options: nnng.PipeSender.Options) nnng.SendError!void {
         var sender = self.sender;
-        return sender.submit(self.msg, options);
+        return sender.withOpt(options).submit(self.msg);
     }
 };

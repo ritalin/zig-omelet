@@ -15,8 +15,6 @@ const Logger = root.Logger;
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
-const INPROC_URL = "inproc://sync-thread";
-
 pub fn Server(comptime stage_name: types.StageName) type {
 // TODO:
 // pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
@@ -39,7 +37,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             };
             errdefer pull_socket.close();
 
-            try pull_socket.transport.addChannel(INPROC_URL);
+            try pull_socket.transport.addChannel(types.WORKER_ENDPOINT);
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
@@ -55,7 +53,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
             var inproc_socket = socket: {
                 const b = try nnng.Push.open(context);
-                break:socket try b.as_dialer(INPROC_URL);
+                break:socket try b.as_dialer(types.WORKER_ENDPOINT);
             };
             errdefer inproc_socket.close();
 
@@ -98,8 +96,8 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
         pub fn configureDispatcher(self: *Self, comptime poller_size: comptime_int, options: EventDispatcher.Options) !EventDispatcher.Sized(poller_size) {
             var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.PollHandler(poller_size).onPoll, options);
-            try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe);
-            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe);
+            try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe, .{});
+            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe, .{});
 
             const bootEntry = try ReceiveEntry.booting(stage_name);
             try dispatcher.queue.pushReceiveQueue(bootEntry);
@@ -135,14 +133,14 @@ pub fn Server(comptime stage_name: types.StageName) type {
                             },
                             .ready => |channel| {
                                 const receiver = channel.receiver();
-                                while (try receiver.tryDrain(.{})) |msg| {
+                                while (try receiver.tryDrain()) |msg| {
                                     if (ReceiveEntry.create(dispatcher.queue.allocator, channel.id, msg, channel.features)) |entry| {
                                         try dispatcher.queue.pushReceiveQueue(entry);
 
                                         if (channel.features.replyable) {
                                             var msg_mut = msg;
                                             try writeResponse(&msg_mut, .ack);
-                                            try channel.sender().submit(msg_mut, .{});
+                                            try channel.sender().submit(msg_mut);
                                         }
                                     }
                                     else |err| {
@@ -151,7 +149,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
                                         if (channel.features.replyable) {
                                             var msg_mut = msg;
                                             try writeResponse(&msg_mut, .nack);
-                                            try channel.sender().submit(msg_mut, .{});
+                                            try channel.sender().submit(msg_mut);
                                         }
                                     }
                                 }

@@ -10,6 +10,7 @@ pub const CHANNEL_ROOT = "/tmp/omelet";
 pub const REQ_PORT = "req_c2s";
 pub const PUBSUB_PORT = "cmd_s2c";
 pub const PUSHPULL_PORT = "push_c2s";
+pub const WORKER_ENDPOINT = "inproc://sync-thread";
 
 pub const Endpoints = struct {
     req_rep: Symbol,

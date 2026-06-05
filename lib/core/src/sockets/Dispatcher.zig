@@ -134,11 +134,16 @@ pub fn Sized(comptime poller_size: comptime_int) type {
 
         pub const VTable = struct {
             on_poll: PollFn,
+            on_post: ?RawMessageForwarder = null,
             on_log: ?LogForwarder = null,
             on_quit: ?QuitHandler = null,
 
             pub const DispatchFn = *const fn (dispatcher: *Dispatcher, channel: sockets.ReceiveEntry, dirty: *DirtyState) anyerror!void;
             pub const PollFn = *const fn (dispatcher: *Dispatcher, results: []const nnng.PollEvent) anyerror!void;
+            pub const RawMessageForwarder = struct {
+                ptr: *anyopaque,
+                handler: *const fn (ptr: *anyopaque, dispatcher: *Dispatcher, msg: nnng.Message) anyerror!void,
+            };
             pub const QuitHandler = struct {
                 ptr: *anyopaque,
                 handler: *const fn (ptr: *anyopaque) anyerror!void,
@@ -258,6 +263,14 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                 try self.receive_queue.pushBackSlice(self.allocator, entries);
             }
         };
+
+        pub const RawMessageForwarding = struct {
+            pub fn post(dispatcher: *Dispatcher, msg: nnng.Message) !void {
+                if (dispatcher.vtable.on_post) |on_post| {
+                    try (on_post.handler)(on_post.ptr, dispatcher, msg);
+                }
+            }
+        };
     };
 }
 
@@ -358,7 +371,7 @@ pub const tests = struct {
         send_event: {
             var msg = try nnng.Message.create();
             try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
-            try pipe.sender().submit(msg, .{});
+            try pipe.sender().submit(msg);
             break:send_event;
         }
 
@@ -367,6 +380,52 @@ pub const tests = struct {
         try dispatcher.run("runner", serverHandler);
 
         try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
+    }
+
+    test "pull event by client worker PULL" {
+        var tmp_dir = try supports.createTmpDir();
+        defer tmp_dir.cleanup();
+
+        const ep = try supports.createEndpoint(tmp_dir.dir);
+        defer supports.releaseEndpoint(ep);
+
+        var conn = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
+        defer conn.deinit();
+        try conn.connect();
+
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
+        defer dispatcher.deinit();
+
+        var worker_push_socket = socket: {
+            const b = try nnng.Push.open(conn.context);
+            break:socket try b.as_dialer(types.WORKER_ENDPOINT);
+        };
+        try worker_push_socket.transport.start(.{ .nonblocking = true });
+        defer worker_push_socket.close();
+
+        const worker_pipe = worker_push_socket.pipe.item;
+
+        send_event: {
+            var msg = try nnng.Message.create();
+            try encodeToCbor(&msg.writer, .{ .header = .finish_generate, .stage_name = "test-stage", .event = .finish_generate });
+            try worker_pipe.sender().submit(msg);
+            break:send_event;
+        }
+
+        try std.testing.expectEqual(0, dispatcher.queue.send_queue.len);
+
+        _ = try dispatcher.poller.poll(Dispatcher.doPoll);
+
+        try std.testing.expectEqual(1, dispatcher.queue.send_queue.len);
+
+        var channel: ?sockets.SendChannel = dispatcher.queue.send_queue.popFront();
+        defer if (channel) |*c| c.deinit();
+
+        try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+
+        const decodeFromCbor = @import("../events/decoder.zig").decodeFromCbor;
+        const packet = try decodeFromCbor(std.testing.allocator, channel.?.msg.bytes());
+        try std.testing.expectEqual(.finish_generate, packet.event);
     }
 
     test "receive event by REP" {
@@ -383,18 +442,18 @@ pub const tests = struct {
         var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
-        var push_socket = socket: {
+        var worker_push_socket = socket: {
             const b = try nnng.Req.open(conn.context);
             break:socket try b.as_dialer(ep.req_rep);
         };
-        try push_socket.transport.start(.{ .nonblocking = true });
-        defer push_socket.close();
+        try worker_push_socket.transport.start(.{ .nonblocking = true });
+        defer worker_push_socket.close();
 
-        const pipe = push_socket.pipe.item;
+        const pipe = worker_push_socket.pipe.item;
         send_event: {
             var msg = try nnng.Message.create();
             try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
-            try pipe.sender().submit(msg, .{});
+            try pipe.sender().submit(msg);
             break:send_event;
         }
 
@@ -435,7 +494,7 @@ pub const tests = struct {
         var msg = try nnng.Message.create();
         send_event: {
             try encodeToCbor(&msg.writer, .{ .header = .probe, .stage_name = "test-stage", .event = .{.probe = .terminating} });
-            try host.cmd_socket.pipe.item.sender().submit(msg, .{});
+            try host.cmd_socket.pipe.item.sender().submit(msg);
             break:send_event;
         }
 

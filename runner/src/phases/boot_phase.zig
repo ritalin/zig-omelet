@@ -129,6 +129,7 @@ pub const tests = struct {
             .worker = "inproc://guest-worker2"
         };
         defer test_support.releaseEndpoint(guest_ep2);
+        
         defer test_support.cleanup();
 
         const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };

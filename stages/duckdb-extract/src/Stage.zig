@@ -38,6 +38,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
 
     try connection.subscribe(&.{
         .probe,
+        .ready_progress,
 
         .source_path,
         .finish_source_path,
@@ -124,6 +125,10 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     dirty.* = .unhandled;
                 }
             }
+        },
+        .ready_progress => {
+            // discard
+            try self.log(.trace, "Discard ready progress", .{});
         },
         else => {
             dirty.* = .unhandled;

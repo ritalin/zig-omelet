@@ -32,8 +32,8 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
 
     try connection.subscribe(&.{
         .probe,
-
-        .request_watch_path,
+        .ready_source_path,
+        .ready_progress,
     });
     try connection.connect();
 
@@ -116,6 +116,10 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     dirty.* = .unhandled;
                 }
             }
+        },
+        .ready_progress => {
+            // discard
+            try self.log(.trace, "Discard ready progress", .{});
         },
         else => {
             dirty.* = .unhandled;

@@ -51,13 +51,13 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
             var pull_worker_socket = socket: {
                 const b = try nnng.Pull.open(context);
-                break:socket try b.as_listener(types.WORKER_ENDPOINT);
+                break:socket try b.as_listener(endpoints.worker orelse types.WORKER_ENDPOINT);
             };
             errdefer pull_worker_socket.close();
 
             var push_worker_socket = socket: {
                 const b = try nnng.Push.open(context);
-                break:socket try b.as_dialer(types.WORKER_ENDPOINT);
+                break:socket try b.as_dialer(endpoints.worker orelse types.WORKER_ENDPOINT);
             };
             errdefer push_worker_socket.close();
 

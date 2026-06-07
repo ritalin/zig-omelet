@@ -47,7 +47,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .launching => return .launching,
         .launched => return .launched,
         .failed_launching => return .failed_launching,
-        // Request phase event
+        // Topic request phase event
         .topic => {
             const view = try reader.readTupleWithAllocator(allocator, StructView(Event.Payload.Topic));
 
@@ -58,8 +58,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .finish_topic => return .finish_topic,
         // Ready phase event
         .ready => return .ready,
-        // Watch event
-        .request_watch_path => return .request_watch_path,
+        .ready_progress => return .ready_progress,
         // .finish_watch_path => return .finish_watch_path, // TODO:deprecated
 
         // Source path event
@@ -181,11 +180,7 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.topic), .stage_name = test_context, .event = .{.topic = topic} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_topic), .stage_name = test_context, .event = .finish_topic });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready), .stage_name = test_context, .event = .ready });
-
-        // TODO:
-        // try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_watch_path), .stage_name = test_context, .event = .ready_watch_path });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.request_watch_path), .stage_name = test_context, .event = .request_watch_path });
-
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_progress), .stage_name = test_context, .event = .ready_progress });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_source_path), .stage_name = test_context, .event = .ready_source_path });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.source_path), .stage_name = test_context, .event = .{.source_path = source_path} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_source_path), .stage_name = test_context, .event = .finish_source_path });
@@ -293,24 +288,14 @@ pub const tests = struct {
             try std.testing.expectEqualDeep({}, packet.event.ready);
             break:ready;
         }
-        // TODO:
-        // ready_watch_path: {
-        //     const packet = try decodeFromCborInternal(allocator, &reader);
-        //     defer packet.event.deinit(allocator);
-        //     try std.testing.expectEqual(.ready_watch_path, std.meta.activeTag(packet.header));
-        //     try std.testing.expectEqual({}, packet.header.ready_watch_path);
-        //     try std.testing.expectEqualStrings(test_context, packet.stage_name);
-        //     try std.testing.expectEqualDeep({}, packet.event.ready_watch_path);
-        //     break:ready_watch_path;
-        // }
-        request_watch_path: {
+        ready_progress: {
             const packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.request_watch_path, std.meta.activeTag(packet.header));
-            try std.testing.expectEqual({}, packet.header.request_watch_path);
+            try std.testing.expectEqual(.ready_progress, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.ready_progress);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.request_watch_path);
-            break:request_watch_path;
+            try std.testing.expectEqualDeep({}, packet.event.ready_progress);
+            break:ready_progress;
         }
         ready_source_path: {
             const packet = try decodeFromCborInternal(allocator, &reader);

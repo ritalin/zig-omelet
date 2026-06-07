@@ -37,7 +37,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             };
             errdefer pull_socket.close();
 
-            try pull_socket.transport.addChannel(types.WORKER_ENDPOINT);
+            try pull_socket.transport.addChannel(endpoints.worker orelse types.WORKER_ENDPOINT);
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
@@ -53,7 +53,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
             var inproc_socket = socket: {
                 const b = try nnng.Push.open(context);
-                break:socket try b.as_dialer(types.WORKER_ENDPOINT);
+                break:socket try b.as_dialer(endpoints.worker orelse types.WORKER_ENDPOINT);
             };
             errdefer inproc_socket.close();
 

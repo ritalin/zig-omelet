@@ -16,6 +16,7 @@ pub const Endpoints = struct {
     req_rep: Symbol,
     pub_sub: Symbol,
     push_pull: Symbol,
+    worker: ?Symbol = null,
 };
 
 pub const FilePath = []const u8;

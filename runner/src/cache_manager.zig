@@ -2,244 +2,348 @@ const std = @import("std");
 
 const core = @import("core");
 
-const Symbol = core.types.Symbol;
+const types = core.types;
+const events = core.events;
+
+const Event = events.Event;
 
 pub const CacheManager = struct {
-    pub fn Payload(comptime app_context: Symbol) type {
-        _ = app_context;
+    entries: std.HashMapUnmanaged(Key, EntryGroup, CacheContext, std.hash_map.default_max_load_percentage),
 
-        return struct {
-            arena: *std.heap.ArenaAllocator,
-            cache: std.StringHashMap(*EntryGroup),
-            topics_map: TopicsMap,
-            ready_queue: core.Queue(core.Event.Payload.TopicBody),
+    pub const empty: CacheManager = .{
+        .entries = .empty,
+    };
 
-            const Self = @This();
+    pub fn deinit(self: *CacheManager, allocator: std.mem.Allocator) void {
+        // TODO:release entry
 
-            pub const CacheStatus = enum {
-                expired, missing, fulfil
+        deinit_cache: {
+            var iter = self.entries.iterator();
+            while (iter.next()) |e| {
+                removeCacheKey(allocator, e.key_ptr);
+                e.value_ptr.deinit(allocator);
+            }
+            self.entries.deinit(allocator);
+            break:deinit_cache;
+        }
+    }
+
+    pub fn fetch(self: *CacheManager, source: *const Event.Payload.SourcePath) CacheError!*EntryGroup {
+        if (self.entries.getPtr(.{.sub_path = source.name, .dialect = source.dialect})) |entry| {
+            if (! std.mem.eql(u8, entry.source.hash, source.hash)) {
+                return error.Expired;
+            }
+            return entry;
+        }
+
+        return error.NotFound;
+    }
+
+    pub fn register(self: *CacheManager, allocator: std.mem.Allocator, source: *const Event.Payload.SourcePath, topics: *const TopicsMap) !void {
+        const entry = try self.entries.getOrPut(allocator, .{.sub_path = source.name, .dialect = source.dialect});
+
+        if (!entry.found_existing) {
+            entry.key_ptr.* = Key{  
+                .sub_path = try allocator.dupe(u8, source.name),
+                .dialect = try allocator.dupe(u8, source.dialect),
             };
+        }
+        if (entry.found_existing) {
+            // rid of entry
+            entry.value_ptr.deinit(allocator);
+        }
 
-            pub fn init(allocator: std.mem.Allocator) !Self {
-                const arena = try allocator.create(std.heap.ArenaAllocator);
-                arena.* = std.heap.ArenaAllocator.init(allocator);
+        entry.value_ptr.* = try EntryGroup.create(allocator, source, topics);
+    }
 
-                const managed_allocator = arena.allocator();
-                return .{
-                    .arena = arena,
-                    .topics_map = TopicsMap.init(managed_allocator),
-                    .cache = std.StringHashMap(*EntryGroup).init(managed_allocator),
-                    .ready_queue = core.Queue(core.Event.Payload.TopicBody).init(managed_allocator),
-                };
-            }
+    fn removeCacheKey(allocator: std.mem.Allocator, key: *Key) void {
+        allocator.free(key.sub_path);
+        allocator.free(key.dialect);
+    }
+    
+    pub const CacheError = error {
+        NotFound,
+        Expired,
+    };
 
-            pub fn deinit(self: *Self) void {
-                const child = self.arena.child_allocator;
+    // TODO:
+    // pub fn Payload(comptime app_context: Symbol) type {
+    //     _ = app_context;
 
-                self.ready_queue.deinit();
-                self.topics_map.deinit();
-                self.cache.deinit();
-                self.arena.deinit();
+    //     return struct {
+    //         arena: *std.heap.ArenaAllocator,
+    //         cache: std.StringHashMap(*EntryGroup),
+    //         topics_map: TopicsMap,
+    //         ready_queue: core.Queue(core.Event.Payload.TopicBody),
+
+    //         const Self = @This();
+
+    //         pub const CacheStatus = enum {
+    //             expired, missing, fulfil
+    //         };
+
+    //         pub fn init(allocator: std.mem.Allocator) !Self {
+    //             const arena = try allocator.create(std.heap.ArenaAllocator);
+    //             arena.* = std.heap.ArenaAllocator.init(allocator);
+
+    //             const managed_allocator = arena.allocator();
+    //             return .{
+    //                 .arena = arena,
+    //                 .topics_map = TopicsMap.init(managed_allocator),
+    //                 .cache = std.StringHashMap(*EntryGroup).init(managed_allocator),
+    //                 .ready_queue = core.Queue(core.Event.Payload.TopicBody).init(managed_allocator),
+    //             };
+    //         }
+
+    //         pub fn deinit(self: *Self) void {
+    //             const child = self.arena.child_allocator;
+
+    //             self.ready_queue.deinit();
+    //             self.topics_map.deinit();
+    //             self.cache.deinit();
+    //             self.arena.deinit();
                 
-                child.destroy(self.arena);
-            }
+    //             child.destroy(self.arena);
+    //         }
 
-            pub fn addNewEntryGroup(self: *Self, source: core.Event.Payload.SourcePath) !bool {
-                const allocator = self.arena.allocator();
+    //         pub fn addNewEntryGroup(self: *Self, source: core.Event.Payload.SourcePath) !bool {
+    //             const allocator = self.arena.allocator();
 
-                const path = try allocator.dupe(u8, source.path);
-                defer allocator.free(path);
-                const entry = try self.cache.getOrPut(path);
+    //             const path = try allocator.dupe(u8, source.path);
+    //             defer allocator.free(path);
+    //             const entry = try self.cache.getOrPut(path);
 
-                if (entry.found_existing) {
-                    if (! entry.value_ptr.*.isExpired(source.hash)) return false;
-                    entry.value_ptr.*.deinit();
-                }
+    //             if (entry.found_existing) {
+    //                 if (! entry.value_ptr.*.isExpired(source.hash)) return false;
+    //                 entry.value_ptr.*.deinit();
+    //             }
                 
-                entry.value_ptr.* = try EntryGroup.init(allocator, source, self.topics_map.get(source.category));
-                entry.key_ptr.* = entry.value_ptr.*.source.path;
+    //             entry.value_ptr.* = try EntryGroup.init(allocator, source, self.topics_map.get(source.category));
+    //             entry.key_ptr.* = entry.value_ptr.*.source.path;
 
-                return true;
-            }
+    //             return true;
+    //         }
 
-            pub fn update(self: *Self, topic_body: core.Event.Payload.TopicBody) !CacheStatus {
-                if (self.cache.get(topic_body.header.path)) |group| {
-                    if (group.isExpired(topic_body.header.hash)) return .expired;
+    //         pub fn update(self: *Self, topic_body: core.Event.Payload.TopicBody) !CacheStatus {
+    //             if (self.cache.get(topic_body.header.path)) |group| {
+    //                 if (group.isExpired(topic_body.header.hash)) return .expired;
 
-                    const entry = try group.fetchEntry(topic_body.index, topic_body.header);
-                    return entry.update(topic_body.bodies);
-                }
+    //                 const entry = try group.fetchEntry(topic_body.index, topic_body.header);
+    //                 return entry.update(topic_body.bodies);
+    //             }
 
-                return .expired;
-            }
+    //             return .expired;
+    //         }
 
-            pub fn ready(self: *Self, path: core.Event.Payload.SourcePath, index: usize) !bool {
-                if (self.cache.get(path.path)) |group| {
-                    defer {
-                        if (group.left_offsets.count() == 0) {
-                            _ = self.cache.remove(path.path);
-                            group.deinit();
-                        }
-                    }
+    //         pub fn ready(self: *Self, path: core.Event.Payload.SourcePath, index: usize) !bool {
+    //             if (self.cache.get(path.path)) |group| {
+    //                 defer {
+    //                     if (group.left_offsets.count() == 0) {
+    //                         _ = self.cache.remove(path.path);
+    //                         group.deinit();
+    //                     }
+    //                 }
 
-                    if (group.popEntry(index)) |entry| {
-                        defer entry.deinit(group.allocator);
+    //                 if (group.popEntry(index)) |entry| {
+    //                     defer entry.deinit(group.allocator);
 
-                        const a = self.arena.allocator();
+    //                     const a = self.arena.allocator();
 
-                        const bodies = try a.alloc(core.StructView(core.Event.Payload.TopicBody.Item), entry.contents.count());
-                        defer a.free(bodies);
+    //                     const bodies = try a.alloc(core.StructView(core.Event.Payload.TopicBody.Item), entry.contents.count());
+    //                     defer a.free(bodies);
                         
-                        var it = entry.contents.iterator();
-                        var i: usize = 0;
+    //                     var it = entry.contents.iterator();
+    //                     var i: usize = 0;
 
-                        while (it.next()) |content| {
-                            bodies[i] = .{content.key_ptr.*, content.value_ptr.*};
-                            i += 1;
-                        }
+    //                     while (it.next()) |content| {
+    //                         bodies[i] = .{content.key_ptr.*, content.value_ptr.*};
+    //                         i += 1;
+    //                     }
 
-                        try self.ready_queue.enqueue(
-                            try core.Event.Payload.TopicBody.init(a, entry.header.values(), bodies)
-                        );
+    //                     try self.ready_queue.enqueue(
+    //                         try core.Event.Payload.TopicBody.init(a, entry.header.values(), bodies)
+    //                     );
 
-                        return true;
-                    }
-                }
+    //                     return true;
+    //                 }
+    //             }
 
-                return false;
-            }
+    //             return false;
+    //         }
 
-            pub fn dismiss(self: *Self, path: core.Event.Payload.SourcePath, index: usize) !void {
-                if (self.cache.get(path.path)) |group| {
-                    defer {
-                        if (group.left_offsets.count() == 0) {
-                            _ = self.cache.remove(path.path);
-                            group.deinit();
-                        }
-                    }
+    //         pub fn dismiss(self: *Self, path: core.Event.Payload.SourcePath, index: usize) !void {
+    //             if (self.cache.get(path.path)) |group| {
+    //                 defer {
+    //                     if (group.left_offsets.count() == 0) {
+    //                         _ = self.cache.remove(path.path);
+    //                         group.deinit();
+    //                     }
+    //                 }
 
-                    try group.ensureExpand(path.item_count);
+    //                 try group.ensureExpand(path.item_count);
 
-                    if (group.popEntry(index)) |entry| {
-                        entry.deinit(group.allocator);   
-                    }
-                }
-            }
+    //                 if (group.popEntry(index)) |entry| {
+    //                     entry.deinit(group.allocator);   
+    //                 }
+    //             }
+    //         }
 
-            pub fn isEmpty(self: Self) bool {
-                return (self.cache.count() == 0) and (self.ready_queue.count() == 0);
-            }
+    //         pub fn isEmpty(self: Self) bool {
+    //             return (self.cache.count() == 0) and (self.ready_queue.count() == 0);
+    //         }
 
             const EntryGroup = struct {
-                allocator: std.mem.Allocator, 
-                source: core.Event.Payload.SourcePath,
-                topics: std.BufSet,
-                entries: std.ArrayList(?*Entry),
-                left_offsets: std.AutoHashMap(usize, bool),
-
-                pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.SourcePath, topics: *std.BufSet) !*EntryGroup {
-                    const self = try allocator.create(EntryGroup);
-                    self.* =  .{
-                        .allocator = allocator,
-                        .source = try source.clone(allocator),
-                        .topics = try topics.cloneWithAllocator(allocator),
-                        .entries = std.ArrayList(?*Entry).init(allocator),
-                        .left_offsets = std.AutoHashMap(usize, bool).init(allocator),
-                    };
-
-                    return self;
-                }
-
-                pub fn deinit(self: *EntryGroup) void {
-                    for (self.entries.items) |entry| {
-                        if (entry) |x| {
-                            x.deinit(self.allocator);
-                        }
-                    }
-
-                    self.entries.deinit();
-                    self.left_offsets.deinit();
-                    self.topics.deinit();
-                    self.source.deinit();
-                    self.allocator.destroy(self);
-                }
-
-                pub fn ensureExpand(self: *EntryGroup, max_count: usize) !void {
-                    if (self.entries.items.len < max_count) {
-                        try self.entries.appendNTimes(null, max_count - self.entries.items.len);
-
-                        for (self.left_offsets.count()..max_count) |offset| {
-                            try self.left_offsets.put(offset, true);
-                        }
-                    }
-                }
-
-                pub fn fetchEntry(self: *EntryGroup, index: usize, source_path: core.Event.Payload.SourcePath) !*Entry {
-                    std.debug.assert(index < source_path.item_count);
-                    try self.ensureExpand(source_path.item_count);
-
-                    if (self.entries.items[index]) |entry| {
-                        return entry;
-                    }
-                    else {
-                        const entry = try Entry.init(self.allocator, source_path, &self.topics);
-                        self.entries.items[index] = entry;
-                        return entry;
-                    }
-                }
-
-                pub fn popEntry(self: *EntryGroup, index: usize) ?*Entry {
-                    defer _ = self.left_offsets.remove(index);
-
-                    if (index < self.entries.items.len) {       
-                        if (self.entries.items[index]) |entry| {
-                            defer self.entries.items[index] = null;
-                            return entry;
-                        }
-                    }
-
-                    return null;
-                }
-
-                pub fn isExpired(self: *EntryGroup, hash: Symbol) bool {
-                    return ! std.mem.eql(u8, self.source.hash, hash);
-                }
-            };
-
-            const Entry = struct {
-                header: core.Event.Payload.SourcePath,
+                source: Event.Payload.SourcePath,
                 left_topics: std.BufSet,
-                contents: std.BufMap,
+    //             entries: std.ArrayList(?*Entry),
+    //             left_offsets: std.AutoHashMap(usize, bool),
 
-                pub fn init(allocator: std.mem.Allocator, source_path: core.Event.Payload.SourcePath, topics: *std.BufSet) !*Entry {
-                    const self = try allocator.create(Entry);
-                    self.* =  .{
-                        .header = try source_path.clone(allocator),
-                        .left_topics = try topics.cloneWithAllocator(allocator),
-                        .contents = std.BufMap.init(allocator),
-                    };
-
-                    return self;
-                }
-
-                pub fn deinit(self: *Entry, allocator: std.mem.Allocator) void {
-                    self.contents.deinit();
-                    self.left_topics.deinit();
-                    self.header.deinit();
-                    allocator.destroy(self);
-                }
-
-                pub fn update(self: *Entry, bodies: []const core.Event.Payload.TopicBody.Item) !CacheStatus {
-                    for (bodies) |body| {
-                        try self.contents.put(body.topic, body.content);
-                        self.left_topics.remove(body.topic);
+                pub fn create(allocator: std.mem.Allocator, source: *const Event.Payload.SourcePath, topics_map: *const TopicsMap) !EntryGroup {
+    //                 const self = try allocator.create(EntryGroup);
+    //                 self.* =  .{
+    //                     .allocator = allocator,
+    //                     .entries = std.ArrayList(?*Entry).init(allocator),
+    //                     .left_offsets = std.AutoHashMap(usize, bool).init(allocator),
+    //                 };
+                    var left_topics = std.BufSet.init(allocator);
+                    var iter = topics_map.iterator();
+                    while (iter.next()) |e| {
+                        if (e.category == source.category) {
+                            try left_topics.insert(e.topic);
+                        }
                     }
 
-                    return if (self.left_topics.count() > 0) .missing else .fulfil;
+                    return .{
+                        .source = Event.Payload.SourcePath.init(.{
+                            source.category,
+                            try allocator.dupe(u8, source.name),
+                            try allocator.dupe(u8, source.path),
+                            try allocator.dupe(u8, source.dialect),
+                            try allocator.dupe(u8, source.hash),
+                            1,
+                        }),
+                        .left_topics = left_topics,
+                    };
                 }
+
+                pub fn deinit(self: *EntryGroup, allocator: std.mem.Allocator) void {
+    //                 for (self.entries.items) |entry| {
+    //                     if (entry) |x| {
+    //                         x.deinit(self.allocator);
+    //                     }
+    //                 }
+
+    //                 self.entries.deinit();
+    //                 self.left_offsets.deinit();
+    //                 self.topics.deinit();
+
+                    allocator.free(self.source.name);
+                    allocator.free(self.source.path);
+                    allocator.free(self.source.dialect);
+                    allocator.free(self.source.hash);
+                    
+                    self.left_topics.deinit();
+    //                 self.allocator.destroy(self);
+                }
+
+    //             pub fn ensureExpand(self: *EntryGroup, max_count: usize) !void {
+    //                 if (self.entries.items.len < max_count) {
+    //                     try self.entries.appendNTimes(null, max_count - self.entries.items.len);
+
+    //                     for (self.left_offsets.count()..max_count) |offset| {
+    //                         try self.left_offsets.put(offset, true);
+    //                     }
+    //                 }
+    //             }
+
+    //             pub fn fetchEntry(self: *EntryGroup, index: usize, source_path: core.Event.Payload.SourcePath) !*Entry {
+    //                 std.debug.assert(index < source_path.item_count);
+    //                 try self.ensureExpand(source_path.item_count);
+
+    //                 if (self.entries.items[index]) |entry| {
+    //                     return entry;
+    //                 }
+    //                 else {
+    //                     const entry = try Entry.init(self.allocator, source_path, &self.topics);
+    //                     self.entries.items[index] = entry;
+    //                     return entry;
+    //                 }
+    //             }
+
+    //             pub fn popEntry(self: *EntryGroup, index: usize) ?*Entry {
+    //                 defer _ = self.left_offsets.remove(index);
+
+    //                 if (index < self.entries.items.len) {       
+    //                     if (self.entries.items[index]) |entry| {
+    //                         defer self.entries.items[index] = null;
+    //                         return entry;
+    //                     }
+    //                 }
+
+    //                 return null;
+    //             }
+
+    //             pub fn isExpired(self: *EntryGroup, hash: Symbol) bool {
+    //                 return ! std.mem.eql(u8, self.source.hash, hash);
+    //             }
             };
-        };
-    }
+
+            const Key = struct {
+                sub_path: types.FilePath,
+                dialect: types.Symbol,
+            };
+
+            const CacheContext = struct {
+                pub fn hash(_: @This(), key: Key) u64 {
+                    var h = std.hash.Wyhash.init(0);
+                    h.update(key.sub_path);
+                    h.update(std.mem.asBytes(&key.dialect));
+                    return h.final();
+                }
+
+                pub fn eql(ctx: CacheContext, lhs: Key, rhs: Key) bool {
+                    _ = ctx;
+                    return
+                        std.mem.eql(u8, lhs.sub_path, rhs.sub_path) and
+                        std.mem.eql(u8, lhs.dialect, rhs.dialect)
+                    ;
+                }                
+            };
+
+    //         const Entry = struct {
+    //             header: core.Event.Payload.SourcePath,
+    //             left_topics: std.BufSet,
+    //             contents: std.BufMap,
+
+    //             pub fn init(allocator: std.mem.Allocator, source_path: core.Event.Payload.SourcePath, topics: *std.BufSet) !*Entry {
+    //                 const self = try allocator.create(Entry);
+    //                 self.* =  .{
+    //                     .header = try source_path.clone(allocator),
+    //                     .left_topics = try topics.cloneWithAllocator(allocator),
+    //                     .contents = std.BufMap.init(allocator),
+    //                 };
+
+    //                 return self;
+    //             }
+
+    //             pub fn deinit(self: *Entry, allocator: std.mem.Allocator) void {
+    //                 self.contents.deinit();
+    //                 self.left_topics.deinit();
+    //                 self.header.deinit();
+    //                 allocator.destroy(self);
+    //             }
+
+    //             pub fn update(self: *Entry, bodies: []const core.Event.Payload.TopicBody.Item) !CacheStatus {
+    //                 for (bodies) |body| {
+    //                     try self.contents.put(body.topic, body.content);
+    //                     self.left_topics.remove(body.topic);
+    //                 }
+
+    //                 return if (self.left_topics.count() > 0) .missing else .fulfil;
+    //             }
+    //         };
+    //     };
+    // }
 
     pub const TopicsMap = struct {
         allocator: std.mem.Allocator,
@@ -279,7 +383,7 @@ pub const CacheManager = struct {
             };
         }
 
-        // TODO:
+        // TODO:dialect management
         // fn makeIntern(self: *TopicsMap, dialect: Symbol) !u64 {
         //     const entry = try self.dialects.getOrPut(dialect);
         //     if (entry.found_existing) {
@@ -298,11 +402,11 @@ pub const CacheManager = struct {
 
         pub const Iterator = struct {
             categories: []const core.events.TopicCategory,
-            topics: []const Symbol,
+            topics: []const types.Symbol,
             index: usize = 0,
             size: usize,
 
-            pub fn next(self: *TopicsMap.Iterator) ?(struct { category: core.events.TopicCategory, topic: Symbol }) {
+            pub fn next(self: *TopicsMap.Iterator) ?(struct { category: core.events.TopicCategory, topic: types.Symbol }) {
                 defer self.index += 1;
                 if (self.index >= self.size) return null;
 
@@ -315,7 +419,7 @@ pub const CacheManager = struct {
 
         const Entry = struct {
             category: core.events.TopicCategory,
-            topic: Symbol,
+            topic: types.Symbol,
         };
     };
 };

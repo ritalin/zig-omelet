@@ -14,6 +14,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
         allocator: std.mem.Allocator,
         topics: CacheManager.TopicsMap,
         guest_statuses: std.StringHashMap(Status),
+        cache: CacheManager,
 
         const Self = @This();
 
@@ -28,6 +29,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                 .allocator = allocator,
                 .topics = topics,
                 .guest_statuses = guest_statuses,
+                .cache = .empty,
             };
         }
 
@@ -38,16 +40,12 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
             }
             self.guest_statuses.deinit();
             self.topics.deinit();
+            self.cache.deinit(self.allocator);
         }
 
         pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
             switch (entry.event) {
                 .ready => {
-                    if (! self.guest_statuses.contains(entry.from_stage)) {
-                        try stage.log(.debug, "External guest ready/name: {s}", .{entry.from_stage});
-                        return;
-                    }
-
                     if (self.guest_statuses.getPtr(entry.from_stage)) |status| {
                         try stage.log(.debug, "Guest ready/guest: {s}", .{entry.from_stage});
                         status.* = .ready;
@@ -56,20 +54,43 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                     if (self.checkStatus(.ready)) {
                         // All guests is ready
                         try stage.transitPhase(.ready, .confirmed);
+                        try stage.sendProgressHeartbeat();
 
-                        // TODO: stub impl
-                        try stage.transitPhase(.terminating, .pending);
+                        // TODO: interactive mode
+                        try stage.dispatcher.queue.post(.ready_source_path, try stage.connection.commandChannel());
                     }
                 },
                 .heartbeat => |payload| {
-                    if (!self.checkStatus(.ready)) {
-                        stage.sendProbeHeartbeat(payload.event_type, .ready, payload.count) catch |err| switch (err) {
-                            error.DiscardProbe => {
-                                dirty.* = .unhandled;
-                            },
-                            else => return err,
-                        };
+                    switch (payload.event_type) {
+                        .probe => {
+                            if (!self.checkStatus(.ready)) {
+                                stage.sendProbeHeartbeat(payload.event_type, .ready, payload.count) catch |err| switch (err) {
+                                    error.DiscardProbe => {
+                                        dirty.* = .unhandled;
+                                    },
+                                    else => return err,
+                                };
+                            }
+                        },
+                        .ready_progress => {
+                            try stage.dispatcher.queue.post(.ready_progress, try stage.connection.commandChannel());
+                            try stage.sendProgressHeartbeat();
+                        },
+                        else => {},
                     }
+                },
+                .source_path => |payload| {
+                    try self.cache.register(stage.allocator, &payload, &self.topics);
+                    try stage.dispatcher.queue.post(.{ .source_path = payload }, try stage.connection.commandChannel());
+                },
+                .finish_source_path => {
+                    if (self.guest_statuses.getPtr(entry.from_stage)) |status| {
+                        try stage.log(.debug, "Guest finish ready/guest: {s}", .{entry.from_stage});
+                        status.* = .finish;
+                    }
+
+                    // TODO: stub impl
+                    try stage.transitPhase(.terminating, .pending);
                 },
                 else => {
                     try stage.defaultHandler(entry, dirty);
@@ -91,5 +112,5 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
 const Status = enum {
     preparing,
     ready,
-    finished,
+    finish,
 };

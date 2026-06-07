@@ -12,14 +12,12 @@ const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 
 pub fn BootPhaseState(comptime HostRunner: type) type {
     return struct {
-        guests: *const std.BufSet,
         left_guests: std.BufSet,
 
         const Self = @This();
 
         pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet) !Self {
             return .{
-                .guests = guests,
                 .left_guests = try guests.cloneWithAllocator(allocator),
             };
         }
@@ -47,17 +45,11 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
                     try stage.sendProbeHeartbeat(.probe, .launching, 1);
                 },
                 .failed_launching => {
-                    if (self.guests.contains(entry.from_stage)) {
-                        try stage.log(.warn, "Launching failed/guest: {s}", .{entry.from_stage});
-                        try stage.log(.warn, "Stopping launch process", .{});
-                        try stage.transitPhase(.terminating, .pending);
-                    }
+                    try stage.log(.warn, "Launching failed/guest: {s}", .{entry.from_stage});
+                    try stage.log(.warn, "Stopping launch process", .{});
+                    try stage.transitPhase(.terminating, .pending);
                 },
                 .launched => {
-                    if (! self.guests.contains(entry.from_stage)) {
-                        try stage.log(.debug, "External guest accepted/name: {s}", .{entry.from_stage});
-                        return;
-                    }
                     if (! self.left_guests.contains(entry.from_stage)) return;
 
                     self.left_guests.remove(entry.from_stage);
@@ -115,35 +107,51 @@ pub const tests = struct {
     };
 
     test "booting" {
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
-        defer test_support.releaseEndpoint(ep);
-        defer test_support.cleanup();
-
         const io = std.testing.io;
         const allocator = std.testing.allocator;
+
+        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        defer test_support.releaseEndpoint(host_ep);
+
+        const guest_ep1: types.Endpoints = .{
+            .req_rep = try allocator.dupe(u8, host_ep.req_rep),
+            .pub_sub = try allocator.dupe(u8, host_ep.pub_sub),
+            .push_pull = try allocator.dupe(u8, host_ep.push_pull),
+            .worker = "inproc://guest-worker1"
+        };
+        defer test_support.releaseEndpoint(guest_ep1);
+
+        const guest_ep2: types.Endpoints = .{
+            .req_rep = try allocator.dupe(u8, host_ep.req_rep),
+            .pub_sub = try allocator.dupe(u8, host_ep.pub_sub),
+            .push_pull = try allocator.dupe(u8, host_ep.push_pull),
+            .worker = "inproc://guest-worker2"
+        };
+        defer test_support.releaseEndpoint(guest_ep2);
+        defer test_support.cleanup();
 
         const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
         var guests = std.BufSet.init(allocator);
         defer guests.deinit();
         for (guest_names) |name| { try guests.insert(name); }
 
-        var connection = try Connection.create(io, allocator , guests.count(), ep);
+        var connection = try Connection.create(io, allocator , guests.count(), host_ep);
         defer connection.deinit();
         try connection.bind();
 
         var runner: PhaseTestHarness = .{
-            .stage = try TestStage.init(&connection, ep, .unlimited),
+            .stage = try TestStage.init(&connection, host_ep, .unlimited),
             .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();
         defer runner.state.deinit();
 
-        var client1 = try Client("guest-a").create(io, allocator , ep);
+        var client1 = try Client("guest-a").create(io, allocator , guest_ep1);
         defer client1.deinit();
         try client1.connect();
 
-        var client2 = try Client("guest-b").create(io, allocator , ep);
+        var client2 = try Client("guest-b").create(io, allocator , guest_ep2);
         defer client2.deinit();
         try client2.connect();
 
@@ -160,8 +168,8 @@ pub const tests = struct {
 
     test "boot no response" {
         const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
-        defer test_support.releaseEndpoint(ep);
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        defer test_support.releaseEndpoint(host_ep);
         defer test_support.cleanup();
 
         const io = std.testing.io;
@@ -172,12 +180,12 @@ pub const tests = struct {
         defer guests.deinit();
         for (guest_names) |name| { try guests.insert(name); }
 
-        var connection = try Connection.create(io, allocator , guests.count(), ep);
+        var connection = try Connection.create(io, allocator , guests.count(), host_ep);
         defer connection.deinit();
         try connection.bind();
 
         var runner: PhaseTestHarness = .{
-            .stage = try TestStage.init(&connection, ep, .{ .count = 1 }),
+            .stage = try TestStage.init(&connection, host_ep, .{ .count = 1 }),
             .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();
@@ -193,29 +201,38 @@ pub const tests = struct {
     }
 
     test "guest launch failed" {
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
-        defer test_support.releaseEndpoint(ep);
-        defer test_support.cleanup();
-
         const io = std.testing.io;
         const allocator = std.testing.allocator;
+
+        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        defer test_support.releaseEndpoint(host_ep);
+
+        const guest_ep: types.Endpoints = .{
+            .req_rep = try allocator.dupe(u8, host_ep.req_rep),
+            .pub_sub = try allocator.dupe(u8, host_ep.pub_sub),
+            .push_pull = try allocator.dupe(u8, host_ep.push_pull),
+            .worker = "inproc://guest-worker1"
+        };
+        defer test_support.releaseEndpoint(guest_ep);
+        
+        defer test_support.cleanup();
 
         const guest_names: []const types.Symbol = &.{ "guest-a", "guest-b" };
         var guests = std.BufSet.init(allocator);
         defer guests.deinit();
         for (guest_names) |name| { try guests.insert(name); }
 
-        var connection = try Connection.create(io, allocator , guests.count(), ep);
+        var connection = try Connection.create(io, allocator , guests.count(), host_ep);
         defer connection.deinit();
         try connection.bind();
 
-        var client1 = try Client("guest-a").create(io, allocator , ep);
+        var client1 = try Client("guest-a").create(io, allocator , guest_ep);
         defer client1.deinit();
         try client1.connect();
 
         var runner: PhaseTestHarness = .{
-            .stage = try TestStage.init(&connection, ep, .{ .count = 1 }),
+            .stage = try TestStage.init(&connection, host_ep, .{ .count = 1 }),
             .state = try BootPhaseState(TestStage).create(allocator, &guests),
         };
         defer runner.stage.deinit();

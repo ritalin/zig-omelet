@@ -243,7 +243,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             pub fn post(self: *Queue, event: events.Event, channel: sockets.SendChannel) !void {
                 if (std.meta.activeTag(event) != .log) {
                     const d: *Dispatcher = @alignCast(@fieldParentPtr("queue", self));
-                    try d.log_router.log(d, .debug, channel.stage, "SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
+                    try d.log_router.log(d, .trace, channel.stage, "SendQueue/event: {s}", .{@tagName(std.meta.activeTag(event))});
                 }
 
                 var channel_mut = channel;

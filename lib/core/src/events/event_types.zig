@@ -87,14 +87,13 @@ pub const EventType = enum (u8) {
     finish_topic,
     // Ready phase event
     ready,
-    // watch event
-    request_watch_path,
-
+    ready_progress,
     // Source path event
-    ready_source_path, //  TODO:DEPRECATED?
+    ready_source_path,
     source_path,
-    pending_finish_source_path,
+    pending_finish_source_path, //TODO:Deprecated?
     finish_source_path,
+
     // Topic body event
     ready_topic_body,
     topic_body,
@@ -334,13 +333,12 @@ pub const Event = union(EventType) {
     launching: void,
     launched: void,
     failed_launching: void,
-    // Request phase event
+    // Topic request phase event
     topic: Payload.Topic,
     finish_topic: void,
     // Ready phase event
     ready: void,
-    // Watch event
-    request_watch_path: void,
+    ready_progress: void,
 
     // finish_watch_path: void,
     // Source path event
@@ -381,20 +379,18 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .launching => {},
         .launched => {},
         .failed_launching => {},
-        // Request topic phase event
+        // Topic request phase event
         .topic => |data| data.deinit(allocator),
         .finish_topic => {},
         // Ready phase event
         .ready => {},
-        // Watch event
-        .request_watch_path => {},
-        // .finish_watch_path => {}, // TODO:deprecate?
-
+        .ready_progress => {},
         // Source path event
         .ready_source_path => {},
         .source_path => |data| data.deinit(allocator),
         .pending_finish_source_path => {},
         .finish_source_path => {},
+
         // Topic body events
         .ready_topic_body => {},
         .topic_body => |data| data.deinit(allocator),

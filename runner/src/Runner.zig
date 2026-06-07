@@ -223,13 +223,20 @@ pub fn log(self: *HostRunner, comptime level: events.LogLevel, comptime fmt: []c
     try self.dispatcher.log(level, app_context, fmt, args);
 }
 
-pub fn isHost(stag_name: types.StageName) bool {
-    return std.mem.eql(u8, stag_name, app_context);
+pub fn isHost(stage_name: types.StageName) bool {
+    return std.mem.eql(u8, stage_name, app_context);
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *HostRunner = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
     try self.reapers.tick();
+
+    if (!std.mem.eql(u8, entry.from_stage, app_context)) {
+        if (!self.guest_names.contains(entry.from_stage)) {
+            try self.log(.warn, "Forbid external guest event/name: {s}, event: {s}", .{entry.from_stage, @tagName(std.meta.activeTag(entry.event))});
+            return;
+        }
+    }
 
     switch (self.state) {
         .launching => |*state| {
@@ -346,6 +353,11 @@ pub fn sendProbeHeartbeat(self: *HostRunner, event_type: events.EventType, phase
     else {
         return error.DiscardProbe;
     }
+}
+
+pub fn sendProgressHeartbeat(self: *HostRunner) !void {
+    const interval = TIMER_INTERVAL;
+    try self.sendProbe(.ready_progress, 1, self.setting.general.heartbeat_limit, interval);
 }
 
 // TODO:

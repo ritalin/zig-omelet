@@ -12,7 +12,6 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
     const TopicsMap = @import("../cache_manager.zig").CacheManager.TopicsMap;
 
     return struct {
-        guests: *const std.BufSet,
         left_guests: std.BufSet,
         topics: TopicsMap,
 
@@ -20,7 +19,6 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
 
         pub fn create(allocator: std.mem.Allocator, guests: *std.BufSet) !Self {
             return .{
-                .guests = guests,
                 .left_guests = try guests.cloneWithAllocator(allocator),
                 .topics = TopicsMap.init(allocator),
             };
@@ -37,10 +35,6 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
                     try self.topics.addTopics(payload);
                 },
                 .finish_topic => {
-                    if (! self.guests.contains(entry.from_stage)) {
-                        try stage.log(.debug, "External guest request/name: {s}", .{entry.from_stage});
-                        return;
-                    }
                     if (! self.left_guests.contains(entry.from_stage)) return;
 
                     self.left_guests.remove(entry.from_stage);

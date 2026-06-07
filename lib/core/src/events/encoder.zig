@@ -50,17 +50,14 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         },
         // Boot phase event
         .launching, .launched, .failed_launching => {},
-        // Request phase event
+        // Topic request phase event
         .topic => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.Topic), payload.values());
         },
         .finish_topic => {},
         // Ready phase event
         .ready => {},
-        // Watch event
-        .request_watch_path => {},
-        // .finish_watch_path => {}, // TODO:deprecated
-
+        .ready_progress => {},
         // Source path event
         .ready_source_path => {},
         .source_path => |payload| {
@@ -68,6 +65,7 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         },
         .pending_finish_source_path => {},
         .finish_source_path => {},
+
         // Topic body event
         .ready_topic_body => {},
         .topic_body => |payload| {

@@ -49,21 +49,18 @@ pub const EventHeader = union(EventType) {
     launching,
     launched,
     failed_launching,
-    // Request phase event
+    // Topic request phase event
     topic,
     finish_topic,
     // Ready phase event
     ready,
-    // watch event
-    request_watch_path,
-
-    // finish_watch_path,
-
+    ready_progress,
     // Source path event
     ready_source_path,
     source_path,
     pending_finish_source_path,
     finish_source_path,
+
     // Topic body event
     ready_topic_body,
     topic_body,

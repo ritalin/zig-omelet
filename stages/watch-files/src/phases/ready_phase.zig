@@ -8,7 +8,8 @@ const StructView = core.events.StructView;
 const Event = core.events.Event;
 
 const PathMatcher = @import("../PathMatcher.zig").PathMatcher(u21);
-// const worker_context = "worker/file-watching";
+
+const FileIterateWorker = @import("../watch_worker.zig").FileIterateWorker;
 
 pub fn ReadyWatchFileState(comptime GuestStage: type) type {
     return struct {
@@ -24,7 +25,14 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
                     if ((phase == .ready) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .ready, .agreement = .pending}))) {
                         var channel = try stage.connection.requestChannel();
                         try channel.submit(stage.connection.context.io, .ready, .{});
-                        try stage.transitPhase(.ready, .confirmed);                        
+                        try stage.transitPhase(.ready, .confirmed);
+
+                        if (stage.setting.watch) {
+                            // TODO: watch mode
+                        }
+                        else {
+                            try FileIterateWorker(GuestStage).run(stage);
+                        }
                         return;
                     }
                 },
@@ -35,6 +43,11 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
         }
     };
 }
+
+test "test ready phase" {
+    std.testing.refAllDecls(@This());
+}
+
 
     // TODO:
     // try self.connection.dispatcher.state.ready();
@@ -65,16 +78,6 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
 //             },
 //             .worker_response => |res| {
 //                 try self.handleWokerResponse(res, setting);
-//             },
-//             .quit => {
-//                 try self.connection.dispatcher.quitAccept();
-//             },
-//             .quit_all => {
-//                 try self.connection.dispatcher.quitAccept();
-//                 try self.connection.pull_sink_socket.stop();
-//             },
-//             else => {
-//                 try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
 //             },
 //         }
 //     }  
@@ -107,59 +110,8 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
 //     }
 // }
 
-// const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
 
-// fn sendFile(self: *GuestStage, category: core.TopicCategory, base_dir: std.fs.Dir, file_path: core.FilePath, name: core.FilePath, filter: PathMatcher) !void {
-//     const base_dir_path = try base_dir.realpathAlloc(self.allocator, ".");
-//     defer self.allocator.free(base_dir_path);
 
-//     const file_path_abs = try base_dir.realpathAlloc(self.allocator, file_path);
-//     defer self.allocator.free(file_path_abs);
-
-//     const path_u = try toUnicodeString(self.allocator, file_path_abs);
-//     defer self.allocator.free(path_u);
-
-//     if (filter.matchByExclude(path_u).exclude) {
-//         return;
-//     }
-//     if (! filter.matchByInclude(path_u).include) {
-//         return;
-//     }
-
-//     try self.logger.log(.debug, "Sending source file: `{s}`", .{file_path_abs});
-
-//     var file = try base_dir.openFile(file_path, .{});
-//     defer file.close();
-
-//     const hash = try makeHash(self.allocator, name, file);
-//     defer self.allocator.free(hash);
-
-//     // Send path, content, hash
-//     try self.connection.dispatcher.post(.{
-//         .source_path = try core.Event.Payload.SourcePath.init(
-//             self.allocator, .{category, std.fs.path.stem(name), file_path_abs, hash, 1}
-//         ),
-//     });
-// }
-
-// const Hasher = std.crypto.hash.sha2.Sha256;
-
-// fn makeHash(allocator: std.mem.Allocator, file_path: []const u8, file: std.fs.File) !Symbol {
-//     var hasher = Hasher.init(.{});
-
-//     hasher.update(file_path);
-
-//     var buf: [8192]u8 = undefined;
-
-//     while (true) {
-//         const read_size = try file.read(&buf);
-//         if (read_size == 0) break;
-
-//         hasher.update(buf[0..read_size]);
-//     }
-
-//     return core.bytesToHexAlloc(allocator, &hasher.finalResult());
-// }
 
 // fn handleWokerResponse(self: *GuestStage, res: core.Event.Payload.WorkerResponse, setting: Setting) !void {
 //     var reader = core.CborStream.Reader.init(res.content);

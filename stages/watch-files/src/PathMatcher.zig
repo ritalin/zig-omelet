@@ -28,32 +28,28 @@ pub fn PathMatcher(comptime TChar: type) type {
         }
 
         pub const Builder = struct {
-            allocator: std.mem.Allocator,
-            filter_dirs: std.ArrayList(FilterEntry),
+            filter_dirs: std.ArrayListUnmanaged(FilterEntry),
 
             const FilterEntry = struct {kind: FilterKind, path: FilePath};
 
-            pub fn init(allocator: std.mem.Allocator) Builder {
-                return .{
-                    .allocator = allocator,
-                    .filter_dirs = std.ArrayList(FilterEntry).init(allocator),
-                };
-            }
+            pub const init: Builder = .{
+                .filter_dirs = .empty,
+            };
 
-            pub fn deinit(self: *Builder) void {
+            pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
                 for (self.filter_dirs.items) |filter| {
-                    self.allocator.free(filter.path);
+                    allocator.free(filter.path);
                 }
-                self.filter_dirs.deinit();
+                self.filter_dirs.deinit(allocator);
             }
 
-            pub fn addFilterDir(self: *Builder, kind: FilterKind, path: FilePath) !void {
-                return self.filter_dirs.append(.{.kind = kind, .path = try self.allocator.dupe(TChar, path)});
+            pub fn addFilterDir(self: *Builder, allocator: std.mem.Allocator, kind: FilterKind, path: FilePath) !void {
+                return self.filter_dirs.append(allocator, .{.kind = kind, .path = try allocator.dupe(TChar, path)});
             }
 
-            pub fn build(self: *Builder) !Self {
-                var include_tree = try PatriciaAhoCorasick.init(self.allocator);
-                var exclude_tree = try PatriciaAhoCorasick.init(self.allocator);
+            pub fn build(self: *Builder, allocator: std.mem.Allocator) !Self {
+                var include_tree = try PatriciaAhoCorasick.init(allocator);
+                var exclude_tree = try PatriciaAhoCorasick.init(allocator);
 
                 for (self.filter_dirs.items) |filter| {
                     switch (filter.kind) {
@@ -181,23 +177,17 @@ pub fn PathMatcher(comptime TChar: type) type {
 
             pub fn build(self: *PatriciaAhoCorasick) !void {
                 const allocator = self.arena.allocator();
-
-                const Q = std.DoublyLinkedList(*PatriciaNode);
-                var q = Q{};
+                var q: std.Deque(*PatriciaNode) = .empty;
 
                 self.root.fail = null;
 
                 enqueue: {
-                    const q_node = try allocator.create(Q.Node);
-                    q_node.*.data = self.root;
-                    q.append(q_node);
+                    try q.pushBack(allocator, self.root);
                     break:enqueue;
                 }
 
-                while (q.popFirst()) |nd| {
-                    defer allocator.destroy(nd);
-
-                    var current = nd.data;
+                while (q.popFront()) |nd| {
+                    var current = nd;
 
                     var curr_iter = current.children.iterator();
                     while (curr_iter.next()) |item| {
@@ -222,9 +212,7 @@ pub fn PathMatcher(comptime TChar: type) type {
                         child.kinds.setUnion(child.fail.?.kinds);
                         
                         enqueue: {
-                            const q_node = try allocator.create(Q.Node);
-                            q_node.*.data = child;
-                            q.append(q_node);
+                            try q.pushBack(allocator, child);
                             break:enqueue;
                         }
                     }
@@ -304,17 +292,17 @@ pub fn PathMatcher(comptime TChar: type) type {
 }
 
 pub fn toUnicodeString(allocator: std.mem.Allocator, text: []const u8) ![]const u21 {
-    var codepoints = std.ArrayList(u21).init(allocator);
-    defer codepoints.deinit();
+    var codepoints: std.ArrayListUnmanaged(u21) = .empty;
+    defer codepoints.deinit(allocator);
 
     var view = try std.unicode.Utf8View.init(text);
     var iter = view.iterator();
 
     while (iter.nextCodepoint()) |cp| {
-        try codepoints.append(cp);
+        try codepoints.append(allocator, cp);
     }
 
-    return codepoints.toOwnedSlice();
+    return codepoints.toOwnedSlice(allocator);
 }
 
 test "Filter#1 (ASCII only)" {
@@ -349,18 +337,15 @@ test "Filter#1 (ASCII only)" {
         .{.include = false, .exclude = false},
     };
 
-
     const allocator = std.testing.allocator;
-    var builder = AsciiMatcher.Builder.init(allocator);
-    defer builder.deinit();
+    var builder: AsciiMatcher.Builder = .init;
+    defer builder.deinit(allocator);
 
     for (filters) |filter| {
-        try builder.addFilterDir(filter.kind, filter.path);
+        try builder.addFilterDir(allocator, filter.kind, filter.path);
     }
-    var matcher = try builder.build();
+    var matcher = try builder.build(allocator);
     defer matcher.deinit();
-
-    // try matcher.tree.dump();
 
     for (file_paths, 0..) |path, i| {
         filter: {
@@ -410,13 +395,13 @@ test "Filter#2 (日本語)" {
         .{.include = false, .exclude = true},
     };
 
-    var builder = AsciiMatcher.Builder.init(allocator);
-    defer builder.deinit();
+    var builder: AsciiMatcher.Builder = .init;
+    defer builder.deinit(allocator);
 
     for (filters) |filter| {
-        try builder.addFilterDir(filter.kind, filter.path);
+        try builder.addFilterDir(allocator, filter.kind, filter.path);
     }
-    var matcher = try builder.build();
+    var matcher = try builder.build(allocator);
     defer matcher.deinit();
 
     // try matcher.tree.dump();
@@ -459,13 +444,13 @@ test "Filter#3 (no filter)" {
     };
 
     const allocator = std.testing.allocator;
-    var builder = AsciiMatcher.Builder.init(allocator);
-    defer builder.deinit();
+    var builder: AsciiMatcher.Builder = .init;
+    defer builder.deinit(allocator);
 
     for (filters) |filter| {
-        try builder.addFilterDir(filter.kind, filter.path);
+        try builder.addFilterDir(allocator, filter.kind, filter.path);
     }
-    var matcher = try builder.build();
+    var matcher = try builder.build(allocator);
     defer matcher.deinit();
 
     // try matcher.tree.dump();

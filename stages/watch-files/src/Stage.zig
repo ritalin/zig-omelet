@@ -14,6 +14,7 @@ const ReadyWatchFileState = @import("./phases/ready_phase.zig").ReadyWatchFileSt
 
 const Setting = @import("./Setting.zig");
 
+io: std.Io,
 allocator: std.mem.Allocator,
 setting: *const Setting,
 connection: *GuestStage.Connection,
@@ -26,7 +27,7 @@ const GuestStage = @This();
 // const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
-pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
 
     try connection.subscribe(&.{
@@ -43,6 +44,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     const dispatcher = try connection.configureDispatcher(1, options);
 
     return .{
+        .io = io,
         .allocator = allocator,
         .setting = setting,
         .connection = connection,
@@ -163,3 +165,485 @@ fn deinitState(self: *State) void {
         else => unreachable,
     }
 }
+
+test "test stage" {
+    std.testing.refAllDecls(@This());
+}
+
+pub const tests = struct {
+    const test_support = core.test_support;
+    const Connecion = core.sockets.Connection.Client("test");
+    const Dispatcher = core.sockets.EventDispatcher.Sized(8);
+
+    const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
+    const IterateFileWorker = @import("./watch_worker.zig").FileIterateWorker;
+
+    const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
+
+    test "post simple file path" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(tmp_dir_path);
+
+        const file = try tmp_dir.dir.createFile(io, "foo.sql", .{});
+        defer file.close(io);
+        fill: {
+            var buffer: [16]u8 = undefined;
+            var w = file.writer(io, &buffer);
+            try w.interface.writeAll("X" ** 10000);
+            try w.interface.flush();
+            break:fill;
+        }
+
+        const file_path = try tmp_dir.dir.realPathFileAlloc(io, "foo.sql", allocator);
+        defer allocator.free(file_path);
+
+        const ep = try test_support.createEndpoint(tmp_dir.dir);
+        defer test_support.releaseEndpoint(ep);
+
+        var filter_builder: PathMatcher.Builder = .init;
+        var filter = try filter_builder.build(allocator);
+        defer filter.deinit();
+
+        const setting: Setting = .{
+            .endpoints = ep,
+            .log_level = .debug,
+            .log_style = .discard,
+            .no_color = false,
+            .sources = &.{
+                .{ .category = .source, .dir_path = file_path },
+            },
+            .filter = filter,
+            .default_dialect = "duckdb",
+            .watch = false,
+        };
+
+        var conn = try Connection.create(io, allocator, ep);
+        defer conn.deinit();
+
+        var stage = try GuestStage.create(io, allocator, &conn, &setting);
+        defer stage.deinit();
+
+        try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
+
+        try IterateFileWorker(GuestStage).run(&stage);
+
+        try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
+
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source, packet.event.source_path.category);
+            try std.testing.expectEqualStrings("foo", packet.event.source_path.name);
+            try std.testing.expectEqualStrings(file_path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(setting.default_dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.finish_source_path, packet.event);
+            break:channel;
+        }
+    }
+
+    test "post nested file path" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+
+        const base_dir = try tmp_dir.dir.createDirPathOpen(io, "x/y/z", .{});
+        defer base_dir.close(io);
+        const base_dir_path = try tmp_dir.dir.realPathFileAlloc(io, "x", allocator);
+        defer allocator.free(base_dir_path);
+
+        const file1 = try base_dir.createFile(io, "foo.sql", .{});
+        defer file1.close(io);
+        const file1_path = try base_dir.realPathFileAlloc(io, "foo.sql", allocator);
+        defer allocator.free(file1_path);
+
+        const file2 = try base_dir.createFile(io, "foo-bar.sql", .{});
+        defer file2.close(io);
+        const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
+        defer allocator.free(file2_path);
+
+        const ep = try test_support.createEndpoint(tmp_dir.dir);
+        defer test_support.releaseEndpoint(ep);
+
+        var filter_builder: PathMatcher.Builder = .init;
+        var filter = try filter_builder.build(allocator);
+        defer filter.deinit();
+
+        const setting: Setting = .{
+            .endpoints = ep,
+            .log_level = .debug,
+            .log_style = .discard,
+            .no_color = false,
+            .sources = &.{
+                .{ .category = .source, .dir_path = base_dir_path },
+            },
+            .filter = filter,
+            .default_dialect = "duckdb",
+            .watch = false,
+        };
+
+        var conn = try Connection.create(io, allocator, ep);
+        defer conn.deinit();
+
+        var stage = try GuestStage.create(io, allocator, &conn, &setting);
+        defer stage.deinit();
+
+        try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
+
+        try IterateFileWorker(GuestStage).run(&stage);
+
+        try std.testing.expectEqual(3, stage.dispatcher.queue.send_queue.len);
+
+        const expects: []const events.Event.Payload.SourcePath = &.{
+            .{
+                .category = .source,
+                .name = "y/z/foo",
+                .path = file1_path,
+                .dialect = setting.default_dialect,
+                .hash = "dummy",
+                .item_count = 1,
+            },
+            .{
+                .category = .source,
+                .name = "y/z/foo-bar",
+                .path = file2_path,
+                .dialect = setting.default_dialect,
+                .hash = "dummy",
+                .item_count = 1,
+            },
+        };
+
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            const expect = if (std.mem.eql(u8, packet.event.source_path.name, expects[0].name)) expects[0] else expects[1];
+
+            try std.testing.expectEqual(expect.category, packet.event.source_path.category);
+            try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
+            try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(expect.dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            const expect = if (std.mem.eql(u8, packet.event.source_path.name, expects[0].name)) expects[0] else expects[1];
+
+            try std.testing.expectEqual(expect.category, packet.event.source_path.category);
+            try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
+            try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(expect.dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.finish_source_path, packet.event);
+            break:channel;
+        }
+    }
+
+    test "post nested file path with included pattern" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(tmp_dir_path);
+
+        const base_dir = try tmp_dir.dir.createDirPathOpen(io, "x/y/z", .{});
+        defer base_dir.close(io);
+        const base_dir_path = try tmp_dir.dir.realPathFileAlloc(io, "x", allocator);
+        defer allocator.free(base_dir_path);
+
+        const file1 = try base_dir.createFile(io, "foo.sql", .{});
+        defer file1.close(io);
+        const file1_path = try base_dir.realPathFileAlloc(io, "foo.sql", allocator);
+        defer allocator.free(file1_path);
+
+        const file2 = try base_dir.createFile(io, "foo-bar.sql", .{});
+        defer file2.close(io);
+        const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
+        defer allocator.free(file2_path);
+
+        const ep = try test_support.createEndpoint(tmp_dir.dir);
+        defer test_support.releaseEndpoint(ep);
+
+        var filter_builder: PathMatcher.Builder = .init;
+        defer filter_builder.deinit(allocator);
+        const filter_path = try toUnicodeString(allocator, "bar");
+        defer allocator.free(filter_path);
+
+        try filter_builder.addFilterDir(allocator, .include, filter_path);
+        var filter = try filter_builder.build(allocator);
+        defer filter.deinit();
+
+        const setting: Setting = .{
+            .endpoints = ep,
+            .log_level = .debug,
+            .log_style = .discard,
+            .no_color = false,
+            .sources = &.{
+                .{ .category = .source, .dir_path = base_dir_path },
+            },
+            .filter = filter,
+            .default_dialect = "duckdb",
+            .watch = false,
+        };
+
+        var conn = try Connection.create(io, allocator, ep);
+        defer conn.deinit();
+
+        var stage = try GuestStage.create(io, allocator, &conn, &setting);
+        defer stage.deinit();
+
+        try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
+
+        try IterateFileWorker(GuestStage).run(&stage);
+
+        try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
+
+        const expect: events.Event.Payload.SourcePath = .{
+                .category = .source,
+            .name = "y/z/foo-bar",
+            .path = file2_path,
+            .dialect = setting.default_dialect,
+            .hash = "dummy",
+            .item_count = 1,
+        };
+
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(expect.category, packet.event.source_path.category);
+            try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
+            try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(expect.dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.finish_source_path, packet.event);
+            break:channel;
+        }
+    }
+
+    test "post nested file path with excluded pattern" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(tmp_dir_path);
+
+        const base_dir = try tmp_dir.dir.createDirPathOpen(io, "x/y/z", .{});
+        defer base_dir.close(io);
+        const base_dir_path = try tmp_dir.dir.realPathFileAlloc(io, "x", allocator);
+        defer allocator.free(base_dir_path);
+
+        const file1 = try base_dir.createFile(io, "foo.sql", .{});
+        defer file1.close(io);
+        const file1_path = try base_dir.realPathFileAlloc(io, "foo.sql", allocator);
+        defer allocator.free(file1_path);
+
+        const file2 = try base_dir.createFile(io, "foo-bar.sql", .{});
+        defer file2.close(io);
+        const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
+        defer allocator.free(file2_path);
+
+        const ep = try test_support.createEndpoint(tmp_dir.dir);
+        defer test_support.releaseEndpoint(ep);
+
+        var filter_builder: PathMatcher.Builder = .init;
+        defer filter_builder.deinit(allocator);
+        const filter_path = try toUnicodeString(allocator, "bar");
+        defer allocator.free(filter_path);
+
+        try filter_builder.addFilterDir(allocator, .exclude, filter_path);
+        var filter = try filter_builder.build(allocator);
+        defer filter.deinit();
+
+        const setting: Setting = .{
+            .endpoints = ep,
+            .log_level = .debug,
+            .log_style = .discard,
+            .no_color = false,
+            .sources = &.{
+                .{ .category = .source, .dir_path = base_dir_path },
+            },
+            .filter = filter,
+            .default_dialect = "duckdb",
+            .watch = false,
+        };
+
+        var conn = try Connection.create(io, allocator, ep);
+        defer conn.deinit();
+
+        var stage = try GuestStage.create(io, allocator, &conn, &setting);
+        defer stage.deinit();
+
+        try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
+
+        try IterateFileWorker(GuestStage).run(&stage);
+
+        try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
+
+        const expect: events.Event.Payload.SourcePath = .{
+                .category = .source,
+            .name = "y/z/foo",
+            .path = file1_path,
+            .dialect = setting.default_dialect,
+            .hash = "dummy",
+            .item_count = 1,
+        };
+
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(expect.category, packet.event.source_path.category);
+            try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
+            try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(expect.dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.finish_source_path, packet.event);
+            break:channel;
+        }
+    }
+
+    test "post nested file path with dialect" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(tmp_dir_path);
+
+        const file = try tmp_dir.dir.createFile(io, "foo.sqlite.sql", .{});
+        defer file.close(io);
+        fill: {
+            var buffer: [16]u8 = undefined;
+            var w = file.writer(io, &buffer);
+            try w.interface.writeAll("X" ** 10000);
+            try w.interface.flush();
+            break:fill;
+        }
+
+        const file_path = try tmp_dir.dir.realPathFileAlloc(io, "foo.sqlite.sql", allocator);
+        defer allocator.free(file_path);
+
+        const ep = try test_support.createEndpoint(tmp_dir.dir);
+        defer test_support.releaseEndpoint(ep);
+
+        var filter_builder: PathMatcher.Builder = .init;
+        var filter = try filter_builder.build(allocator);
+        defer filter.deinit();
+
+        const setting: Setting = .{
+            .endpoints = ep,
+            .log_level = .debug,
+            .log_style = .discard,
+            .no_color = false,
+            .sources = &.{
+                .{ .category = .source, .dir_path = file_path },
+            },
+            .filter = filter,
+            .default_dialect = "duckdb",
+            .watch = false,
+        };
+
+        var conn = try Connection.create(io, allocator, ep);
+        defer conn.deinit();
+
+        var stage = try GuestStage.create(io, allocator, &conn, &setting);
+        defer stage.deinit();
+
+        try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
+
+        try IterateFileWorker(GuestStage).run(&stage);
+
+        try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
+
+        const expect: events.Event.Payload.SourcePath = .{
+                .category = .source,
+            .name = "foo",
+            .path = file_path,
+            .dialect = "sqlite",
+            .hash = "dummy",
+            .item_count = 1,
+        };
+        
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(expect.category, packet.event.source_path.category);
+            try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
+            try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
+            try std.testing.expectEqualStrings(expect.dialect, packet.event.source_path.dialect);
+            break:channel;
+        }
+        channel: {
+            var channel: ?core.sockets.SendChannel = stage.dispatcher.queue.send_queue.popFront();
+            defer if (channel) |*c| c.deinit();
+
+            try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
+            const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
+            try std.testing.expectEqual(.finish_source_path, packet.event);
+            break:channel;
+        }
+    }
+};

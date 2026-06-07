@@ -68,7 +68,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
             const path = try reader.readTuple(StructView(Event.Payload.SourcePath));
 
             return .{
-                .source_path = try Event.Payload.SourcePath.init(path),
+                .source_path = Event.Payload.SourcePath.init(path),
             };
         },
         .pending_finish_source_path => return .pending_finish_source_path,
@@ -150,10 +150,10 @@ pub const tests = struct {
 
         const heartbeat = Event.Payload.Heartbeat.init(.{ .probe, 1 });
         const topic = Event.Payload.Topic.init(.{ .source, &.{"topic_a", "topic_b", "topic_c"} });
-        const source_path = try Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "Some-content", 1 });
+        const source_path = Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "duckdb", "Some-content", 1 });
         defer source_path.deinit(allocator);
         const topic_body = try Event.Payload.TopicBody.init(allocator,
-            .{ source_path.category, source_path.name, source_path.path, source_path.hash, 2 },
+            .{ source_path.category, source_path.name, source_path.path, source_path.dialect, source_path.hash, 2 },
             &.{
                 .{ "topic_a", "topic_a_content" },
                 .{ "topic_b", "topic_b_content" },
@@ -162,7 +162,7 @@ pub const tests = struct {
         );
         defer topic_body.deinit(allocator);
         const skip_topic_body = try Event.Payload.SkipTopicBody.init(
-            .{ source_path.category, source_path.name, source_path.path, source_path.hash, 3 },
+            .{ source_path.category, source_path.name, source_path.path, source_path.dialect, source_path.hash, 3 },
             0,
         );
         defer skip_topic_body.deinit(allocator);

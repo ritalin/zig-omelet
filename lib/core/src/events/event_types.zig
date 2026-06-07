@@ -8,6 +8,7 @@ const FilePath = core_types.FilePath;
 const c = @import("interop_c");
 
 pub const StructView = @import("./event_impl.zig").StructView;
+pub const EventPacket = @import("./event_impl.zig").EventPacket;
 
 pub const LogLevel = enum(u8) {
     err = c.log_level_err,
@@ -81,17 +82,16 @@ pub const EventType = enum (u8) {
     launching,
     launched,
     failed_launching,
-    // Request phase event
+    // Topic request phase event
     topic,
     finish_topic,
     // Ready phase event
     ready,
     // watch event
     request_watch_path,
-    // finish_watch_path, TODO:deprecated
 
     // Source path event
-    ready_source_path,
+    ready_source_path, //  TODO:DEPRECATED?
     source_path,
     pending_finish_source_path,
     finish_source_path,
@@ -173,7 +173,7 @@ const EventPayload = struct {
 
             return .{
                 .allocator = allocator,
-                .header = try SourcePath.init(header),
+                .header = SourcePath.init(header),
                 .index = 0,
                 .bodies = new_bodies,
             };
@@ -231,7 +231,7 @@ const EventPayload = struct {
 
         pub fn init(header: StructView(SourcePath), index: usize) !@This() {
             return .{
-                .header = try SourcePath.init(header),
+                .header = SourcePath.init(header),
                 .index = index,
             };
         }
@@ -248,16 +248,18 @@ const EventPayload = struct {
         category: TopicCategory,
         name: Symbol,
         path: FilePath,
+        dialect: Symbol,
         hash: Symbol,
         item_count: usize,
 
-        pub fn init(view: StructView(SourcePath)) !@This() {
+        pub fn init(view: StructView(SourcePath)) @This() {
             return .{
                 .category = view[0],
                 .name = view[1],
                 .path = view[2],
-                .hash = view[3],
-                .item_count = view[4],
+                .dialect = view[3],
+                .hash = view[4],
+                .item_count = view[5],
             };
         }
         pub fn deinit(_: @This(), _: std.mem.Allocator) void {}
@@ -266,7 +268,7 @@ const EventPayload = struct {
             return init(self.values());
         }
         pub fn values(self: @This()) StructView(@This()) {
-            return .{ self.category, self.name, self.path, self.hash, self.item_count };
+            return .{ self.category, self.name, self.path, self.dialect, self.hash, self.item_count };
         }
     };
 

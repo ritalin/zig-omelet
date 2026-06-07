@@ -5,10 +5,16 @@ const StageName = root.types.StageName;
 const Event = root.events.Event;
 const EventType = root.events.EventType;
 
+const decodeFromCbor = @import("./decoder.zig").decodeFromCbor;
+
 pub const EventPacket = struct {
     header: EventHeader,
     stage_name: StageName,
     event: Event,
+
+    pub fn decode(allocator: std.mem.Allocator, data: []const u8) !EventPacket {
+        return decodeFromCbor(allocator, data);
+    }
 };
 
 const ExceptStructView = std.StaticStringMap(void).initComptime(.{

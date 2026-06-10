@@ -1,3 +1,10 @@
+#include <string_view>
+#include <span>
+#include <string>
+#include <vector>
+#include <cstring>
+#include <cassert>
+
 #include "cbor_encode.hpp"
 #include "cbor/encoder.h"
 
@@ -12,156 +19,665 @@ struct CborTypes {
 
 const size_t MAX_BUFFER_SIZE = 9;
 
-static auto cborHeader(uint32_t id, size_t len) -> std::string {
+template <WriterBackend Backend>
+static auto cborHeader(Backend& backend, uint32_t id, size_t len) {
     cbor_writer_t writer;
     char buf[MAX_BUFFER_SIZE] = {}; 
-    cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
+    ::cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
 
-    cbor_encode_unsigned_integer(&writer, len);
+    ::cbor_encode_unsigned_integer(&writer, len);
 
     writer.buf[0] |= ((id & 0b0111) << 5);
 
-    return std::string(reinterpret_cast<char*>(writer.buf), writer.bufidx);
+    backend.write(buf, writer.bufidx);
 }
 
-auto CborEncoder::encodeUInt(uint64_t value) -> std::vector<char> {
+template <WriterBackend Backend>
+static auto encodeUInt(Backend& backend, uint64_t value) -> void {
     cbor_writer_t writer;
-    char buf[MAX_BUFFER_SIZE] = {}; 
-    cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
+    std::byte buf[MAX_BUFFER_SIZE] = {};
 
-    cbor_encode_unsigned_integer(&writer, value);
+    ::cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);
+    ::cbor_encode_unsigned_integer(&writer, value);
 
-    auto b = reinterpret_cast<char*>(writer.buf);
-    return std::vector<char>(b, b + writer.bufidx);
+    backend.write(buf, writer.bufidx);
 }
 
-auto CborEncoder::encodeBool(bool value) -> std::vector<char> {
+template <WriterBackend Backend>
+static auto encodeBool(Backend& backend, bool value) -> void {
     cbor_writer_t writer;
-    char buf[] = {0}; 
-    cbor_writer_init(&writer, buf, 1);
+    std::byte buf[1] = {}; 
 
-    cbor_encode_bool(&writer, value);
+    ::cbor_writer_init(&writer, buf, 1);
+    ::cbor_encode_bool(&writer, value);
 
-    auto b = reinterpret_cast<char*>(writer.buf);
-    return std::vector<char>(b, b + writer.bufidx);
+    backend.write(buf, writer.bufidx);
 }
 
-auto CborEncoder::encodeNull() -> std::vector<char> {
+template <WriterBackend Backend>
+static auto encodeNull(Backend& backend) -> void {
     cbor_writer_t writer;
-    char buf[] = {0}; 
-    cbor_writer_init(&writer, buf, 1);
+    char buf[] = {0};
 
-    cbor_encode_null(&writer);
+    ::cbor_writer_init(&writer, buf, 1);
+    ::cbor_encode_null(&writer);
 
-    auto b = reinterpret_cast<char*>(writer.buf);
-    return std::vector<char>(b, b + writer.bufidx);
+    backend.write(buf, writer.bufidx);
 }
 
-auto CborEncoder::addUInt(uint64_t value) -> void {
-    auto data = std::move(CborEncoder::encodeUInt(value));
-    std::move(data.begin(), data.end(), std::back_inserter(this->buf));
+/// --------------------------------------------------------------------------------
+/// CborEncoder
+/// --------------------------------------------------------------------------------
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addUInt(uint64_t value) -> void {
+    ::encodeUInt(this->backend, value);
 }
 
-auto CborEncoder::addString(std::string_view value) -> void {
-    auto inserter = std::back_inserter(this->buf);
-    header: {
-        auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addString(std::string_view value) -> void {
+    cborHeader(this->backend, CborTypes::STRING, value.size());
+    this->backend.write(value.data(), value.size());
+}
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addBool(bool value) -> void {
+    encodeBool(this->backend, value);
+}
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addNull() -> void {
+    encodeNull(this->backend);
+}
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addArrayHeader(size_t len) -> void {
+    cborHeader(this->backend, CborTypes::ARRAY, len);
+}
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addAggregateSlice(std::vector<CborEncoder<VectorBackend>>&& encoders) -> void {
+    // TODO:
+    // std::copy(buffer.begin(), buffer.end(), std::back_inserter(this->buf));
+
+    
+    this->addArrayHeader(encoders.size());
+    for (auto& e: encoders) {
+        auto source = e.rawBuffer();
+        this->backend.write(source.data(), source.size());
     }
-    payload: {
-        inserter = std::copy(value.begin(), value.end(), inserter);
-    }
 }
 
-auto CborEncoder::addBool(bool value) -> void {
-    auto data = std::move(CborEncoder::encodeBool(value));
-    std::move(data.begin(), data.end(), std::back_inserter(this->buf));
-}
-
-auto CborEncoder::addNull() -> void {
-    auto data = std::move(CborEncoder::encodeNull());
-    std::move(data.begin(), data.end(), std::back_inserter(this->buf));
-}
-
-auto CborEncoder::addArrayHeader(size_t len) -> void {
-    auto header = std::move(cborHeader(CborTypes::ARRAY, len));
-    std::move(header.begin(), header.end(), std::back_inserter(this->buf));
-}
-
-auto CborEncoder::concatBinary(const CborEncoder& encoder) -> void {
-    this->concatBinary(encoder.buf);
-}
-
-auto CborEncoder::concatBinary(const std::vector<char>& buffer) -> void {
-    std::copy(buffer.begin(), buffer.end(), std::back_inserter(this->buf));
-}
-
-auto CborEncoder::addStringPair(const std::string& key, const std::string& value) -> void {
-    auto inserter = std::back_inserter(this->buf);
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addStringPair(const std::string& key, const std::string& value) -> void {
     tuple: {
-        auto header = std::move(cborHeader(CborTypes::ARRAY, 2));
-        inserter = std::move(header.begin(), header.end(), inserter);
+        cborHeader(this->backend, CborTypes::ARRAY, 2);
     }
     key: {
-        auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::copy(key.begin(), key.end(), inserter);
+        cborHeader(this->backend, CborTypes::STRING, key.size());
+        this->backend.write(key.data(), key.size());
     }
     value: {
-        auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::copy(value.begin(), value.end(), inserter);
+        cborHeader(this->backend, CborTypes::STRING, value.size());
+        this->backend.write(value.data(), value.size());
     }
 }
 
-auto CborEncoder::addBinaryPair(const std::string& key, const std::vector<char>& value) -> void {
-    auto inserter = std::back_inserter(this->buf);
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addBinaryPair(const std::string& key, const std::span<const std::byte>& value) -> void {
     tuple: {
-        auto header = std::move(cborHeader(CborTypes::ARRAY, 2));
-        inserter = std::move(header.begin(), header.end(), inserter);
+        cborHeader(this->backend, CborTypes::ARRAY, 2);
     }
     key: {
-        auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::copy(key.begin(), key.end(), inserter);
+        cborHeader(this->backend, CborTypes::STRING, key.size());
+        this->backend.write(key.data(), key.size());
     }
     value: {
-        auto header = std::move(cborHeader(CborTypes::STRING, value.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::copy(value.begin(), value.end(), inserter);
+        cborHeader(this->backend, CborTypes::BITES, value.size());
+        this->backend.write(value.data(), value.size());
     }
 }
 
-auto CborEncoder::addUIntPair(const std::string& key, uint64_t value) -> void {
-    auto inserter = std::back_inserter(this->buf);
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::addUIntPair(const std::string& key, uint64_t value) -> void {
     tuple: {
-        auto header = std::move(cborHeader(CborTypes::ARRAY, 2));
-        inserter = std::move(header.begin(), header.end(), inserter);
+        cborHeader(this->backend, CborTypes::ARRAY, 2);
     }
     key: {
-        auto header = std::move(cborHeader(CborTypes::STRING, key.size()));
-        inserter = std::move(header.begin(), header.end(), inserter);
-        inserter = std::copy(key.begin(), key.end(), inserter);
+        cborHeader(this->backend, CborTypes::STRING, key.size());
+        this->backend.write(key.data(), key.size());
     }
     value: {
-        auto data = std::move(CborEncoder::encodeUInt(value));
-        inserter = std::move(data.begin(), data.end(), inserter);
+        encodeUInt(this->backend, value);
     }
 }
 
-auto CborEncoder::rawBuffer() const -> std::vector<char> {
-    return std::move(std::vector<char>(this->buf));
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::rawBuffer() const -> std::span<const std::byte> {
+    return this->backend.rawBuffer();
 }
-auto CborEncoder::build() const -> std::vector<char> {
-    CborEncoder encoder;
-    auto inserter = std::back_inserter(encoder.buf);
-    header: {
-        auto header = std::move(cborHeader(CborTypes::STRING, this->buf.size()));
-        inserter = std::copy(header.begin(), header.end(), inserter);
-    }
-    payload: {
-        inserter = std::copy(this->buf.begin(), this->buf.end(), inserter);
+
+template <WriterBackend Backend>
+auto CborEncoder<Backend>::flush() -> void {
+    this->backend.flush();
+}
+
+/// --------------------------------------------------------------------------------
+/// VectorBackend
+/// --------------------------------------------------------------------------------
+
+auto VectorBackend::write(const void* ptr, size_t len) -> void {
+    auto begin = static_cast<const std::byte*>(ptr);
+
+    this->buf.insert(this->buf.end(), begin, begin + len);
+}
+
+auto VectorBackend::rawBuffer() const -> std::span<const std::byte> {
+    return {
+        this->buf.data(),
+        this->buf.size()
+    };
+}
+
+auto VectorBackend::flush() -> void {
+    // no-op
+}
+
+/// --------------------------------------------------------------------------------
+/// NngBackend
+/// --------------------------------------------------------------------------------
+
+NngBackend::NngBackend(size_t capacity) {
+    auto err = nng_msg_alloc(&this->msg, capacity);
+    assert(err == 0);
+
+    auto p = nng_msg_body(this->msg);
+
+    this->buffer = { static_cast<std::byte*>(p), capacity };
+    this->end = 0;
+}
+
+NngBackend::NngBackend(NngBackend&& other) noexcept 
+    : msg(other.msg), buffer(other.buffer), end(other.end)
+{
+    other.msg = nullptr;
+    other.buffer = {};
+    other.end = 0;
+    assert(this->end <= this->buffer.size());
+}
+
+NngBackend& NngBackend::operator=(NngBackend&& other) noexcept {
+    if (this != &other) {
+        if (this->msg) {
+            nng_msg_free(this->msg);
+        }
+        this->msg = other.msg;
+        this->buffer = other.buffer;
+        this->end = other.end;
+        
+        other.msg = nullptr;
+        other.buffer = {};
+        other.end = 0;
     }
 
-    return std::move(encoder.buf);
+    return *this;
 }
+
+NngBackend::~NngBackend() {
+    if (this->msg) {
+        nng_msg_free(this->msg);
+    }
+}
+
+auto NngBackend::release() -> nng_msg* {
+    auto msg = this->msg;
+    this->msg = nullptr;
+    this->buffer = {};
+    this->end = 0;
+
+    return msg;
+}
+
+auto NngBackend::write(const void* ptr, size_t len) -> void {
+    auto required = this->end + len;
+
+    if (this->buffer.size() < required) {
+        auto new_size = required << 1;
+        auto err = nng_msg_realloc(this->msg, new_size);
+        assert(err == 0);
+
+        auto p = nng_msg_body(this->msg);
+        this->buffer = { static_cast<std::byte*>(p), new_size };
+    }
+
+    std::memcpy(this->buffer.data() + this->end, ptr, len);
+    this->end += len;
+    assert(this->end <= this->buffer.size());
+}
+
+auto NngBackend::rawBuffer() const -> std::span<const std::byte> {
+    return { this->buffer.data(), this->end };
+}
+
+auto NngBackend::flush() -> void {
+    if (this->msg) {
+        auto err = nng_msg_realloc(this->msg, this->end);
+        assert(err == 0);
+        
+        auto p = nng_msg_body(this->msg);
+        this->buffer = { static_cast<std::byte*>(p), this->end };
+    }
+}
+
+#ifndef DISABLE_CATCH2_TEST
+
+// -------------------------
+// Unit tests
+// -------------------------
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+using namespace Catch::Matchers;
+
+template <std::integral... T>
+auto as_bytes(T... v) -> std::vector<std::byte> {
+    return { std::byte{static_cast<unsigned char>(v)}... };
+}
+
+auto as_sequence(std::uint8_t start, size_t len) -> std::vector<std::byte> {
+    std::vector<std::byte> v;
+    v.reserve(len);
+
+    for (auto i = 0; i < len; ++i) {
+        v.emplace_back(std::byte{static_cast<std::uint8_t>((i + start) % 256)});
+    }
+
+    return v;
+}
+
+auto to_vector(std::span<const std::byte> s) -> std::vector<std::byte> {
+    return {s.begin(), s.end()};
+}
+
+TEST_CASE("Encode small uint to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(0);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(1);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x01);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_3: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(23);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x17);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode medium uint to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(24);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x18, 0x18);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(42);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x18, 0x2A);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_3: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(255);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x18, 0xFF);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode large uint to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(256);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x19, 0x01, 0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(65535);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x19, 0xFF, 0xFF);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_3: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(65536);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x1A, 0x00, 0x01, 0x00, 0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_4: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUInt(1ULL << 32);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x1B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode string to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addString("");
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x60);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addString("abc");
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x63, 0x61, 0x62, 0x63);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode bool to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBool(false);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0xF4);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBool(true);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0xF5);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode null to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addNull();
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0xF6);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode pair uint to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addUIntPair("x", 42);
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x78, 0x18, 0x2A);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode pair string to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addStringPair("y", "hello");
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x79, 0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode pair small binary to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", std::span<std::byte>{});
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x7A, 0x40);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_bytes(0x00));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x7A, 0x41, 0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_3: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_bytes(0xDE, 0xAD, 0xBE, 0xEF));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x7A, 0x44, 0xDE, 0xAD, 0xBE, 0xEF);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_4: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_bytes(0x00, 0xFF, 0x10, 0x7F));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x7A, 0x44, 0x00, 0xFF, 0x10, 0x7F);
+        REQUIRE(to_vector(actual) == expect);
+    }
+    case_5: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_bytes(0x00, 0x00, 0x00, 0x00));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x61, 0x7A, 0x44, 0x00, 0x00, 0x00, 0x00);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Encode pair bonded binary to vector") {
+    case_1: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_sequence(0, 255));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect_header = as_bytes(0x82, 0x61, 0x7A, 0x58, 0xFF);
+        auto expect_sequence = as_sequence(0, 255);
+
+        REQUIRE(actual.size() == expect_header.size() + expect_sequence.size());
+        REQUIRE(actual.size() > expect_header.size());
+        REQUIRE(std::equal(actual.begin(), actual.begin() + expect_header.size(), expect_header.begin(), expect_header.end()));
+        REQUIRE(std::equal(actual.begin() + expect_header.size(), actual.end(), expect_sequence.begin(), expect_sequence.end()));
+    }
+    case_2: {
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addBinaryPair("z", as_sequence(0, 256));
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect_header = as_bytes(0x82, 0x61, 0x7A, 0x59, 0x01, 0x00);
+        auto expect_sequence = as_sequence(0, 256);
+
+        REQUIRE(actual.size() == expect_header.size() + expect_sequence.size());
+        REQUIRE(actual.size() > expect_header.size());
+        REQUIRE(std::equal(actual.begin(), actual.begin() + expect_header.size(), expect_header.begin(), expect_header.end()));
+        REQUIRE(std::equal(actual.begin() + expect_header.size(), actual.end(), expect_sequence.begin(), expect_sequence.end()));
+    }
+}
+
+TEST_CASE("Aggreate encoded batch to vector") {
+    case_1: {
+        auto encoder_a = CborEncoder(VectorBackend());
+        encoder_a.addBinaryPair("z", as_bytes(0x01, 0x02));
+        encoder_a.flush();
+        auto actual_a = encoder_a.rawBuffer();
+        auto expect_a = as_bytes(0x82, 0x61, 0x7A, 0x42, 0x01, 0x02);
+        REQUIRE(to_vector(actual_a) == expect_a);
+
+        auto encoder_b = CborEncoder(VectorBackend());
+        encoder_b.addBinaryPair("z", as_bytes(0x03, 0x04));
+        encoder_b.flush();
+        auto actual_b = encoder_b.rawBuffer();
+        auto expect_b = as_bytes(0x82, 0x61, 0x7A, 0x42, 0x03, 0x04);
+        REQUIRE(to_vector(actual_b) == expect_b);
+
+        auto encoder = CborEncoder(VectorBackend());
+        encoder.addAggregateSlice({ encoder_a, encoder_b });
+        encoder.flush();
+
+        auto actual = encoder.rawBuffer();
+        auto expect = as_bytes(0x82, 0x82, 0x61, 0x7A, 0x42, 0x01, 0x02, 0x82, 0x61, 0x7A, 0x42, 0x03, 0x04);
+        REQUIRE(to_vector(actual) == expect);
+    }
+}
+
+TEST_CASE("Write to nng backend") {
+    case_1: {
+        NngBackend backend(0);
+        REQUIRE(backend.rawBuffer().size() == 0);
+        backend.write("abc", 3);
+
+        auto buffer = backend.rawBuffer();
+        auto actual = std::string_view(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+        REQUIRE(buffer.size() == 3);
+        REQUIRE(actual == "abc");
+    }
+}
+
+TEST_CASE("Write to nng backend twice") {
+    case_1: {
+        NngBackend backend(0);
+        REQUIRE(backend.rawBuffer().size() == 0);
+        backend.write("abc", 3);
+        backend.write("def", 3);
+
+        auto buffer = backend.rawBuffer();
+        auto actual = std::string_view(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+        REQUIRE(buffer.size() == 6);
+        REQUIRE(actual == "abcdef");
+    }
+}
+
+TEST_CASE("Release nng message") {
+    case_1: {
+        NngBackend backend(0);
+        REQUIRE(backend.rawBuffer().size() == 0);
+        backend.write("abc", 3);
+
+        auto msg = backend.release();
+        auto p = static_cast<const char*>(nng_msg_body(msg));
+        REQUIRE(std::string_view(p, 3) == "abc");
+
+        REQUIRE(backend.release() == nullptr);
+
+        auto buffer = backend.rawBuffer();
+        REQUIRE(buffer.size() == 0);
+    }
+}
+
+TEST_CASE("Flush buffer for nng backend") {
+    case_1: {
+        NngBackend backend(0);
+        REQUIRE(backend.rawBuffer().size() == 0);
+        backend.write("abc", 3);
+        backend.flush();
+
+        auto msg = backend.release();
+        auto actual_size = nng_msg_len(msg);
+        REQUIRE(actual_size == 3);
+
+        auto p = static_cast<const char*>(nng_msg_body(msg));
+        REQUIRE(std::string_view(p, 3) == "abc");
+
+        REQUIRE(backend.release() == nullptr);
+
+        auto buffer = backend.rawBuffer();
+        REQUIRE(buffer.size() == 0);
+    }    
+}
+
+TEST_CASE("Write after flush buffer for nng backend") {
+    case_1: {
+        NngBackend backend(0);
+        REQUIRE(backend.rawBuffer().size() == 0);
+        backend.write("abc", 3);
+        backend.flush();
+        backend.write("def", 3);
+
+        auto buffer = backend.rawBuffer();
+        auto actual = std::string_view(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+        REQUIRE(buffer.size() == 6);
+        REQUIRE(actual == "abcdef");
+    }    
+}
+
+TEST_CASE("Encode for nng backend") {
+    case_1: {
+        NngBackend backend;
+        auto encoder = CborEncoder(backend);
+
+        encoder.addUInt(42);
+        encoder.flush();
+
+        auto msg = backend.release();
+        auto actual_size = nng_msg_len(msg);
+        REQUIRE(actual_size == 2);
+
+        auto p = reinterpret_cast<const std::byte*>(nng_msg_body(msg));
+        auto actual = std::span<const std::byte>{ p, actual_size };
+        REQUIRE(to_vector(actual) == as_bytes(0x18, 0x2A));
+    }
+}
+
+#endif

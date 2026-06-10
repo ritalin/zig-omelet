@@ -5,7 +5,7 @@ const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
 const FilePath = core_types.FilePath;
 
-const c = @import("interop_c");
+const c = @import("omelet_c");
 
 pub const StructView = @import("./event_impl.zig").StructView;
 pub const EventPacket = @import("./event_impl.zig").EventPacket;

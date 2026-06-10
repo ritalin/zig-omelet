@@ -37,6 +37,7 @@ pub const test_support = @import("./supports/test_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(sockets);
-    std.testing.refAllDecls(sockets.Connection);
+
+    const run_catch2 = @import("test_runner").run_catch2;
+    try std.testing.expectEqual(0, try run_catch2(std.testing.io));
 }

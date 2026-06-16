@@ -13,7 +13,7 @@ namespace worker {
 
 class LogicalParameterVisitor: public duckdb::LogicalOperatorVisitor {
 public:
-    LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref, ZmqChannel& channel_ref): 
+    LogicalParameterVisitor(ParamNameLookup&& names_ref, BoundParamTypeHint&& type_hints_ref, NngChannel& channel_ref): 
         names(std::move(names_ref)), type_hints(std::move(type_hints_ref)), channel(channel_ref)
     {
     }
@@ -28,7 +28,7 @@ private:
     ParamNameLookup names;
     BoundParamTypeHint type_hints;
 private:
-    ZmqChannel& channel;
+    NngChannel& channel;
     std::unordered_multimap<PositionalParam, std::string> param_types;
     std::unordered_map<PositionalParam, ParamEntry> parameters;
     std::vector<std::string> user_type_names;
@@ -150,7 +150,7 @@ auto resolveParamType(
     ParamNameLookup&& name_lookup, 
     BoundParamTypeHint&& type_hints, 
     ParamExampleLookup&& examples,
-    ZmqChannel& channel) -> ParamResolveResult 
+    NngChannel& channel) -> ParamResolveResult 
 {
     LogicalParameterVisitor visitor(std::move(name_lookup), std::move(type_hints), channel);
     visitor.paramFromExample(examples);
@@ -255,14 +255,13 @@ auto runResolveParamType(
     
     auto binder = duckdb::Binder::CreateBinder(*conn.context);
     binder->SetCanContainNulls(true);
-    binder->parameters = &parameters;
-
 
     BoundResult bound_result;
     ResolveResult<ParamCollectionResult> walk_result;
     try {
         conn.BeginTransaction();
-        walk_result = walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
+        auto channel = NngChannel::unitTestChannel();
+        walk_result = walkSQLStatement(stmt, channel);
         bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.data.names, walk_result.data.examples);
         conn.Commit();
     }
@@ -271,7 +270,7 @@ auto runResolveParamType(
         throw;
     }
 
-    auto channel = ZmqChannel::unitTestChannel();
+    auto channel = NngChannel::unitTestChannel();
     auto [resolve_result, user_type_names, anon_types] = resolveParamType(
         bound_result.stmt.plan, 
         std::move(walk_result.data.names), 
@@ -362,7 +361,8 @@ auto runTransformQuery(std::string& sql, const std::vector<std::string>& schemas
 
     auto stmts = conn.ExtractStatements(sql);
     auto& stmt = stmts[0];
-    walkSQLStatement(stmt, ZmqChannel::unitTestChannel());
+    auto channel = NngChannel::unitTestChannel();
+    walkSQLStatement(stmt, channel);
 
     match_sql: {
         REQUIRE_THAT(stmt->ToString(), Equals(expect_sql));

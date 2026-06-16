@@ -208,9 +208,9 @@ extern "C" {
         delete reinterpret_cast<worker::Database *>(handle);
     }
 
-    auto loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len) -> WorkerResultCode {
+    auto loadSchema(DatabaseRef handle, Slice schema_dir_path) -> WorkerResultCode {
         auto db = reinterpret_cast<worker::Database *>(handle);
-        return db->loadSchemaAll(std::string(schema_dir_path, schema_dir_len));
+        return db->loadSchemaAll(std::string(schema_dir_path.ptr, schema_dir_path.len));
     }
 
     auto retainUserTypeName(DatabaseRef handle) -> WorkerResultCode {
@@ -406,7 +406,7 @@ TEST_CASE("Load schemas#2 (dependent inconsistency of user type)") {
         );
     )#");
 
-    std::string expect_err_schema(R"#(CREATE TABLE V(vis B NOT NULL);)#");
+    std::string expect_err_schema(R"#(CREATE TABLE V(vis "B" NOT NULL);)#");
 
     worker::Database db;
     auto conn = db.connect();

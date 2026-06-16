@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include <duckdb.hpp>
 
 #include <duckdb/planner/expression/list.hpp>
@@ -26,14 +28,17 @@ auto isArrayUserType(const duckdb::LogicalType &ty) -> bool {
 }
 
 auto isAliasUserType(const duckdb::LogicalType &ty) -> bool {
-    auto *ext_info = ty.AuxInfo();
+    auto ext_info = ty.AuxInfo();
     if (!ext_info) return false;
 
     return ext_info->type == duckdb::ExtraTypeInfoType::GENERIC_TYPE_INFO;
 }
 
 auto isPredefinedUserType(const duckdb::LogicalType &ty) -> bool {
-    return ty.id() == duckdb::LogicalTypeId::USER;
+    return (
+        ty.id() == duckdb::LogicalTypeId::STRUCT |
+        ty.id() == duckdb::LogicalTypeId::ENUM
+    );
 }
 
 auto userTypeName(const duckdb::LogicalType& ty) -> std::string {
@@ -51,10 +56,10 @@ auto resolveNameAnonymous(const std::optional<std::string>& field_name_opt, User
 }
 
 auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_name) -> UserTypeEntry {
-    auto *ext_info = ty.AuxInfo();
+    auto ext_info = ty.AuxInfo();
 
     std::vector<UserTypeEntry::Member> fields;
-    if (ext_info->type == duckdb::ExtraTypeInfoType::ENUM_TYPE_INFO) {
+    if (ext_info && (ext_info->type == duckdb::ExtraTypeInfoType::ENUM_TYPE_INFO)) {
         auto& enum_ext_info = ext_info->Cast<duckdb::EnumTypeInfo>();
         auto values = duckdb::FlatVector::GetData<duckdb::string_t>(enum_ext_info.GetValuesInsertOrder());
         auto size = enum_ext_info.GetDictSize();;
@@ -75,10 +80,10 @@ auto pickEnumUserType(const duckdb::LogicalType& ty, const std::string& type_nam
 static auto pickNestedUserTypeMember(const std::optional<std::string> field_name_opt, const duckdb::LogicalType &ty, std::vector<std::string>& user_type_names, std::vector<UserTypeEntry>& nested_anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry::Member;
 
 auto pickStructUserType(const duckdb::LogicalType& ty, const std::string& type_name, std::vector<std::string>& nested_user_types, std::vector<UserTypeEntry>& nested_anon_types, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry {
-    auto *ext_info = ty.AuxInfo();
+    auto ext_info = ty.AuxInfo();
 
     std::vector<UserTypeEntry::Member> fields;
-    if (ext_info->type == duckdb::ExtraTypeInfoType::STRUCT_TYPE_INFO) {
+    if (ext_info && (ext_info->type == duckdb::ExtraTypeInfoType::STRUCT_TYPE_INFO)) {
         auto& struct_ext_info = ext_info->Cast<duckdb::StructTypeInfo>();
 
         int numeric_field = 0;
@@ -153,17 +158,6 @@ static auto pickNestedUserTypeMember(
             std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = member_type.kind, .name = member_type.name, .fields = {}})
         );
     }
-    else if (isPredefinedUserType(ty)) {
-        // when create member of list/struct
-        auto& info = ty.AuxInfo()->Cast<duckdb::UserTypeInfo>();
-
-        user_type_names.push_back(info.user_type_name);
-
-        return UserTypeEntry::Member(
-            resolveNameAnonymous(field_name_opt, UserTypeKind::User, index),
-            std::make_shared<UserTypeEntry>(UserTypeEntry{.kind = UserTypeKind::User, .name = info.user_type_name, .fields = {}})
-        );
-    }
     else {
         return UserTypeEntry::Member(
             resolveNameAnonymous(field_name_opt, UserTypeKind::Primitive, index),
@@ -177,8 +171,9 @@ auto pickArrayUserType(
     std::vector<std::string>& user_type_names, 
     std::vector<UserTypeEntry>& anon_types,
     std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry {
-    auto *ext_info = ty.AuxInfo();
-        
+    auto ext_info = ty.AuxInfo();
+    assert(ext_info);
+
     UserTypeEntry::Member field;
 
     if (ext_info->type == duckdb::ExtraTypeInfoType::LIST_TYPE_INFO) {
@@ -241,7 +236,7 @@ auto userTypeKindAsText(UserTypeKind kind) -> std::string {
     }
 }
 
-auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void {
+auto encodeUserType(CborEncoder<VectorBackend>& encoder, const UserTypeEntry& entry) -> void {
     encoder.addArrayHeader(2);
     type_header: {
         type_kind: {

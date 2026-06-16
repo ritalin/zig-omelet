@@ -93,6 +93,7 @@ TEST_CASE("ResolveParam::Insert statement") {
         runResolveParamType(sql, {schema_1, schema_2}, lookup, bound_types, user_type_names, anon_types);
     }
     SECTION("conflict/index condition") {
+        SKIP("Indexed `ON CONFLICT DO NOTHING` is no longer supported");
         std::string schema_1("CREATE TABLE Point (z INTEGER PRIMARY KEY, x INTEGER UNIQUE, y INTEGER)");
         std::string sql(R"#(
             INSERT INTO Point

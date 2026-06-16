@@ -635,8 +635,8 @@ TEST_CASE("ResolveNullable::exists clause") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            { .binding = duckdb::ColumnBinding(22, 0), .nullable = {.from_field = false, .from_join = false} },
-            { .binding = duckdb::ColumnBinding(22, 1), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(25, 0), .nullable = {.from_field = false, .from_join = false} },
+            { .binding = duckdb::ColumnBinding(25, 1), .nullable = {.from_field = false, .from_join = false} },
         };
 
         runResolveSelectListNullability(sql, {schema_1, schema_2, schema_3}, expects);
@@ -906,11 +906,11 @@ TEST_CASE("ResolveNullable::table function") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 2), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 3), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 4), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 3), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 4), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -926,11 +926,11 @@ TEST_CASE("ResolveNullable::table function") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 2), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 3), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 4), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 3), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 4), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -955,9 +955,9 @@ TEST_CASE("ResolveNullable::table function") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(15, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(15, 1), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(15, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(16, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(16, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(16, 2), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -975,8 +975,8 @@ TEST_CASE("ResolveNullable::CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {schema}, expects);
@@ -991,8 +991,8 @@ TEST_CASE("ResolveNullable::CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(7, 0), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(7, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(9, 1), .nullable = {.from_field = false, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {schema}, expects);
@@ -1103,8 +1103,8 @@ TEST_CASE("ResolveNullable::Recursive CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(15, 0), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(15, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(18, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(18, 1), .nullable = {.from_field = false, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -1126,10 +1126,10 @@ TEST_CASE("ResolveNullable::Recursive CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(30, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(30, 1), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(30, 2), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(30, 3), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 3), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -1151,8 +1151,8 @@ TEST_CASE("ResolveNullable::Recursive CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(29, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(29, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(34, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(34, 1), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -1171,8 +1171,8 @@ TEST_CASE("ResolveNullable::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(17, 0), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(17, 1), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(18, 0), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(18, 1), .nullable = {.from_field = false, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -1194,10 +1194,10 @@ TEST_CASE("ResolveNullable::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(34, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(34, 1), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(34, 2), .nullable = {.from_field = true, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(34, 3), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 2), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(36, 3), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);
@@ -1219,8 +1219,8 @@ TEST_CASE("ResolveNullable::Recursive materialized CTE") {
         )#");
 
         std::vector<ColumnBindingPair> expects{
-            {.binding = duckdb::ColumnBinding(33, 0), .nullable = {.from_field = false, .from_join = false}},
-            {.binding = duckdb::ColumnBinding(33, 1), .nullable = {.from_field = true, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(34, 0), .nullable = {.from_field = false, .from_join = false}},
+            {.binding = duckdb::ColumnBinding(34, 1), .nullable = {.from_field = true, .from_join = false}},
         };
     
         runResolveSelectListNullability(sql, {}, expects);

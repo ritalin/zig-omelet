@@ -17,14 +17,14 @@ class CreateOperatorVisitor: public duckdb::LogicalOperatorVisitor {
 public:
     bool handled = false;
 public:
-    CreateOperatorVisitor(UserTypeEntry& entry_ref, std::vector<std::string>& user_types_ref, std::vector<UserTypeEntry>& anon_types_ref, ZmqChannel& channel_ref): 
+    CreateOperatorVisitor(UserTypeEntry& entry_ref, std::vector<std::string>& user_types_ref, std::vector<UserTypeEntry>& anon_types_ref, NngChannel& channel_ref): 
         channel(channel_ref), entry(entry_ref), nested_user_types(user_types_ref), nested_anon_types(anon_types_ref)
     {
     }
 public:
     auto VisitOperator(duckdb::unique_ptr<duckdb::LogicalOperator>& op) -> void;
 private:
-    ZmqChannel& channel;
+    NngChannel& channel;
     UserTypeEntry& entry;
     std::vector<std::string>& nested_user_types;
     std::vector<UserTypeEntry>& nested_anon_types;
@@ -100,7 +100,7 @@ auto CreateOperatorVisitor::VisitOperator(duckdb::unique_ptr<duckdb::LogicalOper
     }
 }
 
-auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeResult> {
+auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NngChannel& channel) -> std::optional<UserTypeResult> {
     UserTypeEntry entry{};
     std::vector<std::string> nested_user_types{};
     std::vector<UserTypeEntry> anon_types{};
@@ -158,7 +158,7 @@ static auto runResolveUserTypeInternal(const std::string& sql, const std::vector
         conn.BeginTransaction();
 
         auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), {}, {});
-        auto channel = ZmqChannel::unitTestChannel();
+        auto channel = NngChannel::unitTestChannel();
         result = resolveUserType(bound_result.stmt.plan, channel);
 
         conn.Commit();

@@ -562,11 +562,13 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string sql("select vis, id from Control");
 
         std::vector<ColumnEntry> expects{
-            {.field_name = "vis", .type_kind = UserTypeKind::User, .field_type = "Visibility", .nullable = false},
+            {.field_name = "vis", .type_kind = UserTypeKind::Enum, .field_type = "SelList::Enum#1", .nullable = false},
             {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
-        std::vector<std::string> user_type_names{"Visibility"};
-        std::vector<UserTypeEntry> anon_types{};
+        std::vector<std::string> user_type_names{};
+        std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Enum, .name = "SelList::Enum#1", .fields = {UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible")}}
+        };
 
         runBindStatement(sql, {schema_1, schema_2}, expects, user_type_names, anon_types);
     }
@@ -574,7 +576,7 @@ TEST_CASE("SelectList::user type (ENUM)") {
         std::string schema_1("CREATE TYPE Visibility as ENUM ('hide','visible')");
         std::string schema_2("CREATE TYPE Visibility2 as Visibility");
         std::string schema_3("CREATE TABLE Control (id INTEGER primary key, name VARCHAR not null, vis Visibility2 not null)");
-        std::string sql("select vis, id from Control");
+        std::string sql("select vis::Visibility2, id from Control");
 
         std::vector<ColumnEntry> expects{
             {.field_name = "vis", .type_kind = UserTypeKind::User, .field_type = "Visibility2", .nullable = false},
@@ -737,10 +739,13 @@ TEST_CASE("SelectList::user type (LIST)") {
             {.field_name = "child_visibles", .type_kind = UserTypeKind::Array, .field_type = "SelList::Array#1", .nullable = false},
             {.field_name = "id", .type_kind = UserTypeKind::Primitive, .field_type = "INTEGER", .nullable = false},
         };
-        std::vector<std::string> user_type_names{"Visibility"};
+        std::vector<std::string> user_type_names{};
         std::vector<UserTypeEntry> anon_types{
+            {.kind = UserTypeKind::Enum, .name = "Anon::Enum#2", .fields = {
+                UserTypeEntry::Member("hide"), UserTypeEntry::Member("visible"),
+            }},
             {.kind = UserTypeKind::Array, .name = "SelList::Array#1", .fields = {
-                UserTypeEntry::Member("Anon::User#2", std::make_shared<UserTypeEntry>(UserTypeEntry{ .kind = UserTypeKind::User, .name = "Visibility", .fields = {}}))
+                UserTypeEntry::Member("Anon::Enum#2")
             }},
         };
 

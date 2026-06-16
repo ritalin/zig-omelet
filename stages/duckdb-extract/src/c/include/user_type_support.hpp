@@ -47,6 +47,6 @@ auto pickArrayUserType(const duckdb::LogicalType &ty, const std::string& type_na
 auto isAliasUserType(const duckdb::LogicalType &ty) -> bool;
 auto pickAliasUserType(const duckdb::LogicalType &ty, const std::string& type_name, std::vector<std::string>& user_type_names, std::ranges::iterator_t<AnonymousCounter>& index) -> UserTypeEntry;
 
-auto encodeUserType(CborEncoder& encoder, const UserTypeEntry& entry) -> void;
+auto encodeUserType(CborEncoder<VectorBackend>& encoder, const UserTypeEntry& entry) -> void;
 
 }

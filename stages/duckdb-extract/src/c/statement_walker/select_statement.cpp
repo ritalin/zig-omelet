@@ -41,8 +41,9 @@ auto runTest(
     auto stmts = conn.ExtractStatements(sql);
     auto& stmt = stmts[0];
 
+    auto channel = NngChannel::unitTestChannel();
     auto param_result = 
-        ParameterCollector(evalParameterType(stmt), ZmqChannel::unitTestChannel())
+        ParameterCollector(evalParameterType(stmt), channel)
         .walkSelectStatement(stmt->Cast<duckdb::SelectStatement>())
     ;
 
@@ -715,7 +716,7 @@ TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
         SECTION("anonymous/select-list") {
             std::string sql("select $1::ENUM('hide', 'visible') as vis");
 
-            std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
+            std::string expected(R"#(SELECT CAST($1 AS "ENUM"('hide', 'visible')) AS vis)#");
             ParamNameLookup lookup{{"1", ParamLookupEntry("1")}};
             ParamExampleLookup examples{};
             
@@ -724,7 +725,7 @@ TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
         SECTION("predefined/select-list") {
             std::string sql("select $1::Visibility as vis");
 
-            std::string expected("SELECT CAST($1 AS Visibility) AS vis");
+            std::string expected(R"#(SELECT CAST($1 AS "Visibility") AS vis)#");
             ParamNameLookup lookup{{"1", ParamLookupEntry("1")}};
             ParamExampleLookup examples{};
             
@@ -735,7 +736,7 @@ TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
         SECTION("anonymous/select-list") {
             std::string sql("select $vis::ENUM('hide', 'visible') as vis");
 
-            std::string expected("SELECT CAST($1 AS ENUM('hide', 'visible')) AS vis");
+            std::string expected(R"#(SELECT CAST($1 AS "ENUM"('hide', 'visible')) AS vis)#");
             ParamNameLookup lookup{{"1", ParamLookupEntry("vis")}};
             ParamExampleLookup examples{};
             
@@ -744,7 +745,7 @@ TEST_CASE("SelectSQL::ENUM parameter/ENUM") {
         SECTION("predefined/select-list") {
             std::string sql("select $vis::Visibility as vis");
 
-            std::string expected("SELECT CAST($1 AS Visibility) AS vis");
+            std::string expected(R"#(SELECT CAST($1 AS "Visibility") AS vis)#");
             ParamNameLookup lookup{{"1", ParamLookupEntry("vis")}};
             ParamExampleLookup examples{};
             
@@ -868,7 +869,7 @@ TEST_CASE("SelectSQL::Materialized CTE") {
             select id, b, c, a from v
             cross join v2
         )#");
-        std::string expected("WITH v AS MATERIALIZED (SELECT Foo.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT CAST($3 AS VARCHAR) AS c)SELECT id, b, c, a FROM v , v2");
+        std::string expected("WITH v AS MATERIALIZED (SELECT Foo.id, CAST($1 AS VARCHAR) AS a FROM Foo CROSS JOIN (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT CAST($3 AS VARCHAR) AS c)SELECT id, b, c, a FROM v CROSS JOIN v2");
 
         ParamNameLookup lookup{{"1", ParamLookupEntry("a")}, {"2", ParamLookupEntry("b")}, {"3", ParamLookupEntry("c")}};
         ParamExampleLookup examples{};
@@ -890,7 +891,7 @@ TEST_CASE("SelectSQL::Materialized CTE") {
             select a, b from v2
         )#");
     
-        std::string expected("WITH v AS MATERIALIZED (SELECT Bar.id, CAST($1 AS VARCHAR) AS a FROM Foo , (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT id, b, a FROM v)SELECT a, b FROM v2");
+        std::string expected("WITH v AS MATERIALIZED (SELECT Bar.id, CAST($1 AS VARCHAR) AS a FROM Foo CROSS JOIN (SELECT CAST($2 AS INTEGER) AS b)), v2 AS MATERIALIZED (SELECT id, b, a FROM v)SELECT a, b FROM v2");
 
         ParamNameLookup lookup{{"1", ParamLookupEntry("a")}, {"2", ParamLookupEntry("b")}};
         ParamExampleLookup examples{};

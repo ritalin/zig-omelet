@@ -1,5 +1,4 @@
 #include <iostream>
-#include <zmq.h>
 
 #include <magic_enum/magic_enum.hpp>
 
@@ -11,86 +10,77 @@
 
 namespace worker {
 
-ZmqChannel::ZmqChannel(std::optional<void *> socket, const std::optional<size_t>& offset, const std::string& id, const std::string& from)
-    : socket(socket), stmt_offset(offset), id(id), from(from)
+NngChannel::NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string&& worker_phase): 
+    desc(desc),
+    stmt_offset(offset), 
+    worker_phase(worker_phase), 
+    messages({})
 {
-
 }
 
-static auto sendInternal(void *socket, const CWorkerResponseTag event_tag, const std::string& id, const std::string& from, const std::vector<char>& content) -> void;
-
-auto ZmqChannel::unitTestChannel() -> ZmqChannel {
-    return ZmqChannel(std::nullopt, std::nullopt, "", "unittest");
-}
-
-auto ZmqChannel::clone() -> ZmqChannel {
-    return ZmqChannel(this->socket, this->stmt_offset, this->id, this->from);
-}
-
-auto ZmqChannel::info(const std::string& message) -> void {
-    if (! this->socket) {
-        std::cout << std::format("log/level: info, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
-    }
-    else {
-        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::info, this->id, this->stmt_offset.value_or(0), message));
+NngChannel::~NngChannel() {
+    for (auto* raw_msg: this->messages) {
+        nng_msg_free(raw_msg);
     }
 }
 
-auto ZmqChannel::warn(const std::string& message) -> void {
-    if (! this->socket) {
-        std::cout << std::format("log/level: warn, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
-    }
-    else {
-        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::warn, this->id, this->stmt_offset.value_or(0), message));
-    }
+static const std::string_view TETS_SOURCE = "test";
+static const std::string_view TEST_DIALECT = "duckdb";
+static const std::string_view TETS_HASH = "deadbeef";
+static const SourceDescriptor TEST_DESC = {
+    .response_event_tag = 0,
+    .log_event_tag = 0,
+    .name = { .ptr = TETS_SOURCE.data(), .len = TETS_SOURCE.size() },
+    .dialect = { .ptr = TEST_DIALECT.data(), .len = TEST_DIALECT.size() },
+    .hash = { .ptr = TETS_HASH.data(), .len = TETS_HASH.size() },
+};
+
+auto NngChannel::unitTestChannel() -> NngChannel {
+    return NngChannel(TEST_DESC, std::nullopt, "unittest");
 }
 
-auto ZmqChannel::err(const std::string& message) -> void {
-    if (! this->socket) {
-        std::cout << std::format("log/level: err, message: {}, offset: {}", message, this->stmt_offset.value_or(0)) << std::endl;
-    }
-    else {
-        sendInternal(this->socket.value(), ::worker_log, this->id, this->from, encodeWorkerLog(LogLevel::err, this->id, this->stmt_offset.value_or(0), message));
-    }
+auto NngChannel::info(const std::string& message) -> void {
+    NngBackend backend;
+    auto encoder = CborEncoder(backend);
+    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::info, message);
+
+    this->messages.emplace_back(std::move(backend.release()));
 }
 
-auto ZmqChannel::sendWorkerResponse(CWorkerResponseTag event_tag, std::vector<char>&& content) -> void {
-    if (! this->socket) {
-        std::cout << std::format("worker_result/payload: `{}`", std::string(content.begin(), content.end())) << std::endl;
-    }
-    else {
-        sendInternal(this->socket.value(), event_tag, this->id, this->from, content);
-    }
+auto NngChannel::warn(const std::string& message) -> void {
+    NngBackend backend;
+    auto encoder = CborEncoder(backend);
+    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::warn, message);
+
+    this->messages.emplace_back(std::move(backend.release()));
 }
 
-static auto sendInternal(void *socket, const CWorkerResponseTag event_tag, const std::string& id, const std::string& from, const std::vector<char>& content) -> void {
-    event_type: {
-        auto event_type = std::string("worker_response");
-        ::zmq_send(socket, event_type.data(), event_type.length(), ZMQ_SNDMORE);    
-    }
-    packet_kind: {
-        ::zmq_send(socket, &::CPostPacketKind, 1, ZMQ_SNDMORE);    
-    }
-    from: {
-        ::zmq_send(socket, from.data(), from.length(), ZMQ_SNDMORE);    
-    }
-    payload: {
-        CborEncoder payload_encoder;
+auto NngChannel::err(const std::string& message) -> void {
+    NngBackend backend;
+    auto encoder = CborEncoder(backend);
+    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::err, message);
 
-        event_tag: {
-            payload_encoder.addString(magic_enum::enum_name(event_tag));
-        }
-        work_id: {
-            payload_encoder.addString(id);
-        }
-        content: {
-            payload_encoder.concatBinary(content);
-        }
+    this->messages.emplace_back(std::move(backend.release()));
+}
 
-        auto encode_result = payload_encoder.build();
-        ::zmq_send(socket, encode_result.data(), encode_result.size(), ZMQ_SNDMORE);    
-        ::zmq_send(socket, "", 0, 0);    
-    }
+auto NngChannel::makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string&, const SourceDescriptor&, size_t)> callback) -> void {
+    NngBackend backend;
+    auto encoder = CborEncoder(backend);
+
+    callback(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0));
+
+    this->messages.emplace_back(std::move(backend.release()));
+}
+
+auto NngChannel::collectInto(std::vector<nng_msg*>& messages) -> void {
+    messages.reserve(messages.size() + this->messages.size());
+
+    messages.insert(
+        messages.end(),
+        std::make_move_iterator(this->messages.begin()),
+        std::make_move_iterator(this->messages.end())
+    );
+    this->messages.clear();
 }
 
 }

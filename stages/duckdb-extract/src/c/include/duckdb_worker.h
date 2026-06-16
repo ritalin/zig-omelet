@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <nng/nng.h>
 
 typedef enum {
     no_error = 0,
@@ -24,10 +25,10 @@ typedef enum {
 
 // worker event tag
 typedef enum {
-    worker_progress,
+    // worker_progress,
     worker_result,
-    worker_finished,
-    worker_log,
+    // worker_finished,
+    // worker_log,
     worker_skipped,
 } CWorkerResponseTag;
 
@@ -38,18 +39,36 @@ extern "C" {
 typedef struct OpaqueDatabase *DatabaseRef;
 typedef struct OpaqueCollector *CollectorRef;
 
+typedef struct Slice_ {
+    const char* ptr;
+    size_t len;
+} Slice;
+
+typedef struct SourceDescriptor_ {
+    uint8_t response_event_tag;
+    uint8_t log_event_tag;
+    Slice name;
+    Slice dialect;
+    Slice hash;
+} SourceDescriptor;
+
+
 int32_t initDatabase(DatabaseRef *handle);
 void deinitDatabase(DatabaseRef handle);
-WorkerResultCode loadSchema(DatabaseRef handle, const char *schema_dir_path, size_t schema_dir_len);
+WorkerResultCode loadSchema(DatabaseRef handle, Slice schema_dir_path);
 WorkerResultCode retainUserTypeName(DatabaseRef handle);
 
-int32_t initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle);
+int32_t initSourceCollector(DatabaseRef db_ref, Slice stage, SourceDescriptor desc, CollectorRef *handle);
 void deinitSourceCollector(CollectorRef handle);
-WorkerResultCode executeDescribe(CollectorRef handle, const char *query, size_t query_len);
+WorkerResultCode executeDescribe(CollectorRef handle, Slice query);
+size_t getDescribeResultCount(CollectorRef handle);
+nng_msg* getDescribeResult(CollectorRef handle, size_t index);
 
-int32_t initUserTypeCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle);
+int32_t initUserTypeCollector(DatabaseRef db_ref, Slice stage, SourceDescriptor desc, CollectorRef *handle);
 void deinitUserTypeCollector(CollectorRef handle);
-WorkerResultCode describeUserType(CollectorRef handle, const char *query, size_t query_len);
+WorkerResultCode describeUserType(CollectorRef handle, Slice query);
+size_t getUserTypeResultCount(CollectorRef handle);
+nng_msg* getUserTypeResult(CollectorRef handle, size_t index);
 
 #ifdef __cplusplus
 }

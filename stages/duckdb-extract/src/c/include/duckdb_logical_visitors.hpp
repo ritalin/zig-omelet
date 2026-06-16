@@ -12,7 +12,7 @@ public:
     using Rel = duckdb::idx_t;
     using ConditionRels = std::map<ColumnNullableLookup::Column, ColumnNullableLookup::Column>;
 public:
-     JoinTypeVisitor(ColumnNullableLookup& lookup, ColumnNullableLookup& parent_lookup_ref, SampleNullableCache& sample_cache_ref, duckdb::Connection& conn_ref, ZmqChannel& channel): 
+     JoinTypeVisitor(ColumnNullableLookup& lookup, ColumnNullableLookup& parent_lookup_ref, SampleNullableCache& sample_cache_ref, duckdb::Connection& conn_ref, NngChannel& channel): 
         channel(channel), conn(conn_ref), join_type_lookup(lookup), parent_lookup(parent_lookup_ref), sample_cache(sample_cache_ref)
     {
     }
@@ -27,7 +27,7 @@ private:
     auto VisitOperatorJoinInternal(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, duckdb::JoinType ty_right, ConditionRels&& rels) -> void;
     auto VisitOperatorCondition(duckdb::LogicalOperator &op, duckdb::JoinType ty_left, const ConditionRels& rels) -> ColumnNullableLookup;
 private:
-    ZmqChannel& channel;
+    NngChannel& channel;
     duckdb::Connection& conn;
     ColumnNullableLookup& join_type_lookup;
     ColumnNullableLookup& parent_lookup;
@@ -39,6 +39,8 @@ public:
     static auto Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string;
 protected:
     auto VisitReplace(duckdb::BoundConstantExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+    auto VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
+    auto VisitReplace(duckdb::BoundCastExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression>;
 private:
     std::string column_name;
 };

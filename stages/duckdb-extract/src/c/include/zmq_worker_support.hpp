@@ -4,26 +4,29 @@
 #include <string>
 
 #include "duckdb_worker.h"
+#include "cbor_encode.hpp"
 
 namespace worker {
 
-class ZmqChannel {
+class NngChannel {
 public:
-    ZmqChannel(std::optional<void *> socket, const std::optional<size_t>& offset, const std::string& id, const std::string& from);
+    NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string&& worker_phase);
+    ~NngChannel();
 public:
-    static auto unitTestChannel() -> ZmqChannel;
-    auto clone() -> ZmqChannel;
+    static auto unitTestChannel() -> NngChannel;
 public:
-    auto sendWorkerResponse(CWorkerResponseTag event_tag, std::vector<char>&& content) -> void;
+    auto makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string&, const SourceDescriptor&, size_t)> callback) -> void;
 public:
     auto info(const std::string& message) -> void;
     auto warn(const std::string& message) -> void;
     auto err(const std::string& message) -> void;
+public:
+    auto collectInto(std::vector<nng_msg*>& messages) -> void;
 private:
-    std::optional<void *> socket;
-    std::optional<size_t> stmt_offset;
-    std::string id;
-    std::string from;
+    const SourceDescriptor& desc;
+    const std::optional<size_t> stmt_offset;
+    const std::string worker_phase;
+    std::vector<nng_msg*> messages;
 };
 
 }

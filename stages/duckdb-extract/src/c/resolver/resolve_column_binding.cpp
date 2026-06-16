@@ -7,7 +7,7 @@
 #include <duckdb/planner/operator/logical_projection.hpp>
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/parser/constraints/not_null_constraint.hpp>
-#include <duckdb/planner/bound_tableref.hpp>
+// #include <duckdb/planner/bound_tableref.hpp>
 
 #include "duckdb_logical_visitors.hpp"
 #include "duckdb_nullable_lookup.hpp"

@@ -23,6 +23,12 @@ typedef enum {
 
 const unsigned char CPostPacketKind = 1;
 
+// worker event tag
+typedef enum {
+    worker_result,
+    worker_skipped,
+} CWorkerResponseTag;
+
 #ifdef __cplusplus
 }
 #endif

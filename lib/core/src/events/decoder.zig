@@ -73,7 +73,26 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .pending_finish_source_path => return .pending_finish_source_path,
         .finish_source_path => return .finish_source_path,
         // Topic body event
-        .ready_topic_body => return .ready_topic_body,
+        .ready_topic_body => {
+            const desc: Event.Payload.SourceDescriptor = .init(try reader.readTuple(StructView(Event.Payload.SourceDescriptor)));
+            const hash = try reader.readString();
+            const response: Event.Payload.TopicBodyResponse.Result = response: {
+                switch (try reader.readEnum(events.ResponseTag)) {
+                    .success => {
+                        const len =  try reader.readSliceHeader();
+                        const topics = try allocator.alloc( Event.Payload.TopicBodyResponse.Encoded, len);
+                        for (0..len) |i| {
+                            topics[i] = .init(try reader.readTuple(StructView(Event.Payload.TopicBodyResponse.Encoded)));
+                        }
+                        break:response .{.success = topics };
+                    },
+                    .skipped => break:response .skipped,
+                }
+            };
+            const payload: Event.Payload.TopicBodyResponse = .{ .desc = desc, .hash = hash, .response = response };
+
+            return .{.ready_topic_body = payload};
+        },
         .topic_body => {
             const header = try reader.readTuple(StructView(Event.Payload.SourcePath));
             const item_index = try reader.readUInt(usize);
@@ -133,7 +152,7 @@ pub fn decodeSubscription(data: types.Symbol) !types.Symbol {
     return reader.readString();
 }
 
-test "dencoder/decoder" {
+test "encoder/decoder" {
     std.testing.refAllDecls(@This());
 }
 
@@ -149,9 +168,24 @@ pub const tests = struct {
 
         const heartbeat = Event.Payload.Heartbeat.init(.{ .probe, 1 });
         const topic = Event.Payload.Topic.init(.{ .source, &.{"topic_a", "topic_b", "topic_c"} });
-        const source_path = Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "duckdb", "Some-content", 1 });
+        var source_path = Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "duckdb", "Some-content", 1 });
         defer source_path.deinit(allocator);
-        const topic_body = try Event.Payload.TopicBody.init(allocator,
+        const topic_body_response_success: Event.Payload.TopicBodyResponse = .{
+            .desc = Event.Payload.SourceDescriptor.init(.{ "path/to/name", "duckdb", 0 }),
+            .hash = "deadbeaf",
+            .response = .{
+                .success = &.{
+                    Event.Payload.TopicBodyResponse.Encoded.init(.{"topic_a", "0x123456789"}), 
+                    Event.Payload.TopicBodyResponse.Encoded.init(.{"topic_b", "0x987654321"}),
+                }
+            },
+        };
+        const topic_body_response_skip: Event.Payload.TopicBodyResponse = .{
+            .desc = Event.Payload.SourceDescriptor.init(.{ "path/to/name", "duckdb", 0 }),
+            .hash = "deadbeaf",
+            .response = .skipped,
+        };
+        var topic_body = try Event.Payload.TopicBody.init(allocator,
             .{ source_path.category, source_path.name, source_path.path, source_path.dialect, source_path.hash, 2 },
             &.{
                 .{ "topic_a", "topic_a_content" },
@@ -167,7 +201,7 @@ pub const tests = struct {
         defer skip_topic_body.deinit(allocator);
         const worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"});
         defer worker_response.deinit();
-        const log = Event.Payload.Log.init(.{.debug, "Test message😃"});
+        var log = Event.Payload.Log.init(.{.debug, "Test message😃"});
         defer log.deinit();
 
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });
@@ -185,7 +219,8 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.source_path), .stage_name = test_context, .event = .{.source_path = source_path} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_source_path), .stage_name = test_context, .event = .finish_source_path });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.pending_finish_source_path), .stage_name = test_context, .event = .pending_finish_source_path });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_topic_body), .stage_name = test_context, .event = .ready_topic_body });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_topic_body), .stage_name = test_context, .event = .{.ready_topic_body = topic_body_response_success} });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_topic_body), .stage_name = test_context, .event = .{.ready_topic_body = topic_body_response_skip} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.topic_body), .stage_name = test_context, .event = .{.topic_body = topic_body} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.skip_topic_body), .stage_name = test_context, .event = .{.skip_topic_body = skip_topic_body} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_topic_body), .stage_name = test_context, .event = .finish_topic_body });
@@ -199,7 +234,7 @@ pub const tests = struct {
         var reader = CborStream.Reader.createFromSlice(buffer.written());
 
         ack: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ack, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ack);
@@ -208,7 +243,7 @@ pub const tests = struct {
             break:ack;
         }
         nack: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.nack, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.nack);
@@ -217,7 +252,7 @@ pub const tests = struct {
             break:nack;
         }
         heartbeat: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.heartbeat, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.heartbeat);
@@ -226,7 +261,7 @@ pub const tests = struct {
             break:heartbeat;
         }
         probe_launching: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.probe, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.probe);
@@ -235,7 +270,7 @@ pub const tests = struct {
             break:probe_launching;
         }
         launching: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.launching, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.launching);
@@ -244,7 +279,7 @@ pub const tests = struct {
             break:launching;
         }
         launched: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.launched, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.launched);
@@ -253,7 +288,7 @@ pub const tests = struct {
             break:launched;
         }
         failure_launching: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.failed_launching, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.failed_launching);
@@ -262,7 +297,7 @@ pub const tests = struct {
             break:failure_launching;
         }
         topic: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.topic, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.topic);
@@ -271,7 +306,7 @@ pub const tests = struct {
             break:topic;
         }
         finish_topic: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.finish_topic, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.finish_topic);
@@ -280,7 +315,7 @@ pub const tests = struct {
             break:finish_topic;
         }
         ready: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ready, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ready);
@@ -289,7 +324,7 @@ pub const tests = struct {
             break:ready;
         }
         ready_progress: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ready_progress, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ready_progress);
@@ -298,7 +333,7 @@ pub const tests = struct {
             break:ready_progress;
         }
         ready_source_path: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ready_source_path, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ready_source_path);
@@ -307,7 +342,7 @@ pub const tests = struct {
             break:ready_source_path;
         }
         source_path: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.source_path);
@@ -316,7 +351,7 @@ pub const tests = struct {
             break:source_path;
         }
         finish_source_path: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.finish_source_path, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.finish_source_path);
@@ -325,7 +360,7 @@ pub const tests = struct {
             break:finish_source_path;
         }
         pending_finish_source_path: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.pending_finish_source_path, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.pending_finish_source_path);
@@ -333,17 +368,26 @@ pub const tests = struct {
             try std.testing.expectEqualDeep({}, packet.event.pending_finish_source_path);
             break:pending_finish_source_path;
         }
-        ready_topic_body: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+        ready_topic_body_success: {
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ready_topic_body, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ready_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.ready_topic_body);
-            break:ready_topic_body;
+            try std.testing.expectEqualDeep(topic_body_response_success, packet.event.ready_topic_body);
+            break:ready_topic_body_success;
+        }
+        ready_topic_body_skip: {
+            var packet = try decodeFromCborInternal(allocator, &reader);
+            defer packet.event.deinit(allocator);
+            try std.testing.expectEqual(.ready_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual({}, packet.header.ready_topic_body);
+            try std.testing.expectEqualStrings(test_context, packet.stage_name);
+            try std.testing.expectEqualDeep(topic_body_response_skip, packet.event.ready_topic_body);
+            break:ready_topic_body_skip;
         }
         topic_body: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.topic_body, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.topic_body);
@@ -352,7 +396,7 @@ pub const tests = struct {
             break:topic_body;
         }
         skip_topic_body: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.skip_topic_body, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.skip_topic_body);
@@ -361,7 +405,7 @@ pub const tests = struct {
             break:skip_topic_body;
         }
         finish_topic_body: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.finish_topic_body, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.finish_topic_body);
@@ -370,7 +414,7 @@ pub const tests = struct {
             break:finish_topic_body;
         }
         pending_finish_topic_body: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.pending_finish_topic_body, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.pending_finish_topic_body);
@@ -379,7 +423,7 @@ pub const tests = struct {
             break:pending_finish_topic_body;
         }
         ready_generate: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.ready_generate, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.ready_generate);
@@ -388,7 +432,7 @@ pub const tests = struct {
             break:ready_generate;
         }
         finish_generate: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.finish_generate, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.finish_generate);
@@ -397,7 +441,7 @@ pub const tests = struct {
             break:finish_generate;
         }
         worker_response: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.worker_response, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.worker_response);
@@ -406,7 +450,7 @@ pub const tests = struct {
             break:worker_response;
         }
         quit: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.quit, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.quit);
@@ -415,7 +459,7 @@ pub const tests = struct {
             break:quit;
         }
         log: {
-            const packet = try decodeFromCborInternal(allocator, &reader);
+            var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
             try std.testing.expectEqual(.log, std.meta.activeTag(packet.header));
             try std.testing.expectEqual({}, packet.header.log);

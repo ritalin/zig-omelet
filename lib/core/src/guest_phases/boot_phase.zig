@@ -7,10 +7,14 @@ const ReceiveEntry = root.sockets.ReceiveEntry;
 const EventDispatcher = root.sockets.EventDispatcher;
 
 pub fn BootPhaseState(comptime GuestStage: type) type {
+    const VTable = @import("./phase_handler.zig").VTable(GuestStage);
+
     return struct {
+        vtable: VTable,
+
         const Self = @This();
 
-        pub const init: Self = .{};
+        pub const init: Self = .{ .vtable = .{} };
         pub fn deinit(_: *Self) void {}
 
         pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
@@ -21,6 +25,14 @@ pub fn BootPhaseState(comptime GuestStage: type) type {
                 .probe => |phase| {
                     if ((phase == .launching) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .launching, .agreement = .pending}))) {
                         var channel = try stage.connection.requestChannel();
+
+                        if (self.vtable.on_prepare) |on_prepare| {
+                            on_prepare(stage) catch {
+                                try stage.dispatcher.queue.post(.failed_launching, try stage.connection.dataChannel());
+                                return;
+                            };
+                        }
+
                         channel.submit(stage.connection.context.io, .launched, .{}) catch {
                             try stage.dispatcher.queue.post(.failed_launching, try stage.connection.dataChannel());
                             return;

@@ -82,7 +82,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                         .none => {
                             entry.deinit(self.queue.allocator);
                         },
-                        .skipped => {
+                        .delayed => {
                             try skip_entries.append(self.queue.allocator, entry);
                         },
                         .unhandled => {
@@ -274,7 +274,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
     };
 }
 
-pub const DirtyState = enum { none, skipped, unhandled };
+pub const DirtyState = enum { none, delayed, unhandled };
 
 pub const Options = struct {
     log_style: root.Logger.LogStyle = .stderr,

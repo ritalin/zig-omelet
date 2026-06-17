@@ -269,6 +269,9 @@ auto NngBackend::flush() -> void {
     }
 }
 
+template class CborEncoder<NngBackend>;
+template class CborEncoder<VectorBackend>;
+
 #ifndef DISABLE_CATCH2_TEST
 
 // -------------------------

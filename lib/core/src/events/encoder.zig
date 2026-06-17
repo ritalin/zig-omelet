@@ -67,7 +67,23 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         .finish_source_path => {},
 
         // Topic body event
-        .ready_topic_body => {},
+        .ready_topic_body => |payload| {
+            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.desc.values());
+            _ = try writer.writeString(payload.hash);
+
+            switch (payload.response) {
+                .success => |results| {
+                    _ = try writer.writeEnum(events.ResponseTag, .success);
+                    _ = try writer.writeSliceHeader(results.len);
+                    for (results) |encoded_data| {
+                        _ = try writer.writeTuple(StructView(Event.Payload.TopicBodyResponse.Encoded), encoded_data.values());
+                    }
+                },
+                .skipped => {
+                    _ = try writer.writeEnum(events.ResponseTag, .skipped);
+                }
+            }
+        },
         .topic_body => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.header.values());
             _ = try writer.writeUInt(usize, payload.index);

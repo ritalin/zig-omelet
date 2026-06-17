@@ -3,6 +3,7 @@ const std = @import("std");
 const core_types = @import("../types.zig");
 const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
+const BinaryData = core_types.BinaryData;
 const FilePath = core_types.FilePath;
 
 const c = @import("omelet_c");
@@ -93,10 +94,10 @@ pub const EventType = enum (u8) {
     source_path,
     pending_finish_source_path, //TODO:Deprecated?
     finish_source_path,
-
     // Topic body event
     ready_topic_body,
     topic_body,
+
     skip_topic_body,
     pending_finish_topic_body,
     finish_topic_body,
@@ -123,19 +124,24 @@ pub const TopicCategory = enum {
     schema,
 };
 
+pub const ResponseTag = enum(u8) {
+    success = c.worker_result,
+    skipped = c.worker_skipped,
+};
+
 const EventPayload = struct {
     pub const Heartbeat = struct {
         event_type: EventType,
         count: u64,
 
-        pub fn init(view: StructView(Heartbeat)) @This() {
+        pub fn init(view: StructView(Heartbeat)) Heartbeat {
             return .{
                 .event_type = view[0],
                 .count = view[1],
             };
         }
-        pub fn deinit(_: @This(), _: std.mem.Allocator) void {}
-        pub fn values(self: @This()) StructView(Heartbeat) {
+        pub fn deinit(_: *Heartbeat, _: std.mem.Allocator) void {}
+        pub fn values(self: *const Heartbeat) StructView(Heartbeat) {
             return .{ self.event_type, self.count };
         }
     };
@@ -144,18 +150,56 @@ const EventPayload = struct {
         category: TopicCategory,
         names: []const Symbol,
 
-        pub fn init(view: StructView(Topic)) @This() {
+        pub fn init(view: StructView(Topic))Topic {
             return .{
                 .category = view[0],
                 .names = view[1],
             };
         }
-        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *Topic, allocator: std.mem.Allocator) void {
             allocator.free(self.names);
         }
-        pub fn values(self: @This()) StructView(Topic) {
+        pub fn values(self: *const Topic) StructView(Topic) {
             return .{ self.category, self.names };
         }
+    };
+
+    pub const TopicBodyResponse = struct {
+        desc: SourceDescriptor,
+        hash: Symbol,
+        response: Result,
+
+        pub fn deinit(self: *TopicBodyResponse, allocator: std.mem.Allocator) void {
+            self.response.deinit(allocator);
+        }
+
+        pub const Result = union(ResponseTag) {
+            success: []const Encoded,
+            skipped: void,
+
+            pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+                switch (self.*) {
+                    .success => |slice| allocator.free(slice),
+                    .skipped => {},
+                }
+            }
+        };
+
+        pub const Encoded = struct {
+            topic: Symbol,
+            data: BinaryData,
+
+            pub fn init(view: StructView(TopicBodyResponse.Encoded)) TopicBodyResponse.Encoded {
+                return .{
+                    .topic = view[0],
+                    .data = view[1],
+                };
+            }
+
+            pub fn values(self: *const Encoded) StructView(TopicBodyResponse.Encoded) {
+                return .{ self.topic, self.data };
+            }
+        };
     };
 
     pub const TopicBody = struct {
@@ -183,22 +227,9 @@ const EventPayload = struct {
 
             return self.*;
         }
-        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             self.header.deinit(allocator);
             allocator.free(self.bodies);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            const new_bodies = try allocator.alloc(Item, self.bodies.len);
-            for (self.bodies, 0..) |item, i| {
-                new_bodies[i] = try Item.init(allocator, item.values());
-            }
-
-            return .{
-                .allocator = allocator,
-                .header = try SourcePath.init(allocator, self.header.values()),
-                .index = self.index,
-                .bodies = new_bodies,
-            };
         }
         pub fn values(self: @This()) struct{StructView(SourcePath), usize, []const Item} {
             return .{ self.header.values(), self.index, self.bodies };
@@ -224,6 +255,7 @@ const EventPayload = struct {
         };
     };
 
+    // TODO: Deprecate
     pub const SkipTopicBody = struct {
         header: SourcePath,
         index: usize,
@@ -251,7 +283,7 @@ const EventPayload = struct {
         hash: Symbol,
         item_count: usize,
 
-        pub fn init(view: StructView(SourcePath)) @This() {
+        pub fn init(view: StructView(SourcePath)) SourcePath {
             return .{
                 .category = view[0],
                 .name = view[1],
@@ -261,16 +293,32 @@ const EventPayload = struct {
                 .item_count = view[5],
             };
         }
-        pub fn deinit(_: @This(), _: std.mem.Allocator) void {}
+        pub fn deinit(_: *SourcePath, _: std.mem.Allocator) void {}
 
-        pub fn clone(self: @This(), _: std.mem.Allocator) !@This() {
-            return init(self.values());
-        }
-        pub fn values(self: @This()) StructView(@This()) {
+        pub fn values(self: *const SourcePath) StructView(SourcePath) {
             return .{ self.category, self.name, self.path, self.dialect, self.hash, self.item_count };
         }
     };
 
+    pub const SourceDescriptor = struct {
+        name: Symbol,
+        dialect: Symbol,
+        offset: usize,
+
+        pub fn init(view: StructView(SourceDescriptor)) SourceDescriptor {
+            return .{
+                .name = view[0],
+                .dialect = view[1],
+                .offset = view[2],
+            };
+        }
+
+        pub fn values(self: *const SourceDescriptor) StructView(SourceDescriptor) {
+            return .{ self.name, self.dialect, self.offset };
+        }
+    };
+
+    // TODO: Deprecate
     pub const WorkerResponse = struct {
         allocator: std.mem.Allocator,
         content: Symbol,
@@ -296,17 +344,14 @@ const EventPayload = struct {
         level: LogLevel,
         content: Symbol,
 
-        pub fn init(view: StructView(Log)) @This() {
+        pub fn init(view: StructView(Log)) Log {
             return .{
                 .level = view[0],
                 .content = view[1],
             };
         }
-        pub fn deinit(_: @This()) void {}
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.values());
-        }
-        pub fn values(self: @This()) StructView(@This()) {
+        pub fn deinit(_: *Log) void {}
+        pub fn values(self: *const Log) StructView(Log) {
             return .{ self.level, self.content };
         }
     };
@@ -347,7 +392,7 @@ pub const Event = union(EventType) {
     pending_finish_source_path: void,
     finish_source_path: void,
     // Topic body events
-    ready_topic_body: void,
+    ready_topic_body: Payload.TopicBodyResponse,
     topic_body: Payload.TopicBody,
     skip_topic_body: Payload.SkipTopicBody,
     pending_finish_topic_body: void,
@@ -367,8 +412,8 @@ pub const Event = union(EventType) {
     pub const deinit = deinitEvent;
 };
 
-fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
-    switch (event) {
+fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
+    switch (event.*) {
         // Response events
         .ack => {},
         .nack => {},
@@ -380,20 +425,20 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .launched => {},
         .failed_launching => {},
         // Topic request phase event
-        .topic => |data| data.deinit(allocator),
+        .topic => |*data| data.deinit(allocator),
         .finish_topic => {},
         // Ready phase event
         .ready => {},
         .ready_progress => {},
         // Source path event
         .ready_source_path => {},
-        .source_path => |data| data.deinit(allocator),
+        .source_path => |*data| data.deinit(allocator),
         .pending_finish_source_path => {},
         .finish_source_path => {},
 
         // Topic body events
-        .ready_topic_body => {},
-        .topic_body => |data| data.deinit(allocator),
+        .ready_topic_body => |*data| data.deinit(allocator),
+        .topic_body => |*data| data.deinit(allocator),
         .skip_topic_body => |data| data.deinit(allocator),
         .pending_finish_topic_body => {},
         .finish_topic_body => {},
@@ -404,8 +449,8 @@ fn deinitEvent(event: Event, allocator: std.mem.Allocator) void {
         .worker_response => |data| data.deinit(),
         // Other events
         .quit => {},
-        .log => |data| data.deinit(),
-        .report_fatal => |data| data.deinit(),
+        .log => |*data| data.deinit(),
+        .report_fatal => |*data| data.deinit(),
         .pending_fatal_quit => {},
     }
 }

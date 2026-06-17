@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const server = @import("sockets/connections/server.zig");
+
+// comptime {
+//     _ = @import("./sockets/connections/server.zig").Server;
+// }
+
 pub const types = @import("./types.zig");
 pub const events = @import("./events/event_types.zig");
 
@@ -37,7 +43,8 @@ pub const test_support = @import("./supports/test_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(sockets);
 
     const run_catch2 = @import("test_runner").run_catch2;
-    try std.testing.expectEqual(0, try run_catch2(std.testing.io));
+    try std.testing.expectEqual(0, try run_catch2(std.testing.io, std.testing.allocator, .{}));
 }

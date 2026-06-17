@@ -4,16 +4,12 @@
 
 extern "C" {
 
-auto run_catch2_test(const char *redirect_path) -> int {
+auto run_catch2_test(const char *redirect_path, int argc, char const * const * argv) -> int {
     std::ofstream out(redirect_path);
     std::streambuf* coutbuf = std::cout.rdbuf(); 
-    std::cout.rdbuf(out.rdbuf()); 
-
-    int argc = 1;
-    const char* argv[] = { "your_program_name" };
+    std::cout.rdbuf(out.rdbuf());
 
     Catch::Session session;
-
     session.applyCommandLine(argc, argv);
 
     auto result = session.run();

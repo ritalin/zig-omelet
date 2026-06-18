@@ -3,7 +3,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "duckdb_worker.h"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "response_encode_support.hpp"
 #include "omelet_c_types.h"
@@ -12,7 +12,8 @@ namespace worker {
 
 NngChannel::NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string&& worker_phase): 
     desc(desc),
-    stmt_offset(offset), 
+    stmt_offset(offset),
+    
     worker_phase(worker_phase), 
     messages({})
 {

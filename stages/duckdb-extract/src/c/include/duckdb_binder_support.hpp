@@ -3,7 +3,7 @@
 #include <duckdb.hpp>
 #include <duckdb/parser/expression/cast_expression.hpp>
 
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "duckdb_nullable_lookup.hpp"
 #include "user_type_support.hpp"
 

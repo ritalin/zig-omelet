@@ -38,7 +38,12 @@ auto encodeStatementOffset(
     encodeResponseHeader(encoder, desc.response_event_tag, worker_phase);
     encodeSourceDescriptor(encoder, desc, offset);
     
-    encoder.addUInt(::worker_skipped);
+    stmt_name_alt: {
+        encoder.addNull();
+    }
+    response: {
+        encoder.addUInt(::worker_skipped);
+    }
     encoder.flush();
 }
 
@@ -53,8 +58,6 @@ auto encodeTopicBody(
     encodeResponseHeader(encoder, desc.response_event_tag, worker_phase);
     encodeSourceDescriptor(encoder, desc, offset);
 
-    encoder.addUInt(::worker_result);
-
     stmt_name_alt: {
         if (name_alt) {
             encoder.addString(name_alt.value());
@@ -63,14 +66,14 @@ auto encodeTopicBody(
             encoder.addNull();
         }
     }
-    topic_body: {
+    response: {
+        encoder.addUInt(::worker_result);
         encoder.addArrayHeader(topic_bodies.size());
 
-        for (auto [topic, payload]: topic_bodies) {
+        for (auto& [topic, payload]: topic_bodies) {
             encoder.addBinaryPair(std::string(topic), payload.rawBuffer());
         }
     }
-
     encoder.flush();
 }
 

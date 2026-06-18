@@ -22,7 +22,7 @@
 #include "duckdb_params_collector.hpp"
 
 #include "duckdb_binder_support.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "response_encode_support.hpp"
 
@@ -293,14 +293,15 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
 
         std::ranges::sort(param_type_result.params, {}, &ParamEntry::sort_order);
 
-        std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies({
-            {topic_query, encodeQuery(q)},
-            {topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))},
-            {topic_placeholder, encodePlaceholder(param_type_result.params)},
-            {topic_placeholder_order, encodePlaceholderOrder(param_type_result.params)},
-            {topic_select_list, encodeSelectList(std::move(column_type_result.columns))},
-            {topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
-        });
+        std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies;
+        {
+            topic_bodies.emplace(topic_query, encodeQuery(q));
+            topic_bodies.emplace(topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types)));
+            topic_bodies.emplace(topic_placeholder, encodePlaceholder(param_type_result.params));
+            topic_bodies.emplace(topic_placeholder_order, encodePlaceholderOrder(param_type_result.params));
+            topic_bodies.emplace(topic_select_list, encodeSelectList(std::move(column_type_result.columns)));
+            topic_bodies.emplace(topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names)));
+        }
         channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto offset){
             encodeTopicBody(encoder, stage, desc, offset, stmt_name, topic_bodies);
         });

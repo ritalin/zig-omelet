@@ -6,7 +6,7 @@
 
 #include "duckdb_worker.h"
 #include "duckdb_database.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "duckdb_binder_support.hpp"
 #include "response_encode_support.hpp"
@@ -170,11 +170,12 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
         send: {
             if (result) {
                 send_user_type: {
-                    std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies({
-                        {topic_user_type, encodeUserType(result.value().entry)},
-                        {topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types))},
-                        {topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names))}
-                    });
+                    std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies;
+                    {
+                        topic_bodies.emplace(topic_user_type, encodeUserType(result.value().entry));
+                        topic_bodies.emplace(topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types)));
+                        topic_bodies.emplace(topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names)));
+                    };
 
                     channel.makeWorkerResponse([&](auto& encoder, auto& worker_phase, auto& desc, auto offset) {
                         encodeTopicBody(encoder, worker_phase, desc, offset, name_alt, topic_bodies);

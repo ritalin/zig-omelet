@@ -23,15 +23,6 @@ typedef enum {
 // user type schema topic
 #define topic_user_type "user-type"
 
-// worker event tag
-typedef enum {
-    // worker_progress,
-    worker_result,
-    // worker_finished,
-    // worker_log,
-    worker_skipped,
-} CWorkerResponseTag;
-
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -6,7 +6,7 @@
 #include <duckdb/parser/statement/list.hpp>
 
 #include "duckdb_binder_support.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 
 namespace worker {
 

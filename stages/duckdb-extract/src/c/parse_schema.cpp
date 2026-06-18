@@ -19,14 +19,14 @@ public:
 public:
     UserTypeWorker(worker::Database *db, Slice&& from_stage, SourceDescriptor&& desc): 
         conn(db->connect()), 
-        from_stage(std::string_view(from_stage.ptr, from_stage.len)),
+        from_stage({from_stage.ptr, from_stage.len}),
         desc(desc),
         results({})
     {
     }
 public:
     auto execute(std::string&& query) -> WorkerResultCode;
-    auto messageChannel(const std::optional<size_t>& offset, std::string_view phase) -> NngChannel;
+    auto messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel;
     auto rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
 private:
     duckdb::Connection conn;
@@ -98,8 +98,8 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& 
         auto stmts = conn.ExtractStatements(query);
         if (stmts.size() == 0) {
             channel.warn("Cannot handle an empty schema");
-            channel.makeWorkerResponse([](auto& encoder, auto& worker_phase, auto& desc, auto) {
-                encodeStatementOffset(encoder, worker_phase, desc, 0);
+            channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+                encodeStatementOffset(encoder, stage, desc, 0);
             });
             return {};
         }
@@ -116,8 +116,8 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& 
     }
 
     channel.err(message);
-    channel.makeWorkerResponse([](auto& encoder, auto& worker_phase, auto& desc, auto) {
-        encodeStatementOffset(encoder, worker_phase, desc, 0);
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+        encodeStatementOffset(encoder, stage, desc, 0);
     });
 
     return {};
@@ -144,8 +144,8 @@ static auto isSupportedStatements(duckdb::unique_ptr<duckdb::SQLStatement>& stmt
 
 static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& name_alt, NngChannel& channel) -> void {
     if (! isSupportedStatements(stmt, channel)) {
-        channel.makeWorkerResponse([](auto& encoder, auto& worker_phase, auto& desc, auto offset) {
-            encodeStatementOffset(encoder, worker_phase, desc, offset);
+        channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+            encodeStatementOffset(encoder, stage, desc, offset);
         });
         return;
     }
@@ -177,8 +177,8 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
                         topic_bodies.emplace(topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names)));
                     };
 
-                    channel.makeWorkerResponse([&](auto& encoder, auto& worker_phase, auto& desc, auto offset) {
-                        encodeTopicBody(encoder, worker_phase, desc, offset, name_alt, topic_bodies);
+                    channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto offset) {
+                        encodeTopicBody(encoder, stage, desc, offset, name_alt, topic_bodies);
                     });
                 }
             }
@@ -191,13 +191,13 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
     }
     
     channel.err(message);
-    channel.makeWorkerResponse([](auto& encoder, auto& worker_phase, auto& desc, auto offset) {
-        encodeStatementOffset(encoder, worker_phase, desc, offset);
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+        encodeStatementOffset(encoder, stage, desc, offset);
     });
 }
 
-auto UserTypeWorker::messageChannel(const std::optional<size_t>& offset, std::string_view phase) -> NngChannel {
-    return NngChannel(this->desc, offset, std::format("{}#{}", this->from_stage, phase));
+auto UserTypeWorker::messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel {
+    return NngChannel(this->desc, offset, this->from_stage, phase);
 }
 
 auto UserTypeWorker::rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string> {

@@ -10,12 +10,12 @@ namespace worker {
 
 class NngChannel {
 public:
-    NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string&& worker_phase);
+    NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string_view stage, std::string_view worker_phase);
     ~NngChannel();
 public:
     static auto unitTestChannel() -> NngChannel;
 public:
-    auto makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string&, const SourceDescriptor&, size_t)> callback) -> void;
+    auto makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string_view&, const SourceDescriptor&, size_t)> callback) -> void;
 public:
     auto info(const std::string& message) -> void;
     auto warn(const std::string& message) -> void;
@@ -25,7 +25,8 @@ public:
 private:
     const SourceDescriptor& desc;
     const std::optional<size_t> stmt_offset;
-    const std::string worker_phase;
+    const std::string_view stage;
+    const std::string_view worker_phase;
     std::vector<nng_msg*> messages;
 };
 

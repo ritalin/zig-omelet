@@ -8,7 +8,7 @@
 
 namespace worker {
 
-static auto encodeResponseHeader(CborEncoder<NngBackend>& encoder, uint8_t tag, const std::string& worker_phase) -> void {
+static auto encodeResponseHeader(CborEncoder<NngBackend>& encoder, uint8_t tag, const std::string_view& worker_phase) -> void {
     encoder.addUInt(tag);
     encoder.addString(worker_phase);
 }
@@ -31,11 +31,11 @@ static auto encodeSourceDescriptor(CborEncoder<NngBackend>& encoder, const Sourc
 
 auto encodeStatementOffset(
     CborEncoder<NngBackend>& encoder, 
-    const std::string& worker_phase, 
+    const std::string_view& stage, 
     const SourceDescriptor& desc, 
     size_t offset) -> void 
 {
-    encodeResponseHeader(encoder, desc.response_event_tag, worker_phase);
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
     encodeSourceDescriptor(encoder, desc, offset);
     
     stmt_name_alt: {
@@ -49,13 +49,13 @@ auto encodeStatementOffset(
 
 auto encodeTopicBody(
     CborEncoder<NngBackend>& encoder,
-    const std::string& worker_phase,
+    const std::string_view& stage,
     const SourceDescriptor& desc,
     const size_t offset, 
     std::optional<std::string> name_alt, 
     const std::unordered_map<std::string_view, CborEncoder<VectorBackend>>& topic_bodies) -> void 
 {
-    encodeResponseHeader(encoder, desc.response_event_tag, worker_phase);
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
     encodeSourceDescriptor(encoder, desc, offset);
 
     stmt_name_alt: {
@@ -79,19 +79,20 @@ auto encodeTopicBody(
 
 auto encodeWorkerLog(
     CborEncoder<NngBackend>& encoder, 
-    const std::string& worker_phase, 
+    const std::string_view& stage,
+    const std::string_view& worker_phase, 
     const SourceDescriptor& desc,
     const size_t offset, 
     LogLevel log_level, 
     const std::string& message) -> void 
 {
-    encodeResponseHeader(encoder, desc.log_event_tag, worker_phase);
+    encodeResponseHeader(encoder, desc.log_event_tag, stage);
 
     log_level: {
         encoder.addUInt(static_cast<uint64_t>(log_level));
     }
     message: {
-        encoder.addString(std::format("message: {}, name: {}, offset: {}", message, offset, std::string_view{desc.name.ptr, desc.name.len}));
+        encoder.addString(std::format("message: {}, name: {}, offset: {}, phase: {}", message, std::string_view{desc.name.ptr, desc.name.len}, offset, worker_phase));
     }
 
     encoder.flush();

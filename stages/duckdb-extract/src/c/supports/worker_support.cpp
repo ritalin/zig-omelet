@@ -10,10 +10,10 @@
 
 namespace worker {
 
-NngChannel::NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string&& worker_phase): 
+NngChannel::NngChannel(const SourceDescriptor& desc, const std::optional<size_t>& offset, std::string_view stage, std::string_view worker_phase): 
     desc(desc),
     stmt_offset(offset),
-    
+    stage(stage),
     worker_phase(worker_phase), 
     messages({})
 {
@@ -37,13 +37,13 @@ static const SourceDescriptor TEST_DESC = {
 };
 
 auto NngChannel::unitTestChannel() -> NngChannel {
-    return NngChannel(TEST_DESC, std::nullopt, "unittest");
+    return NngChannel(TEST_DESC, std::nullopt, "test", "unit");
 }
 
 auto NngChannel::info(const std::string& message) -> void {
     NngBackend backend;
     auto encoder = CborEncoder(backend);
-    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::info, message);
+    encodeWorkerLog(encoder, this->stage, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::info, message);
 
     this->messages.emplace_back(std::move(backend.release()));
 }
@@ -51,7 +51,7 @@ auto NngChannel::info(const std::string& message) -> void {
 auto NngChannel::warn(const std::string& message) -> void {
     NngBackend backend;
     auto encoder = CborEncoder(backend);
-    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::warn, message);
+    encodeWorkerLog(encoder, this->stage, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::warn, message);
 
     this->messages.emplace_back(std::move(backend.release()));
 }
@@ -59,16 +59,16 @@ auto NngChannel::warn(const std::string& message) -> void {
 auto NngChannel::err(const std::string& message) -> void {
     NngBackend backend;
     auto encoder = CborEncoder(backend);
-    encodeWorkerLog(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::err, message);
+    encodeWorkerLog(encoder, this->stage, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::err, message);
 
     this->messages.emplace_back(std::move(backend.release()));
 }
 
-auto NngChannel::makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string&, const SourceDescriptor&, size_t)> callback) -> void {
+auto NngChannel::makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string_view&, const SourceDescriptor&, size_t)> callback) -> void {
     NngBackend backend;
     auto encoder = CborEncoder(backend);
 
-    callback(encoder, this->worker_phase, this->desc, this->stmt_offset.value_or(0));
+    callback(encoder, this->stage, this->desc, this->stmt_offset.value_or(0));
 
     this->messages.emplace_back(std::move(backend.release()));
 }

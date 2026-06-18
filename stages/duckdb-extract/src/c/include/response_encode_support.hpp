@@ -14,13 +14,13 @@ enum class LogLevel {
 
 auto encodeStatementOffset(
     CborEncoder<NngBackend>& encoder, 
-    const std::string& worker_phase, 
+    const std::string_view& stage, 
     const SourceDescriptor& desc, 
     size_t offset) -> void;
 
 auto encodeTopicBody(
     CborEncoder<NngBackend>& encoder, 
-    const std::string& worker_phase, 
+    const std::string_view& stage, 
     const SourceDescriptor& desc, 
     const size_t offset, 
     std::optional<std::string> name_alt, 
@@ -28,7 +28,8 @@ auto encodeTopicBody(
 
 auto encodeWorkerLog(
     CborEncoder<NngBackend>& encoder, 
-    const std::string& worker_phase, 
+    const std::string_view& stage, 
+    const std::string_view& worker_phase, 
     const SourceDescriptor& desc,
     const size_t offset, 
     LogLevel log_level, 

@@ -41,7 +41,7 @@ public:
     }
 public:
     auto execute(std::string query) -> WorkerResultCode;
-    auto messageChannel(const std::optional<size_t>& offset, std::string_view phase) -> NngChannel;
+    auto messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel;
     auto name() const -> std::string_view;
     auto rename(std::string_view base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
 private:
@@ -213,8 +213,8 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_type
     return std::move(encoder);
 }
 
-auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, std::string_view phase) -> NngChannel {
-    return NngChannel(this->desc, offset, std::format("{}#{}", this->from_stage, phase));
+auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel {
+    return NngChannel(this->desc, offset, this->from_stage, phase);
 }
 
 auto DescribeWorker::name() const -> std::string_view {

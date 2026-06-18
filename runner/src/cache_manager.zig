@@ -40,12 +40,13 @@ pub const CacheManager = struct {
     }
 
     pub fn register(self: *CacheManager, allocator: std.mem.Allocator, source: *const Event.Payload.SourcePath, topics: *const TopicsMap) !void {
-        const entry = try self.entries.getOrPut(allocator, .{.sub_path = source.name, .dialect = source.dialect});
+        const entry = try self.entries.getOrPut(allocator, .{.sub_path = source.name, .dialect = source.dialect, .offset = 0});
 
         if (!entry.found_existing) {
             entry.key_ptr.* = Key{  
                 .sub_path = try allocator.dupe(u8, source.name),
                 .dialect = try allocator.dupe(u8, source.dialect),
+                .offset = 0,
             };
         }
         if (entry.found_existing) {
@@ -291,13 +292,15 @@ pub const CacheManager = struct {
             const Key = struct {
                 sub_path: types.FilePath,
                 dialect: types.Symbol,
+                offset: usize,
             };
 
             const CacheContext = struct {
                 pub fn hash(_: @This(), key: Key) u64 {
                     var h = std.hash.Wyhash.init(0);
                     h.update(key.sub_path);
-                    h.update(std.mem.asBytes(&key.dialect));
+                    h.update(key.dialect);
+                    h.update(std.mem.asBytes(&key.offset));
                     return h.final();
                 }
 
@@ -305,7 +308,8 @@ pub const CacheManager = struct {
                     _ = ctx;
                     return
                         std.mem.eql(u8, lhs.sub_path, rhs.sub_path) and
-                        std.mem.eql(u8, lhs.dialect, rhs.dialect)
+                        std.mem.eql(u8, lhs.dialect, rhs.dialect) and
+                        (lhs.offset == rhs.offset)
                     ;
                 }                
             };

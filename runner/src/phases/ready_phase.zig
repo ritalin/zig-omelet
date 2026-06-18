@@ -80,6 +80,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                     }
                 },
                 .source_path => |payload| {
+                    try stage.log(.debug, "Source received/name: {s}, dialect: {s}, path: {s}", .{payload.name, payload.dialect, payload.path});
                     try self.cache.register(stage.allocator, &payload, &self.topics);
                     try stage.dispatcher.queue.post(.{ .source_path = payload }, try stage.connection.commandChannel());
                 },
@@ -88,7 +89,12 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                         try stage.log(.debug, "Guest finish ready/guest: {s}", .{entry.from_stage});
                         status.* = .finish;
                     }
-
+                },
+                .ready_topic_body => |payload| {
+                    // TODO
+                    try stage.log(.debug, "TopicBody extracted/name: {s}, offset: {}, dialect: {s}", .{payload.desc.name, payload.desc.offset, payload.desc.dialect});
+                },
+                .finish_topic_body => {
                     // TODO: stub impl
                     try stage.transitPhase(.terminating, .pending);
                 },

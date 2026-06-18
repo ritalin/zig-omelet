@@ -7,23 +7,59 @@ const EventDispatcher = core.sockets.EventDispatcher;
 const StructView = core.events.StructView;
 const Event = core.events.Event;
 
+const ExtractWorker = @import("../ExtractWorker.zig");
+
 pub fn ExtractTopicBodyState(comptime GuestStage: type) type {
     return struct {
+        t: *std.Io.Threaded,
+        io: std.Io,
+
         const Self = @This();
 
-        pub const create: Self = .{};
-        pub fn deinit(_: *Self) void {}
+        pub fn create(allocator: std.mem.Allocator) !Self {
+            const t = try allocator.create(std.Io.Threaded);
+            t.* = std.Io.Threaded.init(allocator, .{
+                .concurrent_limit = std.Io.Limit.limited(try std.Thread.getCpuCount()),
+            });
+
+            return  .{
+                .t = t,
+                .io = t.io(),
+            }; 
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.t.deinit();
+            allocator.destroy(self.t);
+        }
 
         pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
-            _ = self;
             switch (entry.event) {
                 .probe => |phase| {
                     if ((phase == .ready) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .ready, .agreement = .pending}))) {
                         var channel = try stage.connection.requestChannel();
                         try channel.submit(stage.connection.context.io, .ready, .{});
+
                         try stage.transitPhase(.ready, .confirmed);
                         return;
                     }
+                },
+                .source_path => |payload| {
+                    try stage.log(.debug, "Accept source path: `{s}, dialect: {s}`", .{payload.name, payload.dialect});
+
+                    if (self.t.concurrent_limit.toInt()) |limit| {
+                        if (self.t.busy_count >= limit) {
+                            try stage.log(.trace, "Worker pool is full", .{});
+                            // will process latter
+                            dirty.* = .delayed;
+                            return;
+                        }
+                    }
+                    try stage.log(.trace, "Begin worker process", .{});
+
+                    const worker = try ExtractWorker.init(stage.allocator, payload);
+                    _ = try self.io.concurrent(ExtractWorker.run, .{worker, self.io, stage.database, stage.connection.push_worker_socket.pipe});
+                    return;
                 },
                 else => {}
             }
@@ -47,37 +83,8 @@ pub fn ExtractTopicBodyState(comptime GuestStage: type) type {
 
 //         try self.spawnWorker(path);
 //     },
-//     .worker_response => |res| {
-//         try self.logger.log(.trace, "Receive worker respnse", .{});
-
-//         if (try self.processWorkerResponse(item.from, res.content, lookup)) |event| {
-//             try self.logger.log(.debug, "Redirect worker response (event: {})", .{event.tag()});
-//             try self.connection.dispatcher.post(event);
-//         }
-//     },
-//     .finish_source_path => {
-//         if (lookup.count() == 0) {
-//             try self.connection.dispatcher.post(.finish_topic_body);
-//         }
-//         else {
-//             try self.connection.dispatcher.state.receiveTerminate();
-//         }
-//     },
 
 
-// fn tryLoadSchema(self: *GuestStage, schema_dir_set: []const core.FilePath) !bool {
-//     for (schema_dir_set) |path| {
-//         const err = c.loadSchema(self.database, path.ptr, path.len);
-//         switch (err) {
-//             c.schema_dir_not_found => {
-//                 try self.logger.log(.err, "Launch failed. Invalid schema location. ({s})", .{path});
-//             },
-//             c.schema_load_failed => {
-//                 try self.logger.log(.err, "Launch failed. Invalid schema definitions.", .{});
-//             },
-//             else => {},
-//         }
-//     }
 
 //     user_type: {
 //         const err = c.retainUserTypeName(self.database);
@@ -92,31 +99,6 @@ pub fn ExtractTopicBodyState(comptime GuestStage: type) type {
 
 //     return true;
 // }
-
-// fn spawnWorker(self: *GuestStage, path: core.Event.Payload.SourcePath) !void {
-//     const worker = try ExtractWorker.init(
-//         self.allocator, 
-//         path.category, self.database, path
-//     );
-//     try self.connection.pull_sink_socket.spawn(worker);
-// }
-
-// const WorkerResultTags = std.StaticStringMap(core.EventType).initComptime(.{
-//     .{"topic_body", .topic_body}, 
-//     .{"log", .log},
-// });
-
-// pub const WorkerResponseTag = enum(u8) {
-//     worker_progress = c.worker_progress,
-//     worker_result = c.worker_result,
-//     worker_finished = c.worker_finished,
-//     worker_log = c.worker_log,
-//     worker_skipped = c.worker_skipped,
-
-//     pub fn fromString(tag: core.Symbol) WorkerResponseTag {
-//         return std.meta.stringToEnum(WorkerResponseTag, tag).?;
-//     }
-// };
 
 // fn processWorkerResponse(self: *GuestStage, from: Symbol, result_content: Symbol, lookup: *std.StringHashMap(LookupEntry)) !?core.Event {
 //     var reader = core.CborStream.Reader.init(result_content);
@@ -164,59 +146,6 @@ pub fn ExtractTopicBodyState(comptime GuestStage: type) type {
 //         .log = try core.Event.Payload.Log.init(self.allocator, .{.warn, log_msg}),
 //     };
 // }
-
-// fn processExtractResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
-//     _ = from;
-//     const item_index = try reader.readUInt(u32);
-//     const name_alt = try reader.readOptional(Symbol);
-
-//     const items = try reader.readSlice(allocator, core.StructView(core.Event.Payload.TopicBody.Item));
-//     defer allocator.free(items);
-
-//     var topic_body = try core.Event.Payload.TopicBody.init(allocator, entry.path.values(), items);
-
-//     if (name_alt) |name| {
-//         var new_name = try allocator.dupe(u8, name);
-//         defer allocator.free(new_name);
-//         std.mem.swap(Symbol, &topic_body.header.name, &new_name);
-//     }
-
-//     return .{
-//         .topic_body = topic_body.withNewIndex(item_index, entry.item_count),
-//     };
-// }
-
-// fn processLogResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
-//     _ = entry;
-//     const log_level = core.Logger.stringToLogLevel(try reader.readString());
-//     const content = try reader.readString();
-    
-//     const full_from = try std.fmt.allocPrint(allocator, "{s}/{s}", .{app_context, from});
-//     defer allocator.free(full_from);
-
-//     return .{
-//         .log = try core.Event.Payload.Log.init(allocator,
-//             .{log_level, content}
-//         ),
-//     };
-// }
-
-// fn processSkipResult(allocator: std.mem.Allocator, from: Symbol, reader: *core.CborStream.Reader, entry: *LookupEntry) !core.Event {
-//     _ = from;
-//     const item_index = try reader.readUInt(u32);
-
-//     return .{
-//         .skip_topic_body = try core.Event.Payload.SkipTopicBody.init(allocator, 
-//             entry.path.values(),
-//             item_index, 
-//         ),
-//     };
-// }
-
-// const LookupEntry = struct {
-//     path: core.Event.Payload.SourcePath,
-//     item_count: usize,
-// };
 
 // const WorkerTestContext = struct {
 //     allocator: std.mem.Allocator,

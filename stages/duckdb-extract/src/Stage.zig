@@ -1,7 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-// TODO:
-// const c = @import("worker_runtime");
+const c = @import("c");
 const app_context = @import("build_options").app_context;
 
 const events = core.events;
@@ -25,8 +24,7 @@ allocator: std.mem.Allocator,
 setting: *const Setting,
 connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
-// TODO:
-// database: c.DatabaseRef,
+database: c.DatabaseRef,
 state: State,
 
 // TODO:
@@ -51,23 +49,25 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     };
     const dispatcher = try connection.configureDispatcher(1, options);
 
-    // TODO:
-    // var database: c.DatabaseRef = undefined;
-    // _ = c.initDatabase(&database);
+    var database: c.DatabaseRef = undefined;
+    _ = c.initDatabase(&database);
+
+    var phase = BootPhaseState.init;
+    phase.vtable.on_prepare = GuestStage.doPrepareLaunching;
 
     return .{
         .allocator = allocator,
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        // .database = database,
-        .state = .{ .launching = BootPhaseState.init },
+        .database = database,
+        .state = .{ .launching = phase },
     };
 }
 
 pub fn deinit(self: *GuestStage) void {
-    // c.deinitDatabase(self.database);
-    self.state.deinit();
+    c.deinitDatabase(self.database);
+    self.state.deinit(self.allocator);
     self.dispatcher.deinit();
 }
 
@@ -137,13 +137,36 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
 }
 
 fn doRequestPhase(self: *GuestStage) !void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
     self.state = .{ .request = .create };
 }
 
 fn doReadyPhase(self: *GuestStage) !void {
-    self.state.deinit();
-    self.state = .{ .ready = .create };
+    self.state.deinit(self.allocator);
+    self.state = .{ .ready = try .create(self.allocator) };
+}
+
+fn doPrepareLaunching(self: *GuestStage) !void {
+    var failed = false;
+
+    for (self.setting.schema_dir_set) |path| {
+        try self.log(.info, "Loading schema/path: {s}", .{path});
+
+        const err = c.loadSchema(self.database, .{.ptr = path.ptr, .len = path.len});
+        switch (err) {
+            c.schema_dir_not_found => {
+                try self.log(.err, "Loading schema failed. Invalid schema location", .{});
+                failed = true;
+            },
+            c.schema_load_failed => {
+                try self.log(.err, "Launch failed. Invalid schema definitions", .{});
+                failed = true;
+            },
+            else => {},
+        }
+    }
+
+    if (failed) return error.LaunchFailed;
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
@@ -175,11 +198,11 @@ const State = union(events.EventPhase.Kind) {
     const deinit = deinitState;
 };
 
-fn deinitState(self: *State) void {
+fn deinitState(self: *State, allocator: std.mem.Allocator) void {
     switch (self.*) {
         .launching => |*state| state.deinit(),
         .request => |*state| state.deinit(),
-        .ready => |*state| state.deinit(),
+        .ready => |*state| state.deinit(allocator),
         else => unreachable,
     }
 }

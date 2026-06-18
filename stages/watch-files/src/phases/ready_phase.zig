@@ -30,11 +30,12 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
                         if (stage.setting.watch) {
                             // TODO: watch mode
                         }
-                        else {
-                            try FileIterateWorker(GuestStage).run(stage);
-                        }
                         return;
                     }
+                },
+                .ready_source_path => {
+                    try FileIterateWorker(GuestStage).run(stage);
+                    return;
                 },
                 else => {}
             }

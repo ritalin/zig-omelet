@@ -7,8 +7,6 @@ const events = core.events;
 const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
 
-const worker_context = "watch-files/worker";
-
 pub fn FileIterateWorker(comptime GuestStage: type) type {
     return struct {
         pub fn run(stage: *GuestStage) !void {

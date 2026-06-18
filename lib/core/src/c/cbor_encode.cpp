@@ -20,7 +20,7 @@ struct CborTypes {
 const size_t MAX_BUFFER_SIZE = 9;
 
 template <WriterBackend Backend>
-static auto cborHeader(Backend& backend, uint32_t id, size_t len) {
+static auto cborHeader(Backend *backend, uint32_t id, size_t len) {
     cbor_writer_t writer;
     char buf[MAX_BUFFER_SIZE] = {}; 
     ::cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);   
@@ -29,40 +29,40 @@ static auto cborHeader(Backend& backend, uint32_t id, size_t len) {
 
     writer.buf[0] |= ((id & 0b0111) << 5);
 
-    backend.write(buf, writer.bufidx);
+    backend->write(buf, writer.bufidx);
 }
 
 template <WriterBackend Backend>
-static auto encodeUInt(Backend& backend, uint64_t value) -> void {
+static auto encodeUInt(Backend *backend, uint64_t value) -> void {
     cbor_writer_t writer;
     std::byte buf[MAX_BUFFER_SIZE] = {};
 
     ::cbor_writer_init(&writer, buf, MAX_BUFFER_SIZE);
     ::cbor_encode_unsigned_integer(&writer, value);
 
-    backend.write(buf, writer.bufidx);
+    backend->write(buf, writer.bufidx);
 }
 
 template <WriterBackend Backend>
-static auto encodeBool(Backend& backend, bool value) -> void {
+static auto encodeBool(Backend *backend, bool value) -> void {
     cbor_writer_t writer;
     std::byte buf[1] = {}; 
 
     ::cbor_writer_init(&writer, buf, 1);
     ::cbor_encode_bool(&writer, value);
 
-    backend.write(buf, writer.bufidx);
+    backend->write(buf, writer.bufidx);
 }
 
 template <WriterBackend Backend>
-static auto encodeNull(Backend& backend) -> void {
+static auto encodeNull(Backend *backend) -> void {
     cbor_writer_t writer;
     char buf[] = {0};
 
     ::cbor_writer_init(&writer, buf, 1);
     ::cbor_encode_null(&writer);
 
-    backend.write(buf, writer.bufidx);
+    backend->write(buf, writer.bufidx);
 }
 
 /// --------------------------------------------------------------------------------
@@ -77,7 +77,14 @@ auto CborEncoder<Backend>::addUInt(uint64_t value) -> void {
 template <WriterBackend Backend>
 auto CborEncoder<Backend>::addString(std::string_view value) -> void {
     cborHeader(this->backend, CborTypes::STRING, value.size());
-    this->backend.write(value.data(), value.size());
+    this->backend->write(value.data(), value.size());
+}
+
+template <WriterBackend Backend>
+CborEncoder<Backend>::CborEncoder(CborEncoder<Backend>&& other): 
+    owned_(std::move(other.owned_)),
+    backend(owned_ ? &this->owned_.value() : other.backend)
+{
 }
 
 template <WriterBackend Backend>
@@ -96,16 +103,17 @@ auto CborEncoder<Backend>::addArrayHeader(size_t len) -> void {
 }
 
 template <WriterBackend Backend>
-auto CborEncoder<Backend>::addAggregateSlice(std::vector<CborEncoder<VectorBackend>>&& encoders) -> void {
-    // TODO:
-    // std::copy(buffer.begin(), buffer.end(), std::back_inserter(this->buf));
+template <AggregateEncoder... Encoders>
+auto CborEncoder<Backend>::addAggregateSlice(Encoders&&... encoders) -> void {
+    constexpr std::size_t n = sizeof...(Encoders);
+    this->addArrayHeader(n);
 
-    
-    this->addArrayHeader(encoders.size());
-    for (auto& e: encoders) {
+    auto write_one = [this](auto& e) {
         auto source = e.rawBuffer();
-        this->backend.write(source.data(), source.size());
-    }
+        this->backend->write(source.data(), source.size());
+    };
+
+    (write_one(std::forward<Encoders>(encoders)), ...);
 }
 
 template <WriterBackend Backend>
@@ -115,11 +123,11 @@ auto CborEncoder<Backend>::addStringPair(const std::string& key, const std::stri
     }
     key: {
         cborHeader(this->backend, CborTypes::STRING, key.size());
-        this->backend.write(key.data(), key.size());
+        this->backend->write(key.data(), key.size());
     }
     value: {
         cborHeader(this->backend, CborTypes::STRING, value.size());
-        this->backend.write(value.data(), value.size());
+        this->backend->write(value.data(), value.size());
     }
 }
 
@@ -130,11 +138,11 @@ auto CborEncoder<Backend>::addBinaryPair(const std::string& key, const std::span
     }
     key: {
         cborHeader(this->backend, CborTypes::STRING, key.size());
-        this->backend.write(key.data(), key.size());
+        this->backend->write(key.data(), key.size());
     }
     value: {
         cborHeader(this->backend, CborTypes::BITES, value.size());
-        this->backend.write(value.data(), value.size());
+        this->backend->write(value.data(), value.size());
     }
 }
 
@@ -145,7 +153,7 @@ auto CborEncoder<Backend>::addUIntPair(const std::string& key, uint64_t value) -
     }
     key: {
         cborHeader(this->backend, CborTypes::STRING, key.size());
-        this->backend.write(key.data(), key.size());
+        this->backend->write(key.data(), key.size());
     }
     value: {
         encodeUInt(this->backend, value);
@@ -154,12 +162,12 @@ auto CborEncoder<Backend>::addUIntPair(const std::string& key, uint64_t value) -
 
 template <WriterBackend Backend>
 auto CborEncoder<Backend>::rawBuffer() const -> std::span<const std::byte> {
-    return this->backend.rawBuffer();
+    return this->backend->rawBuffer();
 }
 
 template <WriterBackend Backend>
 auto CborEncoder<Backend>::flush() -> void {
-    this->backend.flush();
+    this->backend->flush();
 }
 
 /// --------------------------------------------------------------------------------
@@ -576,7 +584,7 @@ TEST_CASE("Aggreate encoded batch to vector") {
         REQUIRE(to_vector(actual_b) == expect_b);
 
         auto encoder = CborEncoder(VectorBackend());
-        encoder.addAggregateSlice({ encoder_a, encoder_b });
+        encoder.addAggregateSlice(encoder_a, encoder_b);
         encoder.flush();
 
         auto actual = encoder.rawBuffer();

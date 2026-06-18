@@ -18,7 +18,7 @@ pub fn decodeFromCbor(allocator: std.mem.Allocator, data: []const u8) !EventPack
 }
 
 pub fn decodeFromCborInternal(allocator: std.mem.Allocator, reader: *CborStream.Reader) !EventPacket {
-    const header = std.meta.stringToEnum(EventType, try reader.readString()).?;
+    const header = try decodeEventHeader(reader);
     const stage = try reader.readString();
     const event = try decodeEventInternal(allocator, header, reader);
 
@@ -76,6 +76,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         .ready_topic_body => {
             const desc: Event.Payload.SourceDescriptor = .init(try reader.readTuple(StructView(Event.Payload.SourceDescriptor)));
             const hash = try reader.readString();
+            const name_alt = try reader.readOptional(types.Symbol);
             const response: Event.Payload.TopicBodyResponse.Result = response: {
                 switch (try reader.readEnum(events.ResponseTag)) {
                     .success => {
@@ -89,7 +90,12 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
                     .skipped => break:response .skipped,
                 }
             };
-            const payload: Event.Payload.TopicBodyResponse = .{ .desc = desc, .hash = hash, .response = response };
+            const payload: Event.Payload.TopicBodyResponse = .{ 
+                .desc = desc, 
+                .hash = hash, 
+                .name_alt = name_alt, 
+                .response = response 
+            };
 
             return .{.ready_topic_body = payload};
         },
@@ -147,9 +153,25 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
     }
 }
 
-pub fn decodeSubscription(data: types.Symbol) !types.Symbol {
+pub fn decodeSubscription(data: types.BinaryData) !events.EventHeader {
     var reader = CborStream.Reader.createFromSlice(data);
-    return reader.readString();
+    return decodeEventHeader(&reader);
+}
+
+fn decodeEventHeader(reader: *CborStream.Reader) !events.EventHeader {
+    const tag: events.EventType = try reader.readEnum(events.EventType);
+    
+    // TODO:EventHeader variant
+    switch (tag) {
+        else => {
+            inline for (std.meta.fields(events.EventType)) |field| {
+                if (field.value == @intFromEnum(tag)) {
+                    return @unionInit(events.EventHeader, field.name, {});
+                }
+            }
+        }
+    }
+    unreachable; 
 }
 
 test "encoder/decoder" {
@@ -173,6 +195,7 @@ pub const tests = struct {
         const topic_body_response_success: Event.Payload.TopicBodyResponse = .{
             .desc = Event.Payload.SourceDescriptor.init(.{ "path/to/name", "duckdb", 0 }),
             .hash = "deadbeaf",
+            .name_alt = null,
             .response = .{
                 .success = &.{
                     Event.Payload.TopicBodyResponse.Encoded.init(.{"topic_a", "0x123456789"}), 
@@ -183,6 +206,7 @@ pub const tests = struct {
         const topic_body_response_skip: Event.Payload.TopicBodyResponse = .{
             .desc = Event.Payload.SourceDescriptor.init(.{ "path/to/name", "duckdb", 0 }),
             .hash = "deadbeaf",
+            .name_alt = null,
             .response = .skipped,
         };
         var topic_body = try Event.Payload.TopicBody.init(allocator,

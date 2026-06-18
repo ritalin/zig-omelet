@@ -18,8 +18,8 @@ pub fn encodeToCbor(writer: *std.Io.Writer, packet: EventPacket) !void {
     var cbor_writer = try CborStream.Writer.init(writer);
     defer cbor_writer.deinit();
 
-    // TODO: needs to write EventHeader variant
-    _ = try cbor_writer.writeString(@tagName(packet.header));
+    // TODO: needs to write EventHeader dialect
+    _ = try cbor_writer.writeEnum(EventType, std.meta.activeTag(packet.header));
     _ = try cbor_writer.writeString(packet.stage_name);
 
     try encodePayload(&cbor_writer, packet.event);
@@ -33,7 +33,7 @@ pub fn encodeSubscription(writer: *std.Io.Writer, subscription: EventHeader) !ty
     var cbor_writer = try CborStream.Writer.init(writer);
     defer cbor_writer.deinit();
 
-    const size = try cbor_writer.writeString(@tagName(subscription));
+    const size = try cbor_writer.writeEnum(EventType, std.meta.activeTag(subscription));
     return writer.buffer[0..size];
 }
 
@@ -70,6 +70,13 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         .ready_topic_body => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.desc.values());
             _ = try writer.writeString(payload.hash);
+
+            if (payload.name_alt) |name| {
+                _ = try writer.writeString(name);
+            }
+            else {
+                _ = try writer.writeNull();
+            }
 
             switch (payload.response) {
                 .success => |results| {

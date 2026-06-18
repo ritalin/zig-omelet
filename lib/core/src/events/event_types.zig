@@ -167,6 +167,7 @@ const EventPayload = struct {
     pub const TopicBodyResponse = struct {
         desc: SourceDescriptor,
         hash: Symbol,
+        name_alt: ?Symbol,
         response: Result,
 
         pub fn deinit(self: *TopicBodyResponse, allocator: std.mem.Allocator) void {

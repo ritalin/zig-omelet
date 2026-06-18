@@ -95,15 +95,18 @@ pub fn Client(comptime stage_name: types.StageName) type {
         pub fn listSubscriptions(self: *Self, allocator: std.mem.Allocator) !types.Symbol {
             var view = self.cmd_socket.subscriptionView();
 
-            var buffer: std.ArrayListUnmanaged(types.Symbol) = .empty;
+            var buffer: std.ArrayListUnmanaged(types.BinaryData) = .empty;
             defer buffer.deinit(allocator);
             try view.extractSubscriptions(allocator, &buffer);
 
-            for (buffer.items) |*bytes| {
-                bytes.* = try decodeSubscription(bytes.*);
+            var subscriptions = std.Io.Writer.Allocating.init(allocator);
+
+            for (buffer.items) |bytes| {
+                const header: events.EventHeader = try decodeSubscription(bytes);
+                try subscriptions.writer.print("{s}, ", .{@tagName(std.meta.activeTag(header))});
             }
 
-            return std.mem.join(allocator, ", ", buffer.items);
+            return subscriptions.written();
         } 
 
         pub fn connect(self: *Self) !void {

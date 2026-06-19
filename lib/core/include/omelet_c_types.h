@@ -13,6 +13,11 @@ typedef enum {
 } CLogLevel;
 
 typedef enum {
+    category_source = 1,
+    category_schema,
+} CSourceCategory;
+
+typedef enum {
     Enum = 1,
     Struct,
     Array,
@@ -25,6 +30,7 @@ const unsigned char CPostPacketKind = 1;
 
 // worker event tag
 typedef enum {
+    worker_progress,
     worker_result,
     worker_skipped,
 } CWorkerResponseTag;

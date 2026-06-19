@@ -15,7 +15,7 @@ typedef enum {
 typedef enum {
     category_source = 1,
     category_schema,
-} CSourceCategory;
+} CTopicCategory;
 
 typedef enum {
     Enum = 1,

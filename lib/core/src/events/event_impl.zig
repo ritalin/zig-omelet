@@ -58,7 +58,6 @@ pub const EventHeader = union(EventType) {
     // Source path event
     ready_source_path,
     source_path,
-    pending_finish_source_path,
     finish_source_path,
 
     // Topic body event

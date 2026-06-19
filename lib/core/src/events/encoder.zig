@@ -63,7 +63,6 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
         .source_path => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.values());
         },
-        .pending_finish_source_path => {},
         .finish_source_path => {},
 
         // Topic body event
@@ -79,11 +78,15 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
             }
 
             switch (payload.response) {
+                .progress => |n| {
+                    _ = try writer.writeEnum(events.ResponseTag, .progress);
+                    _ = try writer.writeUInt(usize, n);
+                },
                 .success => |results| {
                     _ = try writer.writeEnum(events.ResponseTag, .success);
                     _ = try writer.writeSliceHeader(results.len);
                     for (results) |encoded_data| {
-                        _ = try writer.writeTuple(StructView(Event.Payload.TopicBodyResponse.Encoded), encoded_data.values());
+                        _ = try writer.writeTuple(StructView(Event.Payload.TopicBody.Encoded), encoded_data.values());
                     }
                 },
                 .skipped => {
@@ -92,24 +95,35 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
             }
         },
         .topic_body => |payload| {
-            _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.header.values());
-            _ = try writer.writeUInt(usize, payload.index);
+            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.desc.values());
 
+            if (payload.name_alt) |name| {
+                _ = try writer.writeString(name);
+            }
+            else {
+                _ = try writer.writeNull();
+            }
+            
             _ = try writer.writeSliceHeader(payload.bodies.len);
 
             for (payload.bodies) |item| {
-                _ = try writer.writeTuple(StructView(Event.Payload.TopicBody.Item), item.values());
+                _ = try writer.writeTuple(StructView(Event.Payload.TopicBody.Encoded), item.values());
             }
         },
         .skip_topic_body => |payload| {
-            _ = try writer.writeTuple(StructView(Event.Payload.SourcePath), payload.header.values());
-            _ = try writer.writeUInt(usize, payload.index);
+            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.values());
         },
         .pending_finish_topic_body => {},
-        .finish_topic_body => {},
+        .finish_topic_body => |payload| {
+            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.values());
+        },
         // Generate event
         .ready_generate => {},
-        .finish_generate => {},
+        .finish_generate => |payload| {
+            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.desc.values());
+            _ = try writer.writeEnum(Event.Payload.GenerateResponse.Status, payload.status);
+            _ = try writer.writeString(payload.message);
+        },
         // Worker event
         .worker_response => |payload| {
             _ = try writer.writeString(payload.content);

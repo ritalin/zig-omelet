@@ -66,55 +66,135 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         }
 
         pub fn run(self: *Dispatcher, stage_name: types.StageName, on_dispatch: VTable.DispatchFn) !void {
+            var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
+            defer skip_entries.deinit(self.queue.allocator);
+
             while (true) {
-                var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
-                defer skip_entries.deinit(self.queue.allocator);
+                const entry = self.queue.receive_queue.popFront();
+                const status = try self.iterationInternal(stage_name, entry, &skip_entries, on_dispatch);
 
-                while (self.queue.receive_queue.popFront()) |e| {
-                    try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
-
-                    var entry = e;
-                    var dirty: EventDispatcher.DirtyState = .none;
-
-                    try on_dispatch(self, entry, &dirty);
-
-                    switch (dirty) {
-                        .none => {
-                            entry.deinit(self.queue.allocator);
-                        },
-                        .delayed => {
-                            try skip_entries.append(self.queue.allocator, entry);
-                        },
-                        .unhandled => {
-                            defer entry.deinit(self.queue.allocator);
-                            try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(e.event), self.phase });
-                        }
+                switch (status) { 
+                    .handled => continue, 
+                    .terminated => break,
+                    .awake => {
+                        defer skip_entries.clearRetainingCapacity();
+                        try self.queue.entrySkipped(skip_entries.items);
                     }
                 }
+
+
+                // while (self.queue.receive_queue.popFront()) |e| {
+                //     try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
+
+                //     var entry = e;
+                //     var dirty: EventDispatcher.DirtyState = .none;
+
+                //     try on_dispatch(self, entry, &dirty);
+
+                //     switch (dirty) {
+                //         .none => {
+                //             entry.deinit(self.queue.allocator);
+                //         },
+                //         .delayed => {
+                //             try skip_entries.append(self.queue.allocator, entry);
+                //         },
+                //         .unhandled => {
+                //             defer entry.deinit(self.queue.allocator);
+                //             try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(e.event), self.phase });
+                //         }
+                //     }
+                // }
+                // if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
+                //     // TODO: about daemon boot or managed boot
+                //     if (self.vtable.on_quit) |q| {
+                //         try (q.handler)(q.ptr);
+                //     }
+                //     break;
+                // }
+
+                // const batch_sender_log = self.log_router.as_sender();
+                
+                // while (self.queue.send_queue.popFront()) |channel| {
+                //     try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
+                //     channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
+                //         error.WouldBlock => {
+                //             try self.queue.postPriority(channel);
+                //             break;
+                //         },
+                //         else => return err,
+                //     };
+                // }
+
+                // _ = try self.poller.poll(Dispatcher.doPoll);
+                // try self.queue.entrySkipped(skip_entries.items);
+            }
+        }
+
+        pub fn iteration(self: *Dispatcher, stage_name: types.StageName, on_dispatch: VTable.DispatchFn) !IterationStatus {
+            var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
+            const status = try self.iterationInternal(stage_name, self.queue.receive_queue.popFront(), &skip_entries, on_dispatch);
+
+            if ((status == .handled) and (skip_entries.items.len > 0)) {
+                try self.queue.entrySkipped(skip_entries.items);
+            }
+
+            return status;
+        }
+
+        fn iterationInternal(
+            self: *Dispatcher, 
+            stage_name: types.StageName, 
+            entry_opt: ?sockets.ReceiveEntry, 
+            skip_entries: *std.ArrayListUnmanaged(sockets.ReceiveEntry),
+            on_dispatch: VTable.DispatchFn) !IterationStatus 
+        {
+            if (entry_opt) |e| {
+                var entry = e;
+                var dirty: EventDispatcher.DirtyState = .none;
+
+                try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ entry.pipe_id, @tagName(entry.event), entry.from_stage });
+                try on_dispatch(self, entry, &dirty);
+
+                switch (dirty) {
+                    .none => {
+                        entry.deinit(self.queue.allocator);
+                    },
+                    .delayed => {
+                        try skip_entries.append(self.queue.allocator, entry);
+                    },
+                    .unhandled => {
+                        defer entry.deinit(self.queue.allocator);
+                        try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(entry.event), self.phase });
+                    }
+                }
+
                 if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
                     // TODO: about daemon boot or managed boot
                     if (self.vtable.on_quit) |q| {
                         try (q.handler)(q.ptr);
                     }
-                    break;
+                    return .terminated;
                 }
 
-                const batch_sender_log = self.log_router.as_sender();
-                
-                while (self.queue.send_queue.popFront()) |channel| {
-                    try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
-                    channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
-                        error.WouldBlock => {
-                            try self.queue.postPriority(channel);
-                            break;
-                        },
-                        else => return err,
-                    };
-                }
-
-                _ = try self.poller.poll(Dispatcher.doPoll);
-                try self.queue.entrySkipped(skip_entries.items);
+                return .handled;
             }
+
+            const batch_sender_log = self.log_router.as_sender();
+            
+            while (self.queue.send_queue.popFront()) |channel| {
+                try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
+                channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
+                    error.WouldBlock => {
+                        try self.queue.postPriority(channel);
+                        break;
+                    },
+                    else => return err,
+                };
+            }
+
+            _ = try self.poller.poll(Dispatcher.doPoll);
+
+            return .awake;
         }
 
         pub fn log(self: *Dispatcher, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
@@ -126,6 +206,8 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             const self: *Dispatcher = @alignCast(@fieldParentPtr("poller", poller));
             try (self.vtable.on_poll)(self, results);
         }
+
+        pub const IterationStatus = enum { handled, terminated, awake };
 
         pub const LogForwarder = struct {
             ptr: *anyopaque,
@@ -306,6 +388,8 @@ pub const tests = struct {
     const ClientConnection = root.sockets.Connection.Client("stage");
     const Dispatcher = EventDispatcher.Sized(8);
 
+    fn noopHandler(_: *Dispatcher, _: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {}
+
     fn serverHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
             .launching => {},
@@ -407,7 +491,7 @@ pub const tests = struct {
 
         send_event: {
             var msg = try nnng.Message.create();
-            try encodeToCbor(&msg.writer, .{ .header = .finish_generate, .stage_name = "test-stage", .event = .finish_generate });
+            try encodeToCbor(&msg.writer, .{ .header = .finish_source_path, .stage_name = "test-stage", .event = .finish_source_path });
             try worker_pipe.sender().submit(msg);
             break:send_event;
         }
@@ -425,7 +509,7 @@ pub const tests = struct {
 
         const decodeFromCbor = @import("../events/decoder.zig").decodeFromCbor;
         const packet = try decodeFromCbor(std.testing.allocator, channel.?.msg.bytes());
-        try std.testing.expectEqual(.finish_generate, packet.event);
+        try std.testing.expectEqual(.finish_source_path, packet.event);
     }
 
     test "receive event by REP" {
@@ -548,5 +632,54 @@ pub const tests = struct {
 
         try std.testing.expectEqual(.quitting, host_dispatcher.phase.kind);
         try std.testing.expectEqual(.quitting, guest_dispatcher.phase.kind);
+    }
+
+    test "single iteration" {
+        var tmp_dir = try supports.createTmpDir();
+        defer tmp_dir.cleanup();
+
+        const ep = try supports.createEndpoint(tmp_dir.dir);
+        defer supports.releaseEndpoint(ep);
+
+        var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
+        defer conn.deinit();
+        try conn.bind();
+
+        var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
+        defer dispatcher.deinit();
+
+        var worker_push_socket = socket: {
+            const b = try nnng.Req.open(conn.context);
+            break:socket try b.as_dialer(ep.req_rep);
+        };
+        try worker_push_socket.transport.start(.{ .nonblocking = true });
+        defer worker_push_socket.close();
+
+        const pipe = worker_push_socket.pipe.item;
+        send_event: {
+            var msg = try nnng.Message.create();
+            try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
+            try pipe.sender().submit(msg);
+            break:send_event;
+        }
+
+        iteration: {
+            const status = try dispatcher.iteration("runner", noopHandler);
+            try std.testing.expectEqual(.handled, status);
+            try std.testing.expectEqual(0, dispatcher.queue.receive_queue.len);
+            break:iteration;
+        }
+        iteration: {
+            const status = try dispatcher.iteration("runner", noopHandler);
+            try std.testing.expectEqual(.awake, status);
+            try std.testing.expectEqual(1, dispatcher.queue.receive_queue.len);
+            break:iteration;
+        }
+        iteration: {
+            const status = try dispatcher.iteration("runner", noopHandler);
+            try std.testing.expectEqual(.handled, status);
+            try std.testing.expectEqual(0, dispatcher.queue.receive_queue.len);
+            break:iteration;
+        }
     }
 };

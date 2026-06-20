@@ -104,10 +104,9 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& 
             return {};
         }
 
-        // TODO:deprecated
-        // channel.makeWorkerResponse([](auto& encoder, auto& worker_phase, auto& desc, auto& offset) {
-        //     ::worker_progress, encodeStatementCount(stmts.size());
-        // });
+        channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto) {
+            encodeStatementCount(encoder, stage, desc, stmts.size());
+        });
 
         return std::move(stmts);
     }

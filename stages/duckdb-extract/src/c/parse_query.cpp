@@ -233,19 +233,14 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& 
         if (stmts.size() == 0) {
             channel.warn("Cannot handle an empty query");
             channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
-                // TODO:
-                // ::worker_skipped, );
                 encodeStatementOffset(encoder, stage, desc, 0);
             });
             return {};
         }
     
-        // TODO: deprecated
-        // channel.sendWorkerResponse([&](auto& encoder, auto& offset, auto& stage) {
-        //     // TODO:
-        //     // ::worker_progress, 
-        //     encodeStatementCount(encoder, stage, stmts.size());
-        // });
+        channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto) {
+            encodeStatementCount(encoder, stage, desc, stmts.size());
+        });
 
         return std::move(stmts);
     }
@@ -316,6 +311,9 @@ static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb:
     }
     
     channel.err(message);
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+        encodeStatementOffset(encoder, stage, desc, offset);
+    });
 }
 
 auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
@@ -333,6 +331,7 @@ auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
         channel.collectInto(this->results);
         ++stmt_offset;
     }
+    this->messageChannel(std::nullopt, "teardown").trace("Finish worker process");
 
     return no_error;
 }

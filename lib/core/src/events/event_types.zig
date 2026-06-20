@@ -419,6 +419,7 @@ pub const Event = union(EventType) {
 
     pub const Payload = EventPayload;
     pub const deinit = deinitEvent;
+    pub const tag = eventTag;
 };
 
 fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
@@ -461,4 +462,8 @@ fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
         .report_fatal => |*data| data.deinit(),
         .pending_fatal_quit => {},
     }
+}
+
+pub fn eventTag(event: *const Event) EventType {
+    return std.meta.activeTag(event.*);
 }

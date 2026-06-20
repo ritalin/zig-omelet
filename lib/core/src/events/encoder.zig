@@ -19,7 +19,7 @@ pub fn encodeToCbor(writer: *std.Io.Writer, packet: EventPacket) !void {
     defer cbor_writer.deinit();
 
     // TODO: needs to write EventHeader dialect
-    _ = try cbor_writer.writeEnum(EventType, std.meta.activeTag(packet.header));
+    _ = try cbor_writer.writeEnum(EventType, packet.header.tag());
     _ = try cbor_writer.writeString(packet.stage_name);
 
     try encodePayload(&cbor_writer, packet.event);
@@ -33,7 +33,7 @@ pub fn encodeSubscription(writer: *std.Io.Writer, subscription: EventHeader) !ty
     var cbor_writer = try CborStream.Writer.init(writer);
     defer cbor_writer.deinit();
 
-    const size = try cbor_writer.writeEnum(EventType, std.meta.activeTag(subscription));
+    const size = try cbor_writer.writeEnum(EventType, subscription.tag());
     return writer.buffer[0..size];
 }
 

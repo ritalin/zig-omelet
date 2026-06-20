@@ -78,6 +78,7 @@ pub const EventHeader = union(EventType) {
     pending_fatal_quit,
 
     pub const fromEvent = headerFromEvent;
+    pub const tag = headerTag;
 };
 
 fn headerFromEvent(tag: EventType) EventHeader {
@@ -87,4 +88,8 @@ fn headerFromEvent(tag: EventType) EventHeader {
         }
     }
     unreachable;
+}
+
+pub fn headerTag(event: *const EventHeader) EventType {
+    return std.meta.activeTag(event.*);
 }

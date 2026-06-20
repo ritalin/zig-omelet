@@ -285,7 +285,7 @@ pub const tests = struct {
         ack: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ack, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ack, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ack);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.ack);
@@ -294,7 +294,7 @@ pub const tests = struct {
         nack: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.nack, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.nack, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.nack);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.nack);
@@ -303,7 +303,7 @@ pub const tests = struct {
         heartbeat: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.heartbeat, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.heartbeat, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.heartbeat);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(heartbeat, packet.event.heartbeat);
@@ -312,7 +312,7 @@ pub const tests = struct {
         probe_launching: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.probe, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.probe, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.probe);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(.launching, packet.event.probe);
@@ -321,7 +321,7 @@ pub const tests = struct {
         launching: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.launching, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.launching, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.launching);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.launching);
@@ -330,7 +330,7 @@ pub const tests = struct {
         launched: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.launched, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.launched, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.launched);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.launched);
@@ -339,7 +339,7 @@ pub const tests = struct {
         failure_launching: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.failed_launching, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.failed_launching, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.failed_launching);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.failed_launching);
@@ -348,7 +348,7 @@ pub const tests = struct {
         topic: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.topic, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.topic, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.topic);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(topic, packet.event.topic);
@@ -357,7 +357,7 @@ pub const tests = struct {
         finish_topic: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_topic, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.finish_topic, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.finish_topic);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.finish_topic);
@@ -366,7 +366,7 @@ pub const tests = struct {
         ready: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.ready);
@@ -375,7 +375,7 @@ pub const tests = struct {
         ready_progress: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_progress, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_progress, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_progress);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.ready_progress);
@@ -384,7 +384,7 @@ pub const tests = struct {
         ready_source_path: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_source_path, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_source_path, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_source_path);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.ready_source_path);
@@ -393,7 +393,7 @@ pub const tests = struct {
         source_path: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.source_path, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.source_path);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(source_path, packet.event.source_path);
@@ -402,7 +402,7 @@ pub const tests = struct {
         finish_source_path: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_source_path, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.finish_source_path, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.finish_source_path);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.finish_source_path);
@@ -411,7 +411,7 @@ pub const tests = struct {
         ready_topic_body_progress: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(topic_body_response_progress, packet.event.ready_topic_body);
@@ -420,7 +420,7 @@ pub const tests = struct {
         ready_topic_body_success: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(topic_body_response_success, packet.event.ready_topic_body);
@@ -429,7 +429,7 @@ pub const tests = struct {
         ready_topic_body_skip: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(topic_body_response_skip, packet.event.ready_topic_body);
@@ -438,7 +438,7 @@ pub const tests = struct {
         topic_body: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(topic_body, packet.event.topic_body);
@@ -447,7 +447,7 @@ pub const tests = struct {
         skip_topic_body: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.skip_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.skip_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.skip_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(desc, packet.event.skip_topic_body);
@@ -456,7 +456,7 @@ pub const tests = struct {
         finish_topic_body: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.finish_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.finish_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(desc, packet.event.finish_topic_body);
@@ -465,7 +465,7 @@ pub const tests = struct {
         pending_finish_topic_body: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.pending_finish_topic_body, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.pending_finish_topic_body, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.pending_finish_topic_body);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.pending_finish_topic_body);
@@ -474,7 +474,7 @@ pub const tests = struct {
         ready_generate: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_generate, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.ready_generate, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.ready_generate);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.ready_generate);
@@ -483,7 +483,7 @@ pub const tests = struct {
         finish_generate: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_generate, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.finish_generate, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.finish_generate);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(generate_response, packet.event.finish_generate);
@@ -492,7 +492,7 @@ pub const tests = struct {
         worker_response: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.worker_response, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.worker_response, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.worker_response);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(worker_response, packet.event.worker_response);
@@ -501,7 +501,7 @@ pub const tests = struct {
         quit: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.quit, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.quit, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.quit);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep({}, packet.event.quit);
@@ -510,7 +510,7 @@ pub const tests = struct {
         log: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.log, std.meta.activeTag(packet.header));
+            try std.testing.expectEqual(.log, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.log);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(log, packet.event.log);

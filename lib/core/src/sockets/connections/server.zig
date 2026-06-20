@@ -12,6 +12,8 @@ const EventHeader = root.events.EventHeader;
 const EventDispatcher = root.sockets.EventDispatcher;
 const Logger = root.Logger;
 
+const WORKER_ENDPOINT = @import("../../default_config/endpoint_support.zig").WORKER_ENDPOINT;
+
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
@@ -37,7 +39,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
             };
             errdefer pull_socket.close();
 
-            try pull_socket.transport.addChannel(endpoints.worker orelse types.WORKER_ENDPOINT);
+            try pull_socket.transport.addChannel(endpoints.worker orelse WORKER_ENDPOINT);
 
             var cmd_socket = socket: {
                 const b = try nnng.Pub.open(context);
@@ -53,7 +55,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
 
             var inproc_socket = socket: {
                 const b = try nnng.Push.open(context);
-                break:socket try b.as_dialer(endpoints.worker orelse types.WORKER_ENDPOINT);
+                break:socket try b.as_dialer(endpoints.worker orelse WORKER_ENDPOINT);
             };
             errdefer inproc_socket.close();
 
@@ -173,7 +175,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var conn = try Server("runner").create(std.testing.io, std.testing.allocator, 1, ep);

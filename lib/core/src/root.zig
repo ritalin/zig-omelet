@@ -25,6 +25,7 @@ pub const guest_phases = struct {
 };
 
 pub const Logger = @import("./Logger.zig");
+pub const TaskReaper = @import("./supports/TaskReaper.zig");
 
 // TODO:
 // pub const settings = struct {

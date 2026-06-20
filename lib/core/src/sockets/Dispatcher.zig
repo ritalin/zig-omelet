@@ -81,57 +81,13 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                         try self.queue.entrySkipped(skip_entries.items);
                     }
                 }
-
-
-                // while (self.queue.receive_queue.popFront()) |e| {
-                //     try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ e.pipe_id, @tagName(e.event), e.from_stage });
-
-                //     var entry = e;
-                //     var dirty: EventDispatcher.DirtyState = .none;
-
-                //     try on_dispatch(self, entry, &dirty);
-
-                //     switch (dirty) {
-                //         .none => {
-                //             entry.deinit(self.queue.allocator);
-                //         },
-                //         .delayed => {
-                //             try skip_entries.append(self.queue.allocator, entry);
-                //         },
-                //         .unhandled => {
-                //             defer entry.deinit(self.queue.allocator);
-                //             try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(e.event), self.phase });
-                //         }
-                //     }
-                // }
-                // if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
-                //     // TODO: about daemon boot or managed boot
-                //     if (self.vtable.on_quit) |q| {
-                //         try (q.handler)(q.ptr);
-                //     }
-                //     break;
-                // }
-
-                // const batch_sender_log = self.log_router.as_sender();
-                
-                // while (self.queue.send_queue.popFront()) |channel| {
-                //     try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
-                //     channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
-                //         error.WouldBlock => {
-                //             try self.queue.postPriority(channel);
-                //             break;
-                //         },
-                //         else => return err,
-                //     };
-                // }
-
-                // _ = try self.poller.poll(Dispatcher.doPoll);
-                // try self.queue.entrySkipped(skip_entries.items);
             }
         }
 
         pub fn iteration(self: *Dispatcher, stage_name: types.StageName, on_dispatch: VTable.DispatchFn) !IterationStatus {
             var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
+            defer skip_entries.deinit(self.queue.allocator);
+            
             const status = try self.iterationInternal(stage_name, self.queue.receive_queue.popFront(), &skip_entries, on_dispatch);
 
             if ((status == .handled) and (skip_entries.items.len > 0)) {
@@ -274,17 +230,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         };
 
         // TODO:
-        // pub fn delay(self: *Self, socket: *zmq.ZSocket, from: types.Symbol, event: events.Event, routing_id: ?types.Symbol) !void {
-        //     try self.receive_queue.prepend(.{
-        //         .allocator = self.allocator,
-        //         .kind = .response,
-        //         .socket = socket,
-        //         .from = try self.allocator.dupe(u8, from),
-        //         .event = try event.clone(self.allocator),
-        //         .routing_id = if (routing_id) |x| try self.allocator.dupe(u8, x) else null,
-        //     });
-        // }
-
         // pub fn postFatal(self: *Self, stack_trace: ?*std.builtin.StackTrace) !void {
         //     const message = err_message: {
         //         if (stack_trace) |x| {
@@ -312,11 +257,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         //     });
         // }
 
-        // pub fn revertFromPending(self: *Self) !void {
-        //     if (self.receive_pending.dequeue()) |entry| {
-        //         try self.send_queue.prepend(entry);
-        //     }
-        // }
         pub const Queue = struct {
             allocator: std.mem.Allocator,
             send_queue: std.Deque(sockets.SendChannel),
@@ -361,19 +301,8 @@ pub const DirtyState = enum { none, delayed, unhandled };
 pub const Options = struct {
     log_style: root.Logger.LogStyle = .stderr,
     no_color: bool = false,
+    forward_worker: bool = true,
 };
-
-// TODO: will remove
-// pub fn Logger(comptime Owner: type) type {
-//     return struct {
-//         owner: *Owner,
-
-//         pub fn log(self: *Logger, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
-//             if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
-//             return self.owner.log(self.ptr, level, stage_name, fmt, args);
-//         }
-//     };
-// }
 
 test "dispatcher test" {
     std.testing.refAllDecls(@This());
@@ -387,6 +316,8 @@ pub const tests = struct {
     const ServerConnection = root.sockets.Connection.Server("runner");
     const ClientConnection = root.sockets.Connection.Client("stage");
     const Dispatcher = EventDispatcher.Sized(8);
+
+    const WORKER_ENDPOINT = @import("../default_config/endpoint_support.zig").WORKER_ENDPOINT;
 
     fn noopHandler(_: *Dispatcher, _: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {}
 
@@ -434,7 +365,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
@@ -470,7 +401,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var conn = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
@@ -482,7 +413,7 @@ pub const tests = struct {
 
         var worker_push_socket = socket: {
             const b = try nnng.Push.open(conn.context);
-            break:socket try b.as_dialer(types.WORKER_ENDPOINT);
+            break:socket try b.as_dialer(WORKER_ENDPOINT);
         };
         try worker_push_socket.transport.start(.{ .nonblocking = true });
         defer worker_push_socket.close();
@@ -516,7 +447,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
@@ -552,7 +483,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
@@ -593,7 +524,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, 4, ep);
@@ -638,7 +569,7 @@ pub const tests = struct {
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir.dir);
+        const ep = try supports.createEndpoint(tmp_dir, .{});
         defer supports.releaseEndpoint(ep);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);

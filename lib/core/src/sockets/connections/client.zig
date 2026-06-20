@@ -13,6 +13,8 @@ const EventHeader = root.events.EventHeader;
 const EventDispatcher = root.sockets.EventDispatcher;
 const Logger = root.Logger;
 
+const WORKER_ENDPOINT = @import("../../default_config/endpoint_support.zig").WORKER_ENDPOINT;
+
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const encodeSubscription = @import("../../events/encoder.zig").encodeSubscription;
 const decodeSubscription = @import("../../events/decoder.zig").decodeSubscription;
@@ -51,13 +53,13 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
             var pull_worker_socket = socket: {
                 const b = try nnng.Pull.open(context);
-                break:socket try b.as_listener(endpoints.worker orelse types.WORKER_ENDPOINT);
+                break:socket try b.as_listener(endpoints.worker orelse WORKER_ENDPOINT);
             };
             errdefer pull_worker_socket.close();
 
             var push_worker_socket = socket: {
                 const b = try nnng.Push.open(context);
-                break:socket try b.as_dialer(endpoints.worker orelse types.WORKER_ENDPOINT);
+                break:socket try b.as_dialer(endpoints.worker orelse WORKER_ENDPOINT);
             };
             errdefer push_worker_socket.close();
 
@@ -103,8 +105,9 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
             for (buffer.items) |bytes| {
                 const header: events.EventHeader = try decodeSubscription(bytes);
-                try subscriptions.writer.print("{s}, ", .{@tagName(std.meta.activeTag(header))});
+                try subscriptions.writer.print("{s}, ", .{@tagName(header.tag())});
             }
+            try subscriptions.writer.flush();
 
             return subscriptions.written();
         } 
@@ -146,7 +149,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
             var dispatcher = try EventDispatcher.Sized(poller_size).create(self.context, Self.PollHandler(poller_size).doPoll, options);
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.cmd_socket.pipe, .{});
-            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_worker_socket.pipe, .{ .raw_mask = WorkerPipeOption.encode(.{ .forwarding = true }) });
+            try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_worker_socket.pipe, .{ .raw_mask = WorkerPipeOption.encode(.{ .forwarding = options.forward_worker }) });
 
             dispatcher.vtable.on_post = .{
                 .ptr = self,

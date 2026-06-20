@@ -63,14 +63,8 @@ pub const EventHeader = union(EventType) {
     // Topic body event
     ready_topic_body,
     topic_body,
-    skip_topic_body,
-    pending_finish_topic_body,
-    finish_topic_body,
     // Generate event
-    ready_generate,
     finish_generate,
-    // Worker event
-    worker_response,
     // Other event
     quit,
     log,

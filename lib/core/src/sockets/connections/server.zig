@@ -18,9 +18,6 @@ const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
 pub fn Server(comptime stage_name: types.StageName) type {
-// TODO:
-// pub fn Server(comptime stage_name: types.Symbol, comptime WorkerType: type) type {
-
     return struct {
         context: nnng.Context,
         reply_socket: nnng.Rep.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),

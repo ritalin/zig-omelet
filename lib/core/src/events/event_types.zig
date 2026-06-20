@@ -89,15 +89,16 @@ pub const EventType = enum (u8) {
     // Topic body event
     ready_topic_body,
     topic_body,
-    skip_topic_body,
-    pending_finish_topic_body, //TODO:Deprecated?
-    finish_topic_body, //TODO:Deprecated?
+
+    // skip_topic_body,//TODO:Deprecated?
+    // pending_finish_topic_body, //TODO:Deprecated?
+    // finish_topic_body, //TODO:Deprecated?
+    // ready_generate,//TODO:Deprecated?
+    // Worker event
+    // worker_response,//TODO:Deprecated?
 
     // Generate event
-    ready_generate,//TODO:Deprecated?
     finish_generate,
-    // Worker event
-    worker_response,//TODO:Deprecated?
     // Other event
     quit,
     log,
@@ -263,33 +264,12 @@ const EventPayload = struct {
         pub const Status = enum { new_file, update_file, generate_failed };
     };
 
-    // TODO: Deprecate
-    pub const SkipTopicBody = struct {
-        header: SourcePath,
-        index: usize,
-
-        pub fn init(header: StructView(SourcePath), index: usize) !@This() {
-            return .{
-                .header = SourcePath.init(header),
-                .index = index,
-            };
-        }
-        pub fn deinit(_: @This(), _: std.mem.Allocator) void {}
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.header.values(), self.index);
-        }
-        pub fn values(self: @This()) struct{StructView(SourcePath), usize} {
-            return .{ self.header.values(), self.index };
-        }
-    };
-
     pub const SourcePath = struct {
         category: TopicCategory,
         name: Symbol,
         path: FilePath,
         dialect: Symbol,
         hash: Symbol,
-        item_count: usize,
 
         pub fn init(view: StructView(SourcePath)) SourcePath {
             return .{
@@ -298,13 +278,12 @@ const EventPayload = struct {
                 .path = view[2],
                 .dialect = view[3],
                 .hash = view[4],
-                .item_count = view[5],
             };
         }
         pub fn deinit(_: *SourcePath, _: std.mem.Allocator) void {}
 
         pub fn values(self: *const SourcePath) StructView(SourcePath) {
-            return .{ self.category, self.name, self.path, self.dialect, self.hash, self.item_count };
+            return .{ self.category, self.name, self.path, self.dialect, self.hash };
         }
     };
 
@@ -327,28 +306,6 @@ const EventPayload = struct {
 
         pub fn values(self: *const SourceDescriptor) StructView(SourceDescriptor) {
             return .{ self.category, self.name, self.dialect, self.offset };
-        }
-    };
-
-    // TODO: Deprecate
-    pub const WorkerResponse = struct {
-        allocator: std.mem.Allocator,
-        content: Symbol,
-
-        pub fn init(allocator: std.mem.Allocator, view: StructView(WorkerResponse)) !@This() {
-            return .{
-                .allocator = allocator,
-                .content = try allocator.dupe(u8, view[0]),
-            };
-        }
-        pub fn deinit(self: @This()) void {
-            self.allocator.free(self.content);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, .{self.content});
-        }
-        pub fn values(self: @This()) StructView(@This()) {
-            return .{ self.content };
         }
     };
 
@@ -403,14 +360,8 @@ pub const Event = union(EventType) {
     // Topic body events
     ready_topic_body: Payload.TopicBodyResponse,
     topic_body: Payload.TopicBody,
-    skip_topic_body: Payload.SourceDescriptor,
-    pending_finish_topic_body: void,
-    finish_topic_body: Payload.SourceDescriptor,
     // Generate events
-    ready_generate: void,
     finish_generate: Payload.GenerateResponse,
-    // Worker event
-    worker_response: Payload.WorkerResponse,
     // Other event
     quit: void,
     log: Payload.Log,
@@ -444,18 +395,11 @@ fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
         .ready_source_path => {},
         .source_path => |*data| data.deinit(allocator),
         .finish_source_path => {},
-
         // Topic body events
         .ready_topic_body => |*data| data.deinit(allocator),
         .topic_body => |*data| data.deinit(allocator),
-        .skip_topic_body => |*data| data.deinit(),
-        .pending_finish_topic_body => {},
-        .finish_topic_body => |*data| data.deinit(),
         // Generate events
-        .ready_generate => {},
         .finish_generate => {},
-        // Worker event
-        .worker_response => |data| data.deinit(),
         // Other events
         .quit => {},
         .log => |*data| data.deinit(),

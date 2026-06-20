@@ -21,27 +21,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         const Dispatcher = @This();
         const ReceivePoller = nnng.ReceivePoller(poller_size);
 
-        // TODO:
-        // pub const Phase = struct {
-        //     level: std.enums.EnumFieldStruct(enum {booting, request, ready, terminating, quitting, done}, bool, false),
-
-        //     pub inline fn ready(self: *Phase) !void {
-        //         self.level.ready = true;
-        //     }
-        //     pub inline fn receiveTerminate(self: *Phase) !void {
-        //         try self.ready();
-        //         self.level.terminating = true;
-        //     }
-        //     pub inline fn readyQuit(self: *Phase) !void {
-        //         try self.receiveTerminate();
-        //         self.level.quitting = true;
-        //     }
-        //     pub inline fn done(self: *Phase) !void {
-        //         try self.readyQuit();
-        //         self.level.done = true;
-        //     }
-        // };
-
         pub fn create(context: nnng.Context, on_poll: Dispatcher.VTable.PollFn, options: Options) !Dispatcher {
             return .{
                 .allocator = context.allocator,
@@ -246,16 +225,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
         //         }
         //     };
         //     defer self.allocator.free(message);
-
-        //     try self.send_queue.pushFront(.{
-        //         .allocator = self.allocator,
-        //         .kind = .post,
-        //         .socket = self.send_socket,
-        //         .from = try self.allocator.dupe(u8, stage_name),
-        //         .event = .{.report_fatal = try events.Event.Payload.Log.init(self.allocator, .{.err, message})},
-        //         .routing_id = null,
-        //     });
-        // }
 
         pub const Queue = struct {
             allocator: std.mem.Allocator,

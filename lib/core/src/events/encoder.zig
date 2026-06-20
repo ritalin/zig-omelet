@@ -110,23 +110,11 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
                 _ = try writer.writeTuple(StructView(Event.Payload.TopicBody.Encoded), item.values());
             }
         },
-        .skip_topic_body => |payload| {
-            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.values());
-        },
-        .pending_finish_topic_body => {},
-        .finish_topic_body => |payload| {
-            _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.values());
-        },
         // Generate event
-        .ready_generate => {},
         .finish_generate => |payload| {
             _ = try writer.writeTuple(StructView(Event.Payload.SourceDescriptor), payload.desc.values());
             _ = try writer.writeEnum(Event.Payload.GenerateResponse.Status, payload.status);
             _ = try writer.writeString(payload.message);
-        },
-        // Worker event
-        .worker_response => |payload| {
-            _ = try writer.writeString(payload.content);
         },
         // Other event
         .quit => {},

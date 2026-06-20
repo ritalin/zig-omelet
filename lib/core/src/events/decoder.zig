@@ -116,19 +116,7 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
 
             return .{ .topic_body = payload };
         },
-        .skip_topic_body => {
-            const desc = try reader.readTuple(StructView(Event.Payload.SourceDescriptor));
-
-            return .{ .skip_topic_body = .init(desc) };
-        },
-        .finish_topic_body => {
-            const desc = try reader.readTuple(StructView(Event.Payload.SourceDescriptor));
-
-            return .{ .finish_topic_body = .init(desc) };
-        },
-        .pending_finish_topic_body => return .pending_finish_topic_body,
         // Generation event
-        .ready_generate => return .ready_generate,
         .finish_generate => {
             const desc = try reader.readTuple(StructView(Event.Payload.SourceDescriptor));
             const status = try reader.readEnum(Event.Payload.GenerateResponse.Status);
@@ -140,14 +128,6 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
                 .message = message,
             };
             return .{.finish_generate = payload};
-        },
-        // Worker event
-        .worker_response, => {
-            const content = try reader.readString();
-
-            return .{
-                .worker_response = try Event.Payload.WorkerResponse.init(allocator, .{content}),
-            };
         },
         // Other event
         .quit => return .quit,
@@ -206,7 +186,7 @@ pub const tests = struct {
 
         const heartbeat = Event.Payload.Heartbeat.init(.{ .probe, 1 });
         const topic = Event.Payload.Topic.init(.{ .source, &.{"topic_a", "topic_b", "topic_c"} });
-        var source_path = Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "duckdb", "Some-content", 1 });
+        var source_path = Event.Payload.SourcePath.init(.{ .source, "Some-name", "Some-path", "duckdb", "Some-content" });
         defer source_path.deinit(allocator);
         const desc = Event.Payload.SourceDescriptor.init(.{ .source, "path/to/name", "duckdb", 0 });
         const topic_body_response_progress: Event.Payload.TopicBodyResponse = .{
@@ -248,8 +228,6 @@ pub const tests = struct {
             .status = .new_file,
             .message = "Success!!"
         };
-        const worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"});
-        defer worker_response.deinit();
         var log = Event.Payload.Log.init(.{.debug, "Test message😃"});
         defer log.deinit();
 
@@ -271,12 +249,7 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_topic_body), .stage_name = test_context, .event = .{.ready_topic_body = topic_body_response_success} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_topic_body), .stage_name = test_context, .event = .{.ready_topic_body = topic_body_response_skip} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.topic_body), .stage_name = test_context, .event = .{.topic_body = topic_body} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.skip_topic_body), .stage_name = test_context, .event = .{.skip_topic_body = desc} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_topic_body), .stage_name = test_context, .event = .{.finish_topic_body = desc} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.pending_finish_topic_body), .stage_name = test_context, .event = .pending_finish_topic_body });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ready_generate), .stage_name = test_context, .event = .ready_generate });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.finish_generate), .stage_name = test_context, .event = .{.finish_generate = generate_response} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.worker_response), .stage_name = test_context, .event = .{.worker_response = worker_response} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.quit), .stage_name = test_context, .event = .quit });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.log), .stage_name = test_context, .event = .{.log = log} });
 
@@ -444,42 +417,6 @@ pub const tests = struct {
             try std.testing.expectEqualDeep(topic_body, packet.event.topic_body);
             break:topic_body;
         }
-        skip_topic_body: {
-            var packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.skip_topic_body, packet.header.tag());
-            try std.testing.expectEqual({}, packet.header.skip_topic_body);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep(desc, packet.event.skip_topic_body);
-            break:skip_topic_body;
-        }
-        finish_topic_body: {
-            var packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.finish_topic_body, packet.header.tag());
-            try std.testing.expectEqual({}, packet.header.finish_topic_body);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep(desc, packet.event.finish_topic_body);
-            break:finish_topic_body;
-        }
-        pending_finish_topic_body: {
-            var packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.pending_finish_topic_body, packet.header.tag());
-            try std.testing.expectEqual({}, packet.header.pending_finish_topic_body);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.pending_finish_topic_body);
-            break:pending_finish_topic_body;
-        }
-        ready_generate: {
-            var packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.ready_generate, packet.header.tag());
-            try std.testing.expectEqual({}, packet.header.ready_generate);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep({}, packet.event.ready_generate);
-            break:ready_generate;
-        }
         finish_generate: {
             var packet = try decodeFromCborInternal(allocator, &reader);
             defer packet.event.deinit(allocator);
@@ -488,15 +425,6 @@ pub const tests = struct {
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
             try std.testing.expectEqualDeep(generate_response, packet.event.finish_generate);
             break:finish_generate;
-        }
-        worker_response: {
-            var packet = try decodeFromCborInternal(allocator, &reader);
-            defer packet.event.deinit(allocator);
-            try std.testing.expectEqual(.worker_response, packet.header.tag());
-            try std.testing.expectEqual({}, packet.header.worker_response);
-            try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep(worker_response, packet.event.worker_response);
-            break:worker_response;
         }
         quit: {
             var packet = try decodeFromCborInternal(allocator, &reader);

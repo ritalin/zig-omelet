@@ -1,177 +1,121 @@
 const std = @import("std");
-const zmq = @import("zmq");
+const nnng = @import("nnng");
 const core = @import("core");
+const app_context = @import("build_options").app_context;
+
+const Event = core.events.Event;
+const GenerateStatus = Event.Payload.GenerateResponse.Status;
 
 const CodeBuilder = @import("./CodeBuilder.zig");
 
 const Self = @This();
 
 allocator: std.mem.Allocator,
-source: core.Event.Payload.TopicBody,
-output_root: std.fs.Dir,
-output_name: core.FilePath,
+source: Event.Payload.TopicBody,
+output_root: std.Io.Dir,
 on_handle: CodeBuilder.OnBuild,
 
-pub fn init(allocator: std.mem.Allocator, source: core.Event.Payload.TopicBody, output_dir_path: core.FilePath) !*Self {
-    const self = try allocator.create(Self);
-    self.* = .{
+pub fn init(io: std.Io, allocator: std.mem.Allocator, source: *const Event.Payload.TopicBody, output_dir_path: core.types.FilePath) !Self {
+    return .{
         .allocator = allocator,
-        .source = try source.clone(allocator),
-        .output_root = try std.fs.cwd().openDir(output_dir_path, .{}),
-        .output_name = try allocator.dupe(u8, trimExtension(source.header.name)),
-        .on_handle = if (source.header.category == .source) CodeBuilder.SourceGenerator.build else CodeBuilder.UserTypeGenerator.build,
+        .source = try Event.Payload.TopicBody.Support.clone(allocator, source),
+        .output_root = try std.Io.Dir.cwd().openDir(io, output_dir_path, .{}),
+        .on_handle = if (source.desc.category == .source) CodeBuilder.SourceGenerator.build else CodeBuilder.UserTypeGenerator.build,
     };
-
-    return self;
 }
 
-pub fn deinit(self: *Self) void {
-    self.output_root.close();
-
-    self.source.deinit();
-    self.allocator.free(self.output_name);
-    self.allocator.destroy(self);
+pub fn deinit(self: *Self, io: std.Io) void {
+    self.output_root.close(io);
+    Event.Payload.TopicBody.Support.release(self.allocator, &self.source);
 }
 
 // pub fn run(self: *Self) !void {
-pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
-    // _ = socket;
-    try sendLog(self.allocator, socket, .trace, "Begin generate from `{s}`", .{self.source.header.name});
+pub fn run(self: Self, io: std.Io, pipe: nnng.Pipe.Sync) !void {
+    var worker = self;
+    defer worker.deinit(io);
 
-    var builder = try CodeBuilder.init(self.allocator);
-    defer builder.deinit();
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-    var walker = try CodeBuilder.Parser.beginParse(self.allocator, self.source.bodies);
-    defer walker.deinit();
+    var builder = CodeBuilder.init(allocator);
+    // TODO:
+    // defer builder.deinit();
 
-    var passed_set: TargetFields = .{};
+    var walker = CodeBuilder.Parser.beginParse(worker.source.bodies);
+    // TODO:
+    // defer walker.deinit();
 
-    try parsePayload(&walker, &passed_set, builder);
+    builder.apply(allocator, &walker) catch |err| {
+        var channel = try core.sockets.SendChannel.init(worker.allocator, pipe.item.id, app_context, pipe.item.sender());
+        defer channel.deinit();
+        try worker.sendData(&channel, try self.failedMessage(allocator, err), .generate_failed);
+        return;
+    };
 
-    const payload = payload: {
-        var writer = try core.CborStream.Writer.init(self.allocator);
-        defer writer.deinit();
+    result: {
+        var channel = try core.sockets.SendChannel.init(worker.allocator, pipe.item.id, app_context, pipe.item.sender());
+        defer channel.deinit();
         
-        if (self.on_handle(builder, self.output_root, self.output_name)) |status| {
-            try self.writeLogPayload(&writer, self.output_name, "Successful", status);
+        if ((worker.on_handle)(&builder, io, worker.allocator, worker.output_root, worker.source.desc.name)) |status| {
+            try worker.sendData(&channel, try self.successMessage(allocator), status);
         }
-        else |err| switch (err) {
-            error.QueryFileGenerationFailed => {
-                try self.writeLogPayload(&writer, self.output_name, "Failed SQL file", .generate_failed);
-            },
-            error.TypeFileGenerationFailed => {
-                try self.writeLogPayload(&writer, self.output_name, "Failed Typescript file", .generate_failed);
-            },
-            else => {
-                try self.writeLogPayload(&writer, self.output_name, "Unexpected error during generating stage", .generate_failed);
-            },
+        else |err| {
+            try worker.sendData(&channel, try self.failedMessage(allocator, err), .generate_failed);
         }
+        break:result;
+    }
 
-        break :payload try writer.buffer.toOwnedSlice();
-    };
-    defer self.allocator.free(payload);
-
-    const event: core.Event = .{
-        .worker_response = try core.Event.Payload.WorkerResponse.init(self.allocator, .{payload}),
-    };
-    defer event.deinit();
-
-    try core.sendEvent(self.allocator, socket, .{ .kind = .post, .from = "task", .event = event });
+    if (core.Logger.accepted(.trace)) {
+        var channel = try core.sockets.SendChannel.init(worker.allocator, pipe.item.id, app_context, pipe.item.sender());
+        try sendLog(&channel, .trace, "Finish worker process");
+    }
 }
 
-fn writeLogPayload(self: *Self, writer: *core.CborStream.Writer, name: core.Symbol, message: core.Symbol, status: ResultStatus) !void {
-    const output_path = path: {
-        if (self.source.header.category == .schema) {
-            break:path try std.fmt.allocPrint(self.allocator, CodeBuilder.UserTypeGenerator.log_fmt, .{name});
-        }
-        else {
-            break:path try std.fmt.allocPrint(self.allocator, CodeBuilder.SourceGenerator.log_fmt, .{name});
-        }
-    };
-    defer self.allocator.free(output_path);
+fn successMessage(self: *const Self, allocator: std.mem.Allocator) ![]const u8 {    
+    const desc = self.source.desc;
+    const name = self.source.name_alt orelse desc.name;
 
-    _ = try writer.writeString(self.source.header.path);
-    _ = try writer.writeString(output_path);
-    _ = try writer.writeString(message);
-    _ = try writer.writeEnum(ResultStatus, status);
-}
-
-
-const TargetFields = std.enums.EnumFieldStruct(std.meta.FieldEnum(CodeBuilder.Target), bool, false);
-
-fn parsePayload(walker: *CodeBuilder.Parser.ResultWalker, passed_set: *TargetFields, builder: *CodeBuilder) !void {
-    while (try walker.walk()) |target| switch (target) {
-        .query => |q| {
-            try builder.applyQuery(q);
-            passed_set.query = true;
-        },
-        .parameter => |placeholder| {
-            if (!passed_set.bound_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-            if (!passed_set.anon_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-
-            try builder.applyPlaceholder(placeholder, builder.user_type_names, builder.anon_user_types);
-            passed_set.parameter = true;
-        },
-        .parameter_order => |orders| {
-            try builder.applyPlaceholderOrder(orders);
-            passed_set.parameter_order = true;
-        },
-        .result_set => |field_types| {
-            if (!passed_set.bound_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-            if (!passed_set.anon_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-
-            try builder.applyResultSets(field_types, builder.user_type_names, builder.anon_user_types);
-            passed_set.result_set = true;
-        },
-        .user_type => |definition| {
-            if (!passed_set.bound_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-            if (!passed_set.anon_user_type) {
-                try parsePayload(walker, passed_set, builder);
-            }
-
-            try builder.applyUserType(definition);
-            passed_set.user_type = true;
-        },
-        .bound_user_type => |names| {
-            try builder.applyBoundUserType(names);
-            passed_set.bound_user_type = true;
-        },
-        .anon_user_type => |definitions| {
-            try builder.applyAnonymousUserType(definitions);
-            passed_set.anon_user_type = true;
-        },
-    };
-}
-
-fn sendLog(allocator: std.mem.Allocator, socket: *zmq.ZSocket, log_level: core.LogLevel, comptime fmt: []const u8, args: anytype) !void {
-    const message = try std.fmt.allocPrint(allocator, fmt, args);
-    defer allocator.free(message);
-
-    const log: core.Event = .{
-        .log = try core.Event.Payload.Log.init(allocator, .{log_level, message}),
-    };
-    defer log.deinit();
-    try core.sendEvent(allocator, socket, .{ .kind = .post, .from = "task", .event = log });
-}
-
-fn trimExtension(name: core.Symbol) core.Symbol {
-    const ext = std.fs.path.extension(name);
-    if (std.mem.lastIndexOf(u8, name, ext)) |i| {
-        return name[0..i];
+    if (desc.category == .schema) {
+        return std.fmt.allocPrint(allocator, CodeBuilder.UserTypeGenerator.success_log_fmt, .{name, desc.dialect, @tagName(desc.category)});
     }
     else {
-        return name;
+        return std.fmt.allocPrint(allocator, CodeBuilder.SourceGenerator.success_log_fmt, .{name, desc.dialect, @tagName(desc.category)});
     }
 }
 
-pub const ResultStatus = CodeBuilder.ResultStatus;
+fn failedMessage(self: *const Self, allocator: std.mem.Allocator, err: anyerror) ![]const u8 {
+    const desc = self.source.desc;
+    const name = self.source.name_alt orelse desc.name;
+
+    switch (err) {
+        error.QueryFileGenerationFailed => {
+            return std.fmt.allocPrint(allocator, "Failed SQL file/name: {s}, dialect: {s}, category: {s}", .{name, desc.dialect, @tagName(desc.category)});
+        },
+        error.TypeFileGenerationFailed => {
+            return std.fmt.allocPrint(allocator, "Failed Typescript file/name: {s}, dialect: {s}, category: {s}", .{name, desc.dialect, @tagName(desc.category)});
+        },
+        else => {
+            return std.fmt.allocPrint(allocator, "Unexpected error during generating stage ({})/name: {s}, dialect: {s}, category: {s}", .{err, name, desc.dialect, @tagName(desc.category)});
+        }
+    }
+}
+
+fn sendData(self: *const Self, channel: *core.sockets.SendChannel, message: core.types.Symbol, status: GenerateStatus) !void {
+    const res: Event.Payload.GenerateResponse = .{
+        .desc = self.source.desc,
+        .status = status,
+        .message = message,
+    };
+    try channel.encode(.{ .finish_generate = res });
+    try channel.submit(.{});
+}
+
+fn sendLog(channel: *core.sockets.SendChannel, level: core.events.LogLevel, message: core.types.Symbol) !void {
+    const log: Event.Payload.Log = .{
+        .level = level,
+        .content = message,
+    };
+    try channel.encode(.{.log = log});
+    try channel.submit(.{});
+}

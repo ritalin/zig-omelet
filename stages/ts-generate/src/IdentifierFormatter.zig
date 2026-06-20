@@ -8,24 +8,23 @@ pub const OutputStyle = enum {
 pub fn format(allocator: std.mem.Allocator, input: []const u8, style: OutputStyle) ![]const u8 {
     var iter = std.mem.splitScalar(u8, input, '_');
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    var writer = buf.writer();
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    defer buffer.deinit();
     
     first_word: {
         var phrase_iter = try PhraseIterator.init(allocator, iter.first());
-        try formatWord(&writer, &phrase_iter, style);
+        try formatWord(&buffer.writer, &phrase_iter, style);
         break:first_word;
     }
     while (iter.next()) |phrase| {
         var phrase_iter = try PhraseIterator.init(allocator, phrase);
-        try formatWord(&writer, &phrase_iter, .pascal_case);
+        try formatWord(&buffer.writer, &phrase_iter, .pascal_case);
     }
 
-    return buf.toOwnedSlice();
+    return buffer.toOwnedSlice();
 }
 
-fn formatWord(writer: *std.ArrayList(u8).Writer, iter: *PhraseIterator, style: OutputStyle) !void {
+fn formatWord(writer: *std.Io.Writer, iter: *PhraseIterator, style: OutputStyle) !void {
     var s: OutputStyle = style;
 
     while (iter.next()) |x| {
@@ -43,24 +42,26 @@ fn formatWord(writer: *std.ArrayList(u8).Writer, iter: *PhraseIterator, style: O
 }
 
 const PhraseIterator = struct {
-    allocator: std.mem.Allocator,
     stack: Stack,
 
     const Entry = struct {word: []const u8};
-    const Stack = std.SinglyLinkedList(Entry);
+    const Stack = std.ArrayListUnmanaged(Entry);
 
     pub fn init(allocator: std.mem.Allocator, input: []const u8) !PhraseIterator {
         var self: PhraseIterator = .{
-            .allocator = allocator,
-            .stack = Stack{},
+            .stack = .empty,
         };
 
-        try self.parse(input);
+        try self.parse(allocator, input);
 
         return self;
     }
 
-    fn parse(self: *PhraseIterator, input: []const u8) !void {
+    pub fn deinit(self: *PhraseIterator, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn parse(self: *PhraseIterator, allocator: std.mem.Allocator, input: []const u8) !void {
         const State = enum {invalid, numeric, upper, lower};
 
         var end_index: usize = input.len;
@@ -111,27 +112,23 @@ const PhraseIterator = struct {
                 break:index .{ end_index-offset };
             };
 
-            const node = try self.allocator.create(Stack.Node);
-            node.*.data = .{
-                .word = input[tk[0]..end_index],
-            };
-            self.stack.prepend(node);
+            try self.stack.append(allocator, .{.word = input[tk[0]..end_index]});
 
             end_index = tk[0];
         }
     }
 
     pub fn next(self: *PhraseIterator) ?Entry {
-        const node = self.stack.popFirst() orelse return null;
-        defer self.allocator.destroy(node);
-
-        return node.data;
+        return self.stack.pop();
     }
 };
 
 fn runFormat(style: OutputStyle, input: []const u8, expect: []const u8) !void {
-    const actual = try format(std.testing.allocator, input, style);
-    defer std.testing.allocator.free(actual);
+    var arena = std.heap.ArenaAllocator.init((std.testing.allocator));
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const actual = try format(allocator, input, style);
 
     try std.testing.expectEqualStrings(expect, actual);
 }

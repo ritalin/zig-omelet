@@ -33,10 +33,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     try connection.subscribe(&.{
         .probe,
         .ready_progress,
-
-        .ready_topic_body,
         .topic_body,
-        .finish_topic_body,
     });
     try connection.connect();
 
@@ -57,7 +54,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
 }
 
 pub fn deinit(self: *GuestStage) void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
     self.dispatcher.deinit();
 }
 
@@ -132,12 +129,12 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
 }
 
 fn doReadyPhase(self: *GuestStage) !void {
-    self.state.deinit();
-    self.state = .{ .ready = ReadyPhaseState.create() };
+    self.state.deinit(self.allocator);
+    self.state = .{ .ready = try ReadyPhaseState.create(self.allocator) };
 }
 
 fn doQuitPhase(self: *GuestStage) void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
@@ -246,10 +243,10 @@ const State = union(events.EventPhase.Kind) {
     const deinit = deinitState;
 };
 
-fn deinitState(self: *State) void {
+fn deinitState(self: *State, allocator: std.mem.Allocator) void {
     switch (self.*) {
         .launching => |*state| state.deinit(),
-        .ready => |*state| state.deinit(),
+        .ready => |*state| state.deinit(allocator),
         else => unreachable,
     }
 }

@@ -110,24 +110,15 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        var tmpDir: std.testing.TmpDir = try test_support.createTmpDir();
+        defer tmpDir.cleanup();
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDir, .{});
         defer test_support.releaseEndpoint(host_ep);
 
-        const guest_ep1: types.Endpoints = .{
-            .req_rep = try allocator.dupe(u8, host_ep.req_rep),
-            .pub_sub = try allocator.dupe(u8, host_ep.pub_sub),
-            .push_pull = try allocator.dupe(u8, host_ep.push_pull),
-            .worker = "inproc://guest-worker1"
-        };
+        const guest_ep1: types.Endpoints = try test_support.createEndpoint(tmpDir, .{.worker_endpoint = "inproc://guest-worker1"});
         defer test_support.releaseEndpoint(guest_ep1);
 
-        const guest_ep2: types.Endpoints = .{
-            .req_rep = try allocator.dupe(u8, host_ep.req_rep),
-            .pub_sub = try allocator.dupe(u8, host_ep.pub_sub),
-            .push_pull = try allocator.dupe(u8, host_ep.push_pull),
-            .worker = "inproc://guest-worker2"
-        };
+        const guest_ep2: types.Endpoints = try test_support.createEndpoint(tmpDir, .{.worker_endpoint = "inproc://guest-worker2"});
         defer test_support.releaseEndpoint(guest_ep2);
         
         defer test_support.cleanup();
@@ -168,8 +159,9 @@ pub const tests = struct {
     }
 
     test "boot no response" {
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        var tmpDir: std.testing.TmpDir = try test_support.createTmpDir();
+        defer tmpDir.cleanup();
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDir, .{});
         defer test_support.releaseEndpoint(host_ep);
         defer test_support.cleanup();
 
@@ -205,8 +197,9 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr.dir);
+        var tmpDir: std.testing.TmpDir = try test_support.createTmpDir();
+        defer tmpDir.cleanup();
+        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDir, .{});
         defer test_support.releaseEndpoint(host_ep);
 
         const guest_ep: types.Endpoints = .{

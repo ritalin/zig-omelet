@@ -64,6 +64,14 @@ auto NngChannel::err(const std::string& message) -> void {
     this->messages.emplace_back(std::move(backend.release()));
 }
 
+auto NngChannel::trace(const std::string& message) -> void {
+    NngBackend backend;
+    auto encoder = CborEncoder(backend);
+    encodeWorkerLog(encoder, this->stage, this->worker_phase, this->desc, this->stmt_offset.value_or(0), LogLevel::trace, message);
+
+    this->messages.emplace_back(std::move(backend.release()));
+}
+
 auto NngChannel::makeWorkerResponse(std::function<void(CborEncoder<NngBackend>&, const std::string_view&, const SourceDescriptor&, size_t)> callback) -> void {
     NngBackend backend;
     auto encoder = CborEncoder(backend);

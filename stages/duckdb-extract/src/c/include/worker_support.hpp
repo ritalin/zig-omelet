@@ -20,6 +20,7 @@ public:
     auto info(const std::string& message) -> void;
     auto warn(const std::string& message) -> void;
     auto err(const std::string& message) -> void;
+    auto trace(const std::string& message) -> void;
 public:
     auto collectInto(std::vector<nng_msg*>& messages) -> void;
 private:

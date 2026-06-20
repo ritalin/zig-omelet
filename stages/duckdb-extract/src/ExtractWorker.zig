@@ -10,6 +10,7 @@ const stage_name: core.types.StageName = @import("build_options").worker_stage;
 const Worker = @This();
 
 allocator: std.mem.Allocator,
+category: events.TopicCategory,
 name: core.types.Symbol,
 path: core.types.FilePath,
 dialect: core.types.Symbol,
@@ -19,6 +20,7 @@ on_handle: *const fn (io: std.Io, database: c.DatabaseRef, stage: c.Slice, desc:
 pub fn init(allocator: std.mem.Allocator, source_path: events.Event.Payload.SourcePath) !Worker {
     return .{
         .allocator = allocator,
+        .category = source_path.category,
         .path = try allocator.dupeZ(u8, source_path.path),
         .name = try allocator.dupe(u8, source_path.name),
         .dialect = try allocator.dupe(u8, source_path.dialect),
@@ -37,15 +39,18 @@ pub fn deinit(self: *Worker) void {
 const ResultSet = struct { core.Symbol, core.Symbol, bool };
 
 pub fn run(self: Worker, io: std.Io, database: c.DatabaseRef, pipe: nnng.Pipe.Sync) void {
+    var worker = self;
+    defer worker.deinit();
+
     var file = 
-        std.Io.Dir.cwd().openFile(io, self.path, .{}) 
+        std.Io.Dir.cwd().openFile(io, worker.path, .{}) 
         catch |err| {
             switch (err) {
                 error.FileNotFound => {
-                    workerLog(self.allocator, pipe, .err, "File not found: {s}", .{self.path}) catch {};
+                    workerLog(worker.allocator, pipe, .err, "File not found: {s}", .{worker.path}) catch {};
                 },            
                 else => {
-                    workerLog(self.allocator, pipe, .err, "Invalid file: {s}", .{self.path}) catch {};
+                    workerLog(worker.allocator, pipe, .err, "Invalid file: {s}", .{worker.path}) catch {};
                 }
             }
             return;
@@ -55,23 +60,28 @@ pub fn run(self: Worker, io: std.Io, database: c.DatabaseRef, pipe: nnng.Pipe.Sy
 
     var buffer: [4096]u8 = undefined;
     var reader = file.reader(io, &buffer);
-    const q = reader.interface.allocRemaining(self.allocator, .unlimited) catch {
-        workerLog(self.allocator, pipe, .err, "Failed to read file: {s}", .{self.path}) catch {};
+    const q = reader.interface.allocRemaining(worker.allocator, .unlimited) catch {
+        workerLog(worker.allocator, pipe, .err, "Failed to read file: {s}", .{worker.path}) catch {};
         return;
     };
-    defer self.allocator.free(q);
+    defer worker.allocator.free(q);
 
     const stage: c.Slice = .{ .ptr = stage_name.ptr, .len = stage_name.len};
     const desc: c.SourceDescriptor = .{
         .response_event_tag = @intFromEnum(events.EventType.ready_topic_body),
         .log_event_tag = @intFromEnum(events.EventType.log),
-        .name = .{ .ptr = self.name.ptr, .len = self.name.len },
-        .dialect = .{ .ptr = self.dialect.ptr, .len = self.dialect.len },
-        .hash = .{ .ptr = self.hash.ptr, .len = self.hash.len },
+        .topic_category = @intFromEnum(worker.category),
+        .name = .{ .ptr = worker.name.ptr, .len = worker.name.len },
+        .dialect = .{ .ptr = worker.dialect.ptr, .len = worker.dialect.len },
+        .hash = .{ .ptr = worker.hash.ptr, .len = worker.hash.len },
     };
     const query: c.Slice = .{.ptr = q.ptr, .len = q.len};
 
-    self.on_handle(io, database, stage, desc, query, pipe.item.sender()) catch {};
+    worker.on_handle(io, database, stage, desc, query, pipe.item.sender()) catch {};
+
+    if (core.Logger.accepted(.trace)) {
+        workerLog(worker.allocator, pipe, .trace, "Finish worker process", .{}) catch {};
+    }
 }
 
 fn workerLog(allocator: std.mem.Allocator, pipe: nnng.Pipe.Sync, comptime level: events.LogLevel, comptime fmt: []const u8, args: anytype) !void {

@@ -41,7 +41,11 @@ pub fn RequestTopicPhaseState(comptime GuestStage: type) type {
                         topics: {
                             const topic: StructView(Event.Payload.Topic) = .{
                                 .schema,
-                                &.{ c.topic_user_type },
+                                &.{ 
+                                    c.topic_user_type,
+                                    c.topic_bound_user_type, 
+                                    c.topic_anon_user_type,
+                                },
                             };
                             try stage.dispatcher.queue.post(
                                 .{.topic = Event.Payload.Topic.init(topic)},

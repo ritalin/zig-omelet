@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const c = @import("c");
 const app_context = @import("build_options").app_context;
+const forward_worker = @import("build_options").forward_worker;
 
 const events = core.events;
 
@@ -26,12 +27,13 @@ connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 database: c.DatabaseRef,
 state: State,
+reapers: *core.TaskReaper,
 
 // TODO:
 // const Connection = core.sockets.Connection.Client(app_context, ExtractWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
-pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
 
     try connection.subscribe(&.{
@@ -46,6 +48,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     const options: EventDispatcher.Options = .{ 
         .log_style = setting.log_style,
         .no_color = setting.no_color, 
+        .forward_worker = forward_worker,
     };
     const dispatcher = try connection.configureDispatcher(1, options);
 
@@ -62,12 +65,14 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
         .dispatcher = dispatcher,
         .database = database,
         .state = .{ .launching = phase },
+        .reapers = try core.TaskReaper.init(io, allocator),
     };
 }
 
 pub fn deinit(self: *GuestStage) void {
     c.deinitDatabase(self.database);
     self.state.deinit(self.allocator);
+    self.reapers.deinit(self.allocator);
     self.dispatcher.deinit();
 }
 
@@ -165,12 +170,25 @@ fn doPrepareLaunching(self: *GuestStage) !void {
             else => {},
         }
     }
+    user_type: {
+        const err = c.retainUserTypeName(self.database);
+        switch (err) {
+            c.invalid_schema_catalog => {
+                try self.log(.err, "Launch failed. Invalid schema catalog.", .{});
+                failed = true;
+            },
+            else => {},
+        }
+        break:user_type;
+    }
 
     if (failed) return error.LaunchFailed;
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
+
+    try self.reapers.tick();
 
     switch (self.state) {
         .launching => |state| {

@@ -245,7 +245,7 @@ pub const tests = struct {
             try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             try std.testing.expectEqual(.source, packet.event.source_path.category);
             try std.testing.expectEqualStrings("foo", packet.event.source_path.name);
             try std.testing.expectEqualStrings(file_path, packet.event.source_path.path);
@@ -343,7 +343,7 @@ pub const tests = struct {
             try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             const expect = if (std.mem.eql(u8, packet.event.source_path.name, expects[0].name)) expects[0] else expects[1];
 
             try std.testing.expectEqual(expect.category, packet.event.source_path.category);
@@ -357,7 +357,7 @@ pub const tests = struct {
             defer if (channel) |*c| c.deinit();
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             const expect = if (std.mem.eql(u8, packet.event.source_path.name, expects[0].name)) expects[0] else expects[1];
 
             try std.testing.expectEqual(expect.category, packet.event.source_path.category);
@@ -452,7 +452,7 @@ pub const tests = struct {
             defer if (channel) |*c| c.deinit();
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             try std.testing.expectEqual(expect.category, packet.event.source_path.category);
             try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
             try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
@@ -545,7 +545,7 @@ pub const tests = struct {
             defer if (channel) |*c| c.deinit();
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             try std.testing.expectEqual(expect.category, packet.event.source_path.category);
             try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
             try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);
@@ -633,7 +633,7 @@ pub const tests = struct {
             try std.testing.expectEqual(conn.push_socket.pipe.item.id, channel.?.pipe_id);
 
             const packet = try events.EventPacket.decode(allocator, channel.?.msg.bytes());
-            try std.testing.expectEqual(.source_path, std.meta.activeTag(packet.event));
+            try std.testing.expectEqual(.source_path, packet.event.tag());
             try std.testing.expectEqual(expect.category, packet.event.source_path.category);
             try std.testing.expectEqualStrings(expect.name, packet.event.source_path.name);
             try std.testing.expectEqualStrings(expect.path, packet.event.source_path.path);

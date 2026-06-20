@@ -15,6 +15,8 @@ const Setting = @import("./settings/Setting.zig");
 const CacheManager = @import("./cache_manager.zig").CacheManager;
 const PayloadCacheManager = CacheManager.Payload(app_context);
 
+const GuestConfig = @import("./configs/Config.zig").Guest;
+
 const HeartbeatTask = @import("./tasks/HeartbeatTask.zig");
 const TaskReaper = @import("./supports/TaskReaper.zig");
 const task_support = @import("./supports/task_support.zig");
@@ -32,6 +34,7 @@ setting: *const Setting,
 connection: *HostRunner.Connection,
 dispatcher: EventDispatcher.Sized(poller_size),
 state: State = undefined,
+guest_configs: std.MultiArrayList(GuestConfig),
 guest_names: std.BufSet,
 reapers: *TaskReaper,
 
@@ -41,7 +44,7 @@ reapers: *TaskReaper,
 pub const Connection = core.sockets.Connection.Server(app_context);
 pub const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(200);
 
-pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, guest_names: []const types.StageName, setting: *const Setting) !HostRunner {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, guest_configs: std.MultiArrayList(GuestConfig), setting: *const Setting) !HostRunner {
     try connection.bind();
 
     const options: EventDispatcher.Options = .{ 
@@ -50,7 +53,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
     };
 
     var guests = std.BufSet.init(allocator);
-    for (guest_names) |name| {
+    for (guest_configs.items(.name)) |name| {
         try guests.insert(name);
     }
 
@@ -60,6 +63,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .setting = setting,
         .connection = connection,
         .dispatcher = try connection.configureDispatcher(poller_size, options),
+        .guest_configs = guest_configs,
         .guest_names = guests,
         .reapers = try TaskReaper.init(io, allocator),
     };
@@ -320,6 +324,7 @@ fn doReadyPhase(self: *HostRunner) !void {
     const next_state = try ReadyPhaseState.create(
         self.allocator,
         &self.guest_names,
+        &self.guest_configs,
         try self.state.request.drainTopics(self.allocator)
     );
     self.state.deinit();

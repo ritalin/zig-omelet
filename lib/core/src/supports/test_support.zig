@@ -1,6 +1,7 @@
 const std = @import("std");
 const known_folders = @import("known_folders");
 const root = @import("../root.zig");
+const endpont_support = @import("../default_config/endpoint_support.zig");
 
 const types = root.types;
 
@@ -29,21 +30,39 @@ pub fn createTmpDir() !std.testing.TmpDir {
     };
 }
 
-pub fn createEndpoint(dir: std.Io.Dir) !types.Endpoints {
+pub fn createEndpoint(tmp_dir: std.testing.TmpDir, config: endpont_support.Config) !types.Endpoints {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    return .{
-        .req_rep = try createEndpointInternal(io, allocator, dir, "ipc", "req_rep"),
-        .pub_sub = try createEndpointInternal(io, allocator, dir, "ipc", "pub_sub"),
-        .push_pull = try createEndpointInternal(io, allocator, dir, "ipc", "push"),
-    };
 
+    if (comptime @import("builtin").os.tag != .windows) {
+        const ep_config = try testEndpointConfig(io, allocator, &tmp_dir, config);
+        defer {
+            allocator.free(ep_config.channel_root);
+            allocator.free(ep_config.channel_dir);
+        }
+        return endpont_support.runtimeIpc(allocator, ep_config);
+    }
+    else {
+        return endpont_support.runtimeIpc(allocator, .{ 
+            .channel_root = &tmp_dir.sub_path, 
+            .channel_dir = config.channel_dir, 
+            .worker_endpoint = config.worker_endpoint,
+        });
+    }
 }
 
-fn createEndpointInternal(io: std.Io, allocator: std.mem.Allocator, dir: std.Io.Dir, schema: types.Symbol, name: types.Symbol) !types.Symbol {
-    const dir_path = try dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(dir_path);
-    return std.fmt.allocPrint(allocator, "{s}://{s}/{s}", .{ schema, dir_path, name });
+fn testEndpointConfig(io: std.Io, allocator: std.mem.Allocator, tmp_dir: *const std.testing.TmpDir, config: endpont_support.Config) !endpont_support.Config {
+    const ep_dir = try tmp_dir.dir.createDirPathOpen(io, config.channel_dir, .{});
+    defer ep_dir.close(io);
+
+    const channel_root = try tmp_dir.parent_dir.realPathFileAlloc(io, ".", allocator);
+    const channel_dir = try std.fmt.allocPrintSentinel(allocator, "{f}", .{ std.fs.path.fmtJoin(&.{ &tmp_dir.sub_path, config.channel_dir }) }, 0);
+
+    return .{
+        .channel_root = channel_root,
+        .channel_dir = channel_dir,
+        .worker_endpoint = config.worker_endpoint,
+    };
 }
 
 pub fn releaseEndpoint(endpoint: types.Endpoints) void {

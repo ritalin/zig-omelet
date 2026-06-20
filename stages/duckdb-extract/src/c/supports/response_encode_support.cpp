@@ -14,7 +14,10 @@ static auto encodeResponseHeader(CborEncoder<NngBackend>& encoder, uint8_t tag, 
 }
 
 static auto encodeSourceDescriptor(CborEncoder<NngBackend>& encoder, const SourceDescriptor& desc, size_t offset) -> void {
-    encoder.addArrayHeader(3);
+    encoder.addArrayHeader(4);
+    category: {
+        encoder.addUInt(desc.topic_category);
+    }
     name: {
         encoder.addString(std::string{ desc.name.ptr, desc.name.len });
     }
@@ -27,6 +30,25 @@ static auto encodeSourceDescriptor(CborEncoder<NngBackend>& encoder, const Sourc
     hash: {
         encoder.addString(std::string{ desc.hash.ptr, desc.hash.len });
     }
+}
+
+auto encodeStatementCount(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t count) -> void
+{
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
+    encodeSourceDescriptor(encoder, desc, 0);
+    
+    stmt_name_alt: {
+        encoder.addNull();
+    }
+    response: {
+        encoder.addUInt(::worker_progress);
+        encoder.addUInt(count);
+    }
+    encoder.flush();
 }
 
 auto encodeStatementOffset(

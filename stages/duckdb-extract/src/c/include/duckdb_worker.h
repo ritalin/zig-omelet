@@ -38,11 +38,11 @@ typedef struct Slice_ {
 typedef struct SourceDescriptor_ {
     uint8_t response_event_tag;
     uint8_t log_event_tag;
+    uint8_t topic_category;
     Slice name;
     Slice dialect;
     Slice hash;
 } SourceDescriptor;
-
 
 int32_t initDatabase(DatabaseRef *handle);
 void deinitDatabase(DatabaseRef handle);

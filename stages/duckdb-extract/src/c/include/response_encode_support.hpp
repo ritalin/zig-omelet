@@ -12,6 +12,12 @@ enum class LogLevel {
     trace = ::log_level_trace,
 };
 
+auto encodeStatementCount(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t count) -> void;
+
 auto encodeStatementOffset(
     CborEncoder<NngBackend>& encoder, 
     const std::string_view& stage, 

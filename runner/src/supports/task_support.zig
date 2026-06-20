@@ -1,13 +1,13 @@
 const std = @import("std");
 const nnng = @import("nnng");
 const core = @import("core");
-const TaskReaper = @import("./TaskReaper.zig");
 const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 
 const Event = core.events.Event;
 const StageName = core.types.StageName;
 const Connection = core.sockets.Connection.Server;
 const Dispatcher = core.sockets.EventDispatcher;
+const TaskReaper = core.TaskReaper;
 
 pub fn sendProbe(
     io: std.Io,
@@ -24,9 +24,9 @@ pub fn sendProbe(
 
     try dispatcher.queue.post(event, try connection.commandChannel());
     
-    const task: HeartbeatTask = .{};
+    // const task: HeartbeatTask = .{};
     const args = .{
-        task,
+        // task,
         io, 
         try connection.dataChannel(),
         std.meta.activeTag(event),

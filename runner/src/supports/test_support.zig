@@ -4,12 +4,12 @@ const core = @import("core");
 const events = core.events;
 
 const Setting = @import("../settings/Setting.zig");
-const TaskReaper = @import("../supports/TaskReaper.zig");
 const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 
 const stage_name = "host";
 const EventDispatcher = core.sockets.EventDispatcher;
 const ReceiveEntry = core.sockets.ReceiveEntry;
+const TaskReaper = core.TaskReaper;
 
 const task_support = @import("./task_support.zig");
 

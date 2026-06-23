@@ -16,7 +16,7 @@ const Setting = @import("./settings/Setting.zig");
 const CacheManager = @import("./cache_manager.zig").CacheManager;
 const PayloadCacheManager = CacheManager.Payload(app_context);
 
-const GuestConfig = @import("./configs/Config.zig").Guest;
+const Config = @import("./configs/Config.zig");
 
 const HeartbeatTask = @import("./tasks/HeartbeatTask.zig");
 const task_support = @import("./supports/task_support.zig");
@@ -34,7 +34,7 @@ setting: *const Setting,
 connection: *HostRunner.Connection,
 dispatcher: EventDispatcher.Sized(poller_size),
 state: State = undefined,
-guest_configs: std.MultiArrayList(GuestConfig),
+config: *const Config,
 guest_names: std.BufSet,
 reapers: *TaskReaper,
 
@@ -42,9 +42,8 @@ reapers: *TaskReaper,
 // const CommandPallet = @import("./CommandPallet.zig");
 // const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
 pub const Connection = core.sockets.Connection.Server(app_context);
-pub const TIMER_INTERVAL = std.Io.Duration.fromMilliseconds(200);
 
-pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, guest_configs: std.MultiArrayList(GuestConfig), setting: *const Setting) !HostRunner {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, config: *const Config, setting: *const Setting) !HostRunner {
     try connection.bind();
 
     const options: EventDispatcher.Options = .{ 
@@ -53,7 +52,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
     };
 
     var guests = std.BufSet.init(allocator);
-    for (guest_configs.items(.name)) |name| {
+    for (config.guests.items(.name)) |name| {
         try guests.insert(name);
     }
 
@@ -63,7 +62,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .setting = setting,
         .connection = connection,
         .dispatcher = try connection.configureDispatcher(poller_size, options),
-        .guest_configs = guest_configs,
+        .config = config,
         .guest_names = guests,
         .reapers = try TaskReaper.init(io, allocator),
     };
@@ -179,7 +178,7 @@ fn doRequestPhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .request = next_state };
 
-    try self.sendProbe(.{.probe =.request}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe =.request}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
 
 }
 
@@ -187,20 +186,20 @@ fn doReadyPhase(self: *HostRunner) !void {
     const next_state = try ReadyPhaseState.create(
         self.allocator,
         &self.guest_names,
-        &self.guest_configs,
+        &self.config.guests,
         try self.state.request.drainTopics(self.allocator)
     );
     self.state.deinit();
     self.state = .{ .ready = next_state };
 
-    try self.sendProbe(.{.probe = .ready}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe = .ready}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
 }
 
 fn doTerminatePhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, &self.guest_names) };
 
-    try self.sendProbe(.{.probe = .terminating}, 1, self.setting.general.heartbeat_limit, TIMER_INTERVAL);
+    try self.sendProbe(.{.probe = .terminating}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
     try self.log(.debug, "Start quitting...", .{});
 }
 
@@ -215,8 +214,8 @@ pub fn sendProbe(self: *HostRunner, event: events.Event, count: usize, limit: He
 
 pub fn sendProbeHeartbeat(self: *HostRunner, event_type: events.EventType, phase: events.EventPhase.Kind, count: u64) !void {
     if ((event_type == .probe) and (std.meta.eql(self.dispatcher.phase, .{.kind = phase, .agreement = .pending}))) {
-        const interval = TIMER_INTERVAL;
-        try self.sendProbe(.{.probe = phase}, count, self.setting.general.heartbeat_limit, interval);
+        const interval = self.config.host.heartbeat_interval;
+        try self.sendProbe(.{.probe = phase}, count, self.config.host.heartbeat_limit, interval);
     }
     else {
         return error.DiscardProbe;
@@ -224,8 +223,8 @@ pub fn sendProbeHeartbeat(self: *HostRunner, event_type: events.EventType, phase
 }
 
 pub fn sendProgressHeartbeat(self: *HostRunner) !void {
-    const interval = TIMER_INTERVAL;
-    try self.sendProbe(.ready_progress, 1, self.setting.general.heartbeat_limit, interval);
+    const interval = self.config.host.ready_progress_interval;
+    try self.sendProbe(.ready_progress, 1, self.config.host.heartbeat_limit, interval);
 }
 
 // TODO:
@@ -235,30 +234,6 @@ pub fn sendProgressHeartbeat(self: *HostRunner) !void {
 //         try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
 //     }
 // }
-
-fn handleTopicBody(self: *const HostRunner, topic_body: core.events.Event.Payload.TopicBody, source_cache: *PayloadCacheManager) !?core.Event {
-    switch (try source_cache.update(topic_body)) {
-        .expired => {
-            self.log(.debug, "Content expired: {s}", .{topic_body.header.path});
-        },
-        .missing => {
-            self.log(.debug, "Waiting left content: {s}", .{topic_body.header.path});
-        },
-        .fulfil => {
-            self.log(.debug, "Source is ready: {s}", .{topic_body.header.name});
-            if (try source_cache.ready(topic_body.header, topic_body.index)) {
-                return .ready_topic_body;
-            }
-        },
-    }
-
-    return null;
-}
-
-fn handleSkipTopicBody(self: *const HostRunner, topic_body: core.Event.Payload.SkipTopicBody, source_cache: *PayloadCacheManager) !void {
-    _ = self;
-    try source_cache.dismiss(topic_body.header, topic_body.index);
-}
 
 // TODO:
 // fn spawnCommandPallet(self: *HostRnner) !void {

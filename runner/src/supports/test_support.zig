@@ -28,6 +28,7 @@ pub fn sendMessage(channel: core.sockets.RpcChannel, event: core.events.Event) v
 
 pub const TestStage = struct {
     setting: Setting,
+    heartbeat_limit: HeartbeatTask.Limit,
     connection: *Connection,
     dispatcher: EventDispatcher.Sized(POLLER_SIZE),
     reaper: *TaskReaper,
@@ -42,9 +43,9 @@ pub const TestStage = struct {
                     .log_style = .discard,
                     .no_color = false,
                     .stage_endpoints = ep,
-                    .heartbeat_limit = limit,
                 },
             },
+            .heartbeat_limit = limit,
             .connection = connection,
             .dispatcher = try connection.configureDispatcher(4, .{ .log_style = .discard }),
             .reaper = try TaskReaper.init(std.testing.io, std.testing.allocator),
@@ -70,7 +71,7 @@ pub const TestStage = struct {
         return stage.sendProbe(
             .{.probe = phase},
             count,
-            stage.setting.general.heartbeat_limit,
+            stage.heartbeat_limit,
             interval
         );
     }

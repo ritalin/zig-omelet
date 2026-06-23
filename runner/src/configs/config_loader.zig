@@ -14,28 +14,28 @@ const DufaultArg = default_args.DufaultArg;
 
 const HostGenerateArg = @import("../settings/commands/Generate.zig");
 
-pub fn load(io: std.Io, allocator: std.mem.Allocator) !std.MultiArrayList(config_types.Guest) {
-    return loadInternal(io, allocator, HostGenerateArg.strategies);
+pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator) !std.MultiArrayList(config_types.Guest) {
+    return loadGuestInternal(io, allocator, HostGenerateArg.strategies);
 }
 
-fn loadInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
+fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
     const options: core.configs.supports.FileResolveOptions = .{ .command = "generate", .scope = "default", .category = .configs, .root = config_types.path_candidates };
     const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return error.CofigLoadFailed;
     defer file.close(io);
 
-    return loadConfigFile(io, allocator, file, strategies);
+    return loadGuestConfigFile(io, allocator, file, strategies);
 }
 
-fn loadConfigFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
+fn loadGuestConfigFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
     var buffer: [1024]u8 = undefined;
     var reader = file.reader(io, &buffer);
     const source = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .@"1", 0);
     defer allocator.free(source);
 
-    return loadConfigSource(allocator, source, strategies);
+    return loadGuestConfigSource(allocator, source, strategies);
 }
 
-fn loadConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
+fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
     var ast = try std.zig.Ast.parse(allocator, source, .zon);
     defer ast.deinit(allocator);
     if (ast.errors.len > 0) {
@@ -55,7 +55,7 @@ fn loadConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, st
 
     var guests: std.MultiArrayList(config_types.Guest) = .empty;
 
-    const index: std.zig.Zoir.Node.Index = @enumFromInt(0);
+    const index: std.zig.Zoir.Node.Index = .root;
     const node = index.get(ir);
     if (std.meta.activeTag(node) != .struct_literal) return error.InvalidConfigFile;
 
@@ -149,6 +149,82 @@ fn GuestTemplate(comptime ArgId: type) type {
         extra_args: config_types.ExtraArg(ArgId) = .{},
     };
 }
+
+pub fn loadHost(io: std.Io, allocator: std.mem.Allocator) !config_types.Host {
+    const options: core.configs.supports.FileResolveOptions = .{ .command = "runner", .scope = "default", .category = .configs, .root = config_types.path_candidates };
+    const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return hostConfigFromTemplate(.{});
+    defer file.close(io);
+
+    var buffer: [1024]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    const source = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .@"1", 0);
+    defer allocator.free(source);
+
+    return loadHostConfigSource(allocator, source);
+}
+
+fn loadHostConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ) !config_types.Host {
+    var ast = try std.zig.Ast.parse(allocator, source, .zon);
+    defer ast.deinit(allocator);
+    if (ast.errors.len > 0) {
+        return error.InvalidConfigFile;
+    }
+
+    var ir = try std.zig.ZonGen.generate(allocator, ast, .{});
+    defer ir.deinit(allocator);
+
+    const tmpl: HostTemplate = 
+        std.zon.parse.fromZoirNodeAlloc(
+            HostTemplate, 
+            allocator, ast, ir, .root, null, 
+            .{}
+        )
+        catch return error.InvalidConfigFile
+    ;
+
+    return hostConfigFromTemplate(tmpl);
+}
+
+fn hostConfigFromTemplate(tmpl: HostTemplate) config_types.Host {
+
+    const heartbeat_interval = switch(tmpl.heartbeat_interval) {
+        .default => std.Io.Duration.fromMilliseconds(DEFAULT_HEARTBEAT_INTERVAL_MS),
+        .ns => |ns| std.Io.Duration.fromNanoseconds(ns),
+        .us => |us| std.Io.Duration.fromMicroseconds(us),
+        .ms => |ms| std.Io.Duration.fromMilliseconds(ms),
+    };
+    const progress_interval = switch(tmpl.ready_progress_interval) {
+        .default => std.Io.Duration.fromMilliseconds(DEFAULT_PROGRESS_INTERVAL_MS),
+        .ns => |ns| std.Io.Duration.fromNanoseconds(ns),
+        .us => |us| std.Io.Duration.fromMicroseconds(us),
+        .ms => |ms| std.Io.Duration.fromMilliseconds(ms),
+    };
+
+    return .{
+        .heartbeat_interval = heartbeat_interval,
+        .heartbeat_limit = if (tmpl.heartbeat_limit) |limit| .{.count = limit} else .unlimited,
+        .ready_progress_interval = progress_interval, 
+    };
+}
+
+pub const Interval = union(enum) {
+    default: void,
+    // nano-second interval
+    ns: i96,
+    // micro-second interval
+    us: i64,
+    // milli-second interval
+    ms: i64,
+};
+
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 200; // 200 msec
+const DEFAULT_PROGRESS_INTERVAL_MS = 10; // 10 msec
+
+const HostTemplate = struct {
+    heartbeat_interval: Interval = .default,
+    heartbeat_limit: ?u64 = null,
+    ready_progress_interval: Interval = .default,
+};
 
 // pub fn Stage(comptime _ArgId: type) type {
 //     return struct {
@@ -356,7 +432,7 @@ test "load config test" {
     std.testing.refAllDecls(@This());
 }
 
-pub const tests = struct {
+pub const tests_guest = struct {
     const StageStrategy = core.configs.types.StageStrategy;
 
     test "Toplevel node" {
@@ -369,7 +445,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "category node#1 (invalid)" {
@@ -384,7 +460,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.UnexpectGuestStage, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.UnexpectGuestStage, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "category node#2 (valid)" {
@@ -401,7 +477,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .optional, .extract = .optional, .generate = .optional});
 
-        var stages = try loadConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(0, stages.len);
@@ -425,7 +501,7 @@ pub const tests = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        const stages = try loadConfigSource(allocator, source, strategies);
+        const stages = try loadGuestConfigSource(allocator, source, strategies);
 
         try std.testing.expectEqual(1, stages.len);
 
@@ -454,7 +530,7 @@ pub const tests = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -483,7 +559,7 @@ pub const tests = struct {
         ;
 
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -508,7 +584,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid stage strategy#1 (one stage#2)" {
@@ -534,7 +610,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid stage strategy#2 (many stage)" {
@@ -550,7 +626,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .many});
 
-        try std.testing.expectError(error.InvalidStageCount, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid stage strategy#2 (optional stage)" {
@@ -576,7 +652,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidStageCount, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid location field name" {
@@ -597,7 +673,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid managed field value#1" {
@@ -618,7 +694,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Invalid location field value#2 (default)" {
@@ -639,7 +715,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
     }
 
     test "Custom extra_args field value" {
@@ -662,7 +738,7 @@ pub const tests = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .one});
 
-        var stages = try loadConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies);
         defer stages.deinit(allocator);
 
         const extra_arg_set = stages.get(0).extra_args;
@@ -677,5 +753,81 @@ pub const tests = struct {
 
         try std.testing.expectEqual(.enabled, std.meta.activeTag(extra_args.watch));
         try std.testing.expectEqual(false, extra_args.watch.enabled);
+    }
+};
+
+pub const tests_host = struct {
+    test "Toplevel node" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const source: [:0]const u8 = 
+            \\[]
+        ;
+
+        try std.testing.expectError(error.InvalidConfigFile, loadHostConfigSource(allocator, source));
+    }
+
+    test "empty config" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const source: [:0]const u8 = 
+            \\.{}
+        ;
+
+        const config = try loadHostConfigSource(allocator, source);
+        try std.testing.expectEqual(std.Io.Duration.fromMilliseconds(DEFAULT_HEARTBEAT_INTERVAL_MS), config.heartbeat_interval);
+        try std.testing.expectEqual(.unlimited, config.heartbeat_limit);
+        try std.testing.expectEqual(std.Io.Duration.fromMilliseconds(DEFAULT_PROGRESS_INTERVAL_MS), config.ready_progress_interval);
+    }
+
+    test "explicit config" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const source: [:0]const u8 = 
+            \\.{
+            \\    .heartbeat_interval = .{.ms = 100},
+            \\    .heartbeat_limit = 16,
+            \\    .ready_progress_interval = .{.us = 5000},
+            \\}
+        ;
+
+        const config = try loadHostConfigSource(allocator, source);
+        try std.testing.expectEqual(std.Io.Duration.fromMilliseconds(100), config.heartbeat_interval);
+        try std.testing.expectEqual(@FieldType(config_types.Host, "heartbeat_limit"){.count = 16}, config.heartbeat_limit);
+        try std.testing.expectEqual(std.Io.Duration.fromMilliseconds(5), config.ready_progress_interval);
+    }
+
+    test "Invalid location field name" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const source: [:0]const u8 = 
+            \\.{
+            \\  .interval = .{ .ms = 20 },
+            \\}
+        ;
+
+        try std.testing.expectError(error.InvalidConfigFile, loadHostConfigSource(allocator, source));
+    }
+
+    test "Invalid location field value" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const source: [:0]const u8 = 
+            \\.{
+            \\  .heartbeat_interval = 20,
+            \\}
+        ;
+
+        try std.testing.expectError(error.InvalidConfigFile, loadHostConfigSource(allocator, source));
     }
 };

@@ -78,7 +78,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                         },
                         .ready_progress => {
                             if ((self.cache.header_entries.count() > 0) and (self.cache.body_entries.count() == 0)) {
-                                const names: DescrNames= .{.iter = self.cache.header_entries.keyIterator()};
+                                const names: DescNames = .{.iter = self.cache.header_entries.keyIterator()};
                                 try stage.log(.debug, "Unreceived source(s)/{f}", .{ names });
                             }
                             try stage.dispatcher.queue.post(.ready_progress, try stage.connection.commandChannel());
@@ -159,10 +159,10 @@ const Status = enum {
     finish,
 };
 
-const DescrNames = struct {
+const DescNames = struct {
     iter: CacheManager.HeaderMap.KeyIterator,
 
-    pub fn format(self: DescrNames, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: DescNames, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         var iter = self.iter;
         while (iter.next()) |desc| {
             try writer.print("{s}, ", .{desc.name});

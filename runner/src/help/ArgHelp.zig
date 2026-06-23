@@ -2,10 +2,10 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
-const DescriptionItem = core.settings.DescriptionItem;
+const DescriptionItem = core.settings.types.DescriptionItem;
 
 // TODO:
-const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
+const ArgDescriptions = core.settings.types.DescriptionMap.initComptime(.{
 //     // General
 //     // Commands
 //     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
@@ -25,7 +25,7 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
 });
 
 const GeneralSetting = @import("../settings/commands/GeneralSetting.zig");
-const GeneralSettingDescMap: core.settings.DescriptionMap = .initComptime(.{
+const GeneralSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for nng", .value = "CHANNEL",}},
     .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for nng", .value = "CHANNEL",}},
     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},

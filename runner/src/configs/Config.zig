@@ -14,37 +14,59 @@ const Setting = @import("../settings/Setting.zig");
 const GenerateSetting = @import("../settings/commands/Generate.zig");
 const InitializeSetting = @import("../settings/commands/Initialize.zig");
 
+host: Config.Host,
 guests: std.MultiArrayList(Config.Guest),
 
 const Config = @This();
 
+pub const Host = @import("./types.zig").Host;
 pub const Guest = @import("./types.zig").Guest;
 
-pub fn load(io: std.Io, allocator: std.mem.Allocator) !core.settings.LoadResult(Config, *const ArgHelp.Config) {
-    const guests = loader.load(io, allocator)
-    catch |err| {
-        switch (err) {
-            error.CofigLoadFailed => {
-                std.log.err("Faild to load configuration file./err: {}", .{err});
-            },
-            error.InvalidConfig => {
-                std.log.err("Invalid configuration file./err: {}", .{err});
-            },
-            error.InvalidStageCount => {
-                std.log.err("Invalid guest stage count./err: {}", .{err});
-            },
-            else => {
-                std.log.err("Unexpected error on loading configuration/err: {}", .{err});
-            }
+pub fn load(io: std.Io, allocator: std.mem.Allocator) !core.settings.types.LoadResult(Config, *const ArgHelp.Config) {
+    const config = 
+        loadInternal(io, allocator)
+        catch {
+            return .{
+                .help = &ArgHelp.toplevel,
+            };
         }
-        return .{
-            .help = &ArgHelp.toplevel,
-        };
-    };
+    ;
 
     return .{
-        .success = .{.guests = guests},
+        .success = config,
     };
+}
+
+pub fn loadInternal(io: std.Io, allocator: std.mem.Allocator) !Config {
+    const host = loader.loadHost(io, allocator)
+    catch |err| {
+        handleError(err);
+        return err;
+    }; 
+    const guests = loader.loadGuest(io, allocator)
+    catch |err| {
+        handleError(err);
+        return err;
+    };
+
+    return .{.host = host, .guests = guests};
+}
+
+fn handleError(err: anyerror) void {
+    switch (err) {
+        error.CofigLoadFailed => {
+            std.log.err("Faild to load configuration file./err: {}", .{err});
+        },
+        error.InvalidConfig => {
+            std.log.err("Invalid configuration file./err: {}", .{err});
+        },
+        error.InvalidStageCount => {
+            std.log.err("Invalid guest stage count./err: {}", .{err});
+        },
+        else => {
+            std.log.err("Unexpected error on loading configuration/err: {}", .{err});
+        }
+    }
 }
 
 pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {

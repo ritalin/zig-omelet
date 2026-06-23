@@ -7,11 +7,6 @@ const DescriptionItem = core.settings.DescriptionItem;
 // TODO:
 const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
 //     // General
-//     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL",}},
-//     .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL",}},
-//     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-//     .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope (default: default)", .value = "VALUE",}},
-    .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},
 //     // Commands
 //     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
 //     .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
@@ -29,12 +24,19 @@ const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
 //     .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
 });
 
-const GeneralSetting = @import("./commands/GeneralSetting.zig");
-pub const GeneralSettingArgId = GeneralSetting.ArgId(ArgDescriptions);
+const GeneralSetting = @import("../settings/commands/GeneralSetting.zig");
+const GeneralSettingDescMap: core.settings.DescriptionMap = .initComptime(.{
+    .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for nng", .value = "CHANNEL",}},
+    .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for nng", .value = "CHANNEL",}},
+    .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
+    .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope (default: default)", .value = "VALUE",}},
+    .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},  
+});
+pub const GeneralSettingArgId = GeneralSetting.ArgId(GeneralSettingDescMap);
 // const CommandGeneralArgId = GeneralSetting.Command.ArgId(ArgDescriptions);
 
-// const GenerateSetting = @import("./commands/Generate.zig");
-// const GenerateCommandArgId = GenerateSetting.ArgId(ArgDescriptions);
+const GenerateSetting = @import("../settings/commands/Generate.zig");
+pub const GenerateCommandArgId = GenerateSetting.ArgId(ArgDescriptions);
 
 // const InitializeSetting = @import("./commands/Initialize.zig");
 // const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
@@ -44,35 +46,69 @@ pub const GeneralSettingArgId = GeneralSetting.ArgId(ArgDescriptions);
 //     pub const options: core.settings.ArgHelpOption = .{.category_name = "Subcommands"};
 // };
 
-pub const ArgHelp = struct {
-    pub const Config = struct {
-        tag: ArgHelp.Config.Tag,
-        members: []const ArgHelp.Config,
+const ArgHelp = @This();
 
-        const Self = @This();
+pub const Config = struct {
+    tag: ArgHelp.Config.Tag,
+    sections: []const ArgHelp.Config,
 
-        pub const Tag = enum {
-            toplevel,
-            args,
-            subcommands,
-            generate,
-            init_config,
-            init_default,
-        };
+    const Self = @This();
+
+    pub const Tag = enum {
+        toplevel,
+        args,
+        subcommands,
+        generate,
+        init_config,
+        init_default,
     };
+};
 
-    pub const Render = struct {
-        policy: ArgHelp.Render.Policy,
-        config: *const ArgHelp.Config,
+pub const Descriptor = struct {
+    name: []const u8,
+    description: ?[]const u8 = null,
+};
 
-        pub const Policy = enum {
-            command_root,
-            command_list,
-        };
-    };
+pub const DescriptorMap = std.enums.EnumFieldStruct(ArgHelp.Config.Tag, ?ArgHelp.Descriptor, null);
 
+pub const senction_descriptors: DescriptorMap = .{
+    .toplevel = .{ 
+        .name = "omelet:", 
+        .description = "Language binding declaration generator from SQL." 
+    },
+    .subcommands = .{ 
+        .name = "Subcommands:" 
+    },
+    .generate = .{ 
+        .name = "generate", 
+        .description = "Generate language data binding." 
+    },
+    .init_config = .{ 
+        .name = "init-config", 
+        .description = "Initialize new guest component configuration." 
+    },
+    .init_default = .{
+        .name = "init-default",
+        .description = "Initialize new default settings."
+    },
+    .args = null,
+};
 
+pub const general_arg_desc: ArgHelp.Descriptor = .{
+    .name = "General Args:",
+};
+pub const command_arg_desc: ArgHelp.Descriptor = .{
+    .name = "Command Args:",
+};
 
+pub fn resolveDescriptor(tag: ArgHelp.Config.Tag) ?ArgHelp.Descriptor {
+    inline for (std.meta.fields(ArgHelp.Config.Tag)) |f| {
+        if (f.value == @intFromEnum(tag)) {
+            return @field(senction_descriptors, f.name);
+        }
+    }
+    unreachable;
+}
 
 
 //     pub fn help(self: ArgHelpSetting, writer: anytype) !void {
@@ -102,10 +138,9 @@ pub const ArgHelp = struct {
 //             }
 //         }
 //     }
-    pub const toplevel: ArgHelp.Config = .{ .tag = .toplevel, .members = &.{ subcommands } };
-    pub const args: ArgHelp.Config = .{ .tag = .args, .members = &.{} };
-    pub const subcommands: ArgHelp.Config = .{ .tag = .subcommands, .members = &.{generate, init_config, } };
-    pub const generate: ArgHelp.Config = .{ .tag = .generate, .members = &.{args} };
-    pub const init_config: ArgHelp.Config = .{ .tag = .init_config, .members = &.{args} };
-};
+pub const toplevel: ArgHelp.Config = .{ .tag = .toplevel, .sections = &.{ subcommands } };
+pub const args: ArgHelp.Config = .{ .tag = .args, .sections = &.{} };
+pub const subcommands: ArgHelp.Config = .{ .tag = .subcommands, .sections = &.{generate, init_config, } };
+pub const generate: ArgHelp.Config = .{ .tag = .generate, .sections = &.{args} };
+pub const init_config: ArgHelp.Config = .{ .tag = .init_config, .sections = &.{args} };
 

@@ -27,18 +27,16 @@ pub const guest_phases = struct {
 pub const Logger = @import("./Logger.zig");
 pub const TaskReaper = @import("./supports/TaskReaper.zig");
 
-// TODO:
-// pub const settings = struct {
-//     pub usingnamespace @import("./settings/types.zig");
+pub const settings = struct {
+    pub const types = @import("./settings/types.zig");
 //     pub usingnamespace @import("./settings/help.zig");
 //     pub usingnamespace @import("./settings/supports.zig");
-// };
-// pub const configs = struct {
-//     pub usingnamespace @import("./configs/types.zig");
-//     pub usingnamespace @import("./configs/supports.zig");
-// };
-
-// pub const DebugEndPoint = @import("./builder_supports/DebugEndpoint.zig");
+};
+pub const configs = struct {
+    pub const types =  @import("./configs/types.zig");
+    pub const guests = @import("./configs/guest_args.zig");
+    pub const supports = @import("./configs/supports.zig");
+};
 
 pub const test_support = @import("./supports/test_support.zig");
 

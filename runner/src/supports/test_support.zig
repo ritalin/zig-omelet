@@ -13,9 +13,9 @@ const TaskReaper = core.TaskReaper;
 
 const task_support = @import("./task_support.zig");
 
-pub const createTmpDir = core.test_support.createTmpDir;
-pub const createEndpoint = core.test_support.createEndpoint;
-pub const releaseEndpoint = core.test_support.releaseEndpoint;
+pub const createTmpDir = core.test_supports.createTmpDir;
+pub const createEndpoint = core.test_supports.createEndpoint;
+pub const releaseEndpoint = core.test_supports.releaseEndpoint;
 
 pub const POLLER_SIZE = 4;
 pub const Connection = core.sockets.Connection.Server(stage_name);
@@ -40,10 +40,13 @@ pub const TestStage = struct {
             .setting = .{
                 .general = .{
                     .log_level = .debug,
-                    .log_style = .discard,
+                    .log_quiet = false,
                     .no_color = false,
-                    .stage_endpoints = ep,
+                    .endpoints = ep,
+                    .ipc_config = .default,
+                    .scope = "default",
                 },
+                .command = .{.@"init-config" = .{} },
             },
             .heartbeat_limit = limit,
             .connection = connection,

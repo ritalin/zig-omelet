@@ -47,7 +47,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
     try connection.bind();
 
     const options: EventDispatcher.Options = .{ 
-        .log_style = setting.general.log_style,
+        .log_style = if (setting.general.log_quiet) .discard else .stderr,
         .no_color = setting.general.no_color, 
     };
 

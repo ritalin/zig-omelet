@@ -1,4 +1,5 @@
 const std = @import("std");
+const clap = @import("clap");
 const root = @import("../root.zig");
 
 const StageName = root.types.StageName;
@@ -15,4 +16,11 @@ pub fn putConsoleLog(level: LogLevel, stage_name: StageName, comptime fmt: []con
         .mode = g.terminal_mode,
     };
     try Logger.putAppLog(terminal, level, stage_name, fmt, args);
+}
+
+pub fn reportClapError(diag: *const clap.Diagnostic, err: anyerror) !void {
+    var buffer: [1024]u8 = undefined;
+    const t = std.debug.lockStderr(&buffer).terminal();
+    defer std.debug.unlockStderr();
+    try diag.report(t.writer, err);
 }

@@ -286,7 +286,7 @@ pub const tests = struct {
     const ClientConnection = root.sockets.Connection.Client("stage");
     const Dispatcher = EventDispatcher.Sized(8);
 
-    const WORKER_ENDPOINT = @import("../default_config/endpoint_support.zig").WORKER_ENDPOINT;
+    const WORKER_ENDPOINT = root.configs.Endpoint.WORKER_ENDPOINT;
 
     fn noopHandler(_: *Dispatcher, _: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {}
 

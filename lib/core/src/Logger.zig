@@ -25,6 +25,8 @@ pub const TraceLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .Debu
 
 var level_filter = resetFilter(if (builtin.mode == .Debug) .debug else .info);
 
+pub const default: events.LogLevel = if (builtin.mode == .Debug) .debug else .info;
+
 pub const IntegratedHandler = struct {
     ptr: *anyopaque,
     handler: *const fn (ptr: *anyopaque, level: events.LogLevel, msg: []const u8) anyerror!void,
@@ -121,6 +123,24 @@ fn isAllowScope(comptime scope: @EnumLiteral()) bool {
         if (levels.scope == scope) return true;
     }
     return false;
+}
+
+pub fn resolveLogLevel(s: ?types.Symbol) !events.LogLevel {
+    if (s == null) return error.EmptySymbol;
+    return std.meta.stringToEnum(events.LogLevel, s.?) orelse error.UnexpectedSymbol;
+}
+
+pub fn resolveLogStyle(s: ?types.Symbol) !LogStyle {
+    if (s == null) return error.EmptySymbol;
+    inline for (std.meta.fields(LogStyle)) |f| {
+        if (std.mem.eql(u8, f.name, s.?)) {
+            if (f.type == void) {
+                return @unionInit(LogStyle, f.name, {});
+            }
+            return .{.integrated = .batch};
+        }
+    }
+    return error.UnexpectedSymbol;
 }
 
 test "log test" {

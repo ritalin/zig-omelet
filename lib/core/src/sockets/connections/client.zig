@@ -13,7 +13,7 @@ const EventHeader = root.events.EventHeader;
 const EventDispatcher = root.sockets.EventDispatcher;
 const Logger = root.Logger;
 
-const WORKER_ENDPOINT = @import("../../default_config/endpoint_support.zig").WORKER_ENDPOINT;
+const WORKER_ENDPOINT = root.configs.Endpoint.WORKER_ENDPOINT;
 
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const encodeSubscription = @import("../../events/encoder.zig").encodeSubscription;

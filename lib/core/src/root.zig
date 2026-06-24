@@ -36,9 +36,11 @@ pub const configs = struct {
     pub const types =  @import("./configs/types.zig");
     pub const guests = @import("./configs/guest_args.zig");
     pub const supports = @import("./configs/supports.zig");
+    pub const Endpoint = @import("./default_config/endpoint_support.zig");
 };
 
-pub const test_support = @import("./supports/test_support.zig");
+pub const test_supports = @import("./supports/test_support.zig");
+pub const log_supports = @import("./supports/log_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());

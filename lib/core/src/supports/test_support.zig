@@ -1,9 +1,10 @@
 const std = @import("std");
 const known_folders = @import("known_folders");
 const root = @import("../root.zig");
-const endpont_support = @import("../default_config/endpoint_support.zig");
 
 const types = root.types;
+
+const Endpoint = root.configs.Endpoint;
 
 pub fn createTmpDir() !std.testing.TmpDir {
     const io = std.testing.io;
@@ -30,7 +31,7 @@ pub fn createTmpDir() !std.testing.TmpDir {
     };
 }
 
-pub fn createEndpoint(tmp_dir: std.testing.TmpDir, config: endpont_support.Config) !types.Endpoints {
+pub fn createEndpoint(tmp_dir: std.testing.TmpDir, config: root.configs.Endpoint.Config) !types.Endpoints {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
 
@@ -40,10 +41,10 @@ pub fn createEndpoint(tmp_dir: std.testing.TmpDir, config: endpont_support.Confi
             allocator.free(ep_config.channel_root);
             allocator.free(ep_config.channel_dir);
         }
-        return endpont_support.runtimeIpc(allocator, ep_config);
+        return Endpoint.runtimeIpc(allocator, ep_config);
     }
     else {
-        return endpont_support.runtimeIpc(allocator, .{ 
+        return Endpoint.runtimeIpc(allocator, .{ 
             .channel_root = &tmp_dir.sub_path, 
             .channel_dir = config.channel_dir, 
             .worker_endpoint = config.worker_endpoint,
@@ -51,7 +52,7 @@ pub fn createEndpoint(tmp_dir: std.testing.TmpDir, config: endpont_support.Confi
     }
 }
 
-fn testEndpointConfig(io: std.Io, allocator: std.mem.Allocator, tmp_dir: *const std.testing.TmpDir, config: endpont_support.Config) !endpont_support.Config {
+fn testEndpointConfig(io: std.Io, allocator: std.mem.Allocator, tmp_dir: *const std.testing.TmpDir, config: Endpoint.Config) !Endpoint.Config {
     const ep_dir = try tmp_dir.dir.createDirPathOpen(io, config.channel_dir, .{});
     defer ep_dir.close(io);
 

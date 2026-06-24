@@ -7,9 +7,10 @@ pub fn LoadResult(comptime Result: type, comptime HelpSettingType: type) type {
     };
 }
 
-pub const ArgHelpOption = struct {
-    category_name: ?[]const u8,
-};
+// TODO:
+// pub const ArgHelpOption = struct {
+//     category_name: ?[]const u8,
+// };
 
 pub const DescriptionItem = struct {
     desc: []const u8, 
@@ -20,7 +21,7 @@ pub const DescriptionItem = struct {
 pub const DescriptionMap = std.StaticStringMap(DescriptionItem);
 
 pub fn ArgHelp(comptime Id: type, comptime _description: DescriptionMap) type {
-    return struct {    
+    return struct {
         pub fn description(self: Id) []const u8 {
             const usage = _description.get(@tagName(self)) orelse return "";
             return usage.desc;
@@ -31,4 +32,3 @@ pub fn ArgHelp(comptime Id: type, comptime _description: DescriptionMap) type {
         }
     };
 }
-

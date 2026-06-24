@@ -196,7 +196,6 @@ pub const CacheManager = struct {
                     try allocator.dupe(u8, source.path),
                     try allocator.dupe(u8, source.dialect),
                     try allocator.dupe(u8, source.hash),
-                    1,
                 }),
             };
         }

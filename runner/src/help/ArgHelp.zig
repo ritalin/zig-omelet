@@ -11,6 +11,7 @@ const ArgDescriptions = core.settings.types.DescriptionMap.initComptime(.{
 //     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
 //     .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
 //     .{@tagName(.@"init-config"), DescriptionItem{.desc = "Initialize subcommand configuration environment", .value = "",}},
+//     .{log_style: "Set log output style (integrated / stderr / discard). Default: stderr."},
 //     // Command/Generate
 //     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
 //     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
@@ -28,19 +29,35 @@ const GeneralSetting = @import("../settings/commands/GeneralSetting.zig");
 const GeneralSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for nng", .value = "CHANNEL",}},
     .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for nng", .value = "CHANNEL",}},
+    .{@tagName(.push_pull_channel), DescriptionItem{.desc = "Comminicate Push/Pull endpont for nng", .value = "CHANNEL"}},
     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-    .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope (default: default)", .value = "VALUE",}},
+    .{@tagName(.log_quiet), DescriptionItem{.desc = "Disable all host and guest log output", .value = ""}},
+    .{@tagName(.no_color), DescriptionItem{.desc = "Disable colored log", .value = ""}},
+    .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope. default: default", .value = "VALUE",}},
     .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},  
 });
 pub const GeneralSettingArgId = GeneralSetting.ArgId(GeneralSettingDescMap);
-// const CommandGeneralArgId = GeneralSetting.Command.ArgId(ArgDescriptions);
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
-pub const GenerateCommandArgId = GenerateSetting.ArgId(ArgDescriptions);
+const GenerateCommandDescmap: core.settings.types.DescriptionMap = .initComptime(.{
+    .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
+    .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
+    .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
+    .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
+    .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
+    .{@tagName(.watch), DescriptionItem{.desc = "Launch as interactive mode", .value = ""}},
+});
+pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescmap);
 
 // const InitializeSetting = @import("./commands/Initialize.zig");
 // const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
 
+const SubcommandSetting = @import("../settings/commands/Subcommand.zig");
+pub const SubcommandArgId = SubcommandSetting.ArgId(.{
+    .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
+    .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
+    .{@tagName(.@"init-config"), DescriptionItem{.desc = "Initialize subcommand configuration environment", .value = "",}}, 
+});
 // const SubcommandHelp = struct {
 //     pub usingnamespace core.settings.ArgHelp(core.SubcommandArgId, ArgDescriptions);
 //     pub const options: core.settings.ArgHelpOption = .{.category_name = "Subcommands"};

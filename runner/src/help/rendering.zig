@@ -13,34 +13,43 @@ pub fn renderToStderr(help: *const ArgHelp.Config) !void {
 
 fn renderHelp(writer: *std.Io.Writer, help: *const ArgHelp.Config) !void {
     // render app title
-    try renderDescriptor(writer, ArgHelp.resolveDescriptor(help.tag), .{});
+    try renderDescriptor(writer, ArgHelp.resolveDescriptor(help.tag), .{.spacing_between_parameters = 1});
     // render general args
-    try renderSectionInternal(writer, ArgHelp.general_arg_desc, ArgHelp.GeneralSettingArgId);
+    try renderArgs(writer, ArgHelp.general_arg_desc, &ArgHelp.toplevel);
 
     // render sections
     for (help.sections) |section| {
         try writer.writeByte('\n');
-        try renderSection(writer, &section);
+        switch (section.tag) {
+            .subcommands => {
+                try renderSubcommands(writer, ArgHelp.senction_descriptors.subcommands, &section);
+            },
+            .args => {
+                try renderArgs(writer, ArgHelp.command_arg_desc, help);
+            },
+            else => {
+                unreachable;
+            }
+        }
     }
+
+    try writer.flush();
 }
 
-fn renderSection(writer: *std.Io.Writer, config: *const ArgHelp.Config) !void {
+fn renderArgs(writer: *std.Io.Writer, desc: ArgHelp.Descriptor, config: *const ArgHelp.Config) !void {
+    try renderDescriptor(writer, desc, .{ .indent = 0 });
+
     switch (config.tag) {
-        .subcommands => {
-            try renderSubcommands(writer, ArgHelp.senction_descriptors.subcommands, config);
+        .toplevel => {
+            try renderArgsInternal(writer, ArgHelp.GeneralSettingArgId);
         },
         .generate => {
-            try renderSectionInternal(writer,ArgHelp.command_arg_desc, ArgHelp.GenerateCommandArgId);
+            try renderArgsInternal(writer, ArgHelp.GenerateCommandArgId);
         },
         else => {
             unreachable;
         }
     }
-}
-
-fn renderSectionInternal(writer: *std.Io.Writer, desc: ArgHelp.Descriptor, comptime ArgId: type) !void {
-    try renderDescriptor(writer, desc, .{ .indent = 0 });
-    try renderArgs(writer, ArgId);
 }
 
 fn renderDescriptor(writer: *std.Io.Writer, desc: ?ArgHelp.Descriptor, options: HelpOptions) !void {
@@ -61,7 +70,7 @@ fn renderDescriptor(writer: *std.Io.Writer, desc: ?ArgHelp.Descriptor, options: 
     try writer.splatByteAll('\n', options.spacing_between_parameters + 1);
 }
 
-fn renderArgs(writer: *std.Io.Writer, comptime ArgId: type) !void {
+fn renderArgsInternal(writer: *std.Io.Writer, comptime ArgId: type) !void {
     try clap.help(writer, ArgId, ArgId.Decls, .{.description_on_new_line = false, .spacing_between_parameters = 0, .description_indent = 0, .indent = 4});
 }
 

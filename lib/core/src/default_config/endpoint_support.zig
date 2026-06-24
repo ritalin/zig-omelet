@@ -20,7 +20,28 @@ pub const Config = struct {
     channel_root: types.SymbolZ = CHANNEL_ROOT,
     channel_dir: types.SymbolZ = CHANNEL_DIR,
     worker_endpoint: ?types.SymbolZ = null,
+
+    pub const default: Config = .{};
 };
+
+pub fn renewIpcConfig(io: std.Io, allocator: std.mem.Allocator, config: *const Config) !Config {
+    var random_bytes: [12]u8 = undefined;
+    io.random(&random_bytes);
+    var sub_path: [24]u8 = undefined;
+    _ = std.base64.url_safe.Encoder.encode(&sub_path, &random_bytes);
+
+    return .{
+        .channel_root = try allocator.dupeSentinel(u8, config.channel_root, 0),
+        .channel_dir = try allocator.dupeSentinel(u8, &sub_path, 0),
+        .worker_endpoint = if (config.worker_endpoint) |worker| try allocator.dupeSentinel(u8, worker, 0) else null,
+    };
+}
+
+pub fn releaseIpcConfig(allocator: std.mem.Allocator, config: *Config) void {
+    allocator.free(config.channel_root);
+    allocator.free(config.channel_dir);
+    if (config.worker_endpoint) |worker| allocator.free(worker);
+}
 
 pub fn comptimeIpc(comptime config: @This().Config) types.Endpoints {
     return .{
@@ -38,6 +59,28 @@ pub fn runtimeIpc(allocator: std.mem.Allocator, config: @This().Config) !types.E
         .push_pull = try std.fmt.allocPrint(allocator, "ipc://{s}/{s}/{s}", .{config.channel_root, config.channel_dir, PUSH_C2S_PORT}),
         .worker = config.worker_endpoint,
     };
+}
+
+pub fn releaseRuntimeIpc(allocator: std.mem.Allocator, endpoints: *types.Endpoints) void {
+    allocator.free(endpoints.req_rep);
+    allocator.free(endpoints.pub_sub);
+    allocator.free(endpoints.push_pull);
+}
+
+pub fn createIpcStorage(io: std.Io, config: *const @This().Config) !void {
+    if (builtin.os.tag != .windows) {
+        const dir = try std.Io.Dir.cwd().createDirPathOpen(io, config.channel_root, .{});
+        defer dir.close(io);
+
+        try dir.createDirPath(io, config.channel_dir);
+    }
+}
+
+pub fn releaseIpcStorage(io: std.Io, config: *const @This().Config) void {
+    const dir = std.Io.Dir.cwd().openDir(io, config.channel_root, .{}) catch return;
+    defer dir.close(io);
+
+    dir.deleteTree(io, config.channel_dir) catch {};
 }
 
 // TODO:

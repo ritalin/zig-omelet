@@ -7,11 +7,6 @@ pub fn LoadResult(comptime Result: type, comptime HelpSettingType: type) type {
     };
 }
 
-// TODO:
-// pub const ArgHelpOption = struct {
-//     category_name: ?[]const u8,
-// };
-
 pub const DescriptionItem = struct {
     desc: []const u8, 
     value: []const u8, 

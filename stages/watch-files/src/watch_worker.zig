@@ -62,7 +62,6 @@ pub fn FileIterateWorker(comptime GuestStage: type) type {
                 .path = file_path_abs,
                 .dialect = dialect,
                 .hash = &hasher.finalResult(),
-                .item_count = 1, // TODO: needed?
             };
             try stage.dispatcher.queue.post(.{.source_path = source_path}, try stage.connection.dataChannel());
         }

@@ -89,14 +89,6 @@ pub const EventType = enum (u8) {
     // Topic body event
     ready_topic_body,
     topic_body,
-
-    // skip_topic_body,//TODO:Deprecated?
-    // pending_finish_topic_body, //TODO:Deprecated?
-    // finish_topic_body, //TODO:Deprecated?
-    // ready_generate,//TODO:Deprecated?
-    // Worker event
-    // worker_response,//TODO:Deprecated?
-
     // Generate event
     finish_generate,
     // Other event

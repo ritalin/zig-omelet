@@ -28,7 +28,6 @@ pub const Guest = struct {
     };
 };
 
-// TODO:
 pub fn ExtraArg(comptime ArgId: type) type {
     return std.enums.EnumFieldStruct(ArgId, DufaultArg, .default);
 }

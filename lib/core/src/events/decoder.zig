@@ -59,7 +59,6 @@ fn decodeEventInternal(allocator: std.mem.Allocator, event_type: EventType, read
         // Ready phase event
         .ready => return .ready,
         .ready_progress => return .ready_progress,
-        // .finish_watch_path => return .finish_watch_path, // TODO:deprecated
 
         // Source path event
         .ready_source_path => return .ready_source_path,

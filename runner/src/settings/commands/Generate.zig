@@ -2,10 +2,6 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
-// TODO:
-// const log = core.Logger.SystemDirect(@import("build_options").app_context);
-// const help = @import("../help.zig");
-
 const FilePath = core.types.FilePath;
 const FilterKind = core.types.FilterKind;
 
@@ -70,21 +66,6 @@ pub const Builder = struct {
     filter_set_counts: std.enums.EnumArray(FilterKind, usize),
     output_dir_path: ?FilePath = null,
     watch: ?bool = null,
-
-// TODO:
-//     defaults: DefaultArgs,
-
-//     pub fn init(allocator: std.mem.Allocator, defaults_file: ?std.fs.File) !Builder {
-//         const defaults = defaults: {
-//             if (defaults_file != null) {
-//                 var file = defaults_file.?;
-//                 break:defaults try DefaultArgs.loadFromFile(allocator, &file);
-//             }
-//             else {
-//                 break:defaults try DefaultArgs.init(allocator, DefaultArgs.Map.init(.{}));
-//             }
-//         };
-//     }
 
     pub fn deinit(self: *Builder) void {
         self.source_dir_set.deinit(self.allocator);

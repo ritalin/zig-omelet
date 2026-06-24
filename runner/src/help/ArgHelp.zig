@@ -25,8 +25,8 @@ const ArgDescriptions = core.settings.types.DescriptionMap.initComptime(.{
 //     .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
 });
 
-const GeneralSetting = @import("../settings/commands/GeneralSetting.zig");
-const GeneralSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
+const BaseSetting = @import("../settings/commands/BaseSetting.zig");
+const BaseSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for nng", .value = "CHANNEL",}},
     .{@tagName(.pub_sub_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for nng", .value = "CHANNEL",}},
     .{@tagName(.push_pull_channel), DescriptionItem{.desc = "Comminicate Push/Pull endpont for nng", .value = "CHANNEL"}},
@@ -36,7 +36,7 @@ const GeneralSettingDescMap: core.settings.types.DescriptionMap = .initComptime(
     .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope. default: default", .value = "VALUE",}},
     .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},  
 });
-pub const GeneralSettingArgId = GeneralSetting.ArgId(GeneralSettingDescMap);
+pub const BaseSettingArgId = BaseSetting.ArgId(BaseSettingDescMap);
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
 const GenerateCommandDescmap: core.settings.types.DescriptionMap = .initComptime(.{

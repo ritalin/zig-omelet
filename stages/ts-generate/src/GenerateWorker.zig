@@ -57,7 +57,7 @@ pub fn run(self: Self, io: std.Io, pipe: nnng.Pipe.Sync) !void {
         var channel = try core.sockets.SendChannel.init(worker.allocator, pipe.item.id, app_context, pipe.item.sender());
         defer channel.deinit();
         
-        if ((worker.on_handle)(&builder, io, worker.allocator, worker.output_root, worker.source.desc.name)) |status| {
+        if ((worker.on_handle)(&builder, io, worker.allocator, worker.output_root, worker.source.name_alt orelse worker.source.desc.name)) |status| {
             try worker.sendData(&channel, try self.successMessage(allocator), status);
         }
         else |err| {

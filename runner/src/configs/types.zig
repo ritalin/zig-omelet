@@ -4,6 +4,14 @@ const core = @import("core");
 const default_args = @import("../settings/default_args.zig");
 const DufaultArg = default_args.DufaultArg;
 
+const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
+
+pub const Host = struct {
+    heartbeat_interval: std.Io.Duration,
+    heartbeat_limit: HeartbeatTask.Limit,
+    ready_progress_interval: std.Io.Duration,
+};
+
 pub const Guest = struct {
     name: core.types.Symbol,
     location: core.types.FilePath,

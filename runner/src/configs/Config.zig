@@ -22,9 +22,9 @@ const Config = @This();
 pub const Host = @import("./types.zig").Host;
 pub const Guest = @import("./types.zig").Guest;
 
-pub fn load(io: std.Io, allocator: std.mem.Allocator) !core.settings.types.LoadResult(Config, *const ArgHelp.Config) {
+pub fn load(io: std.Io, allocator: std.mem.Allocator, setting: *const Setting) !core.settings.types.LoadResult(Config, *const ArgHelp.Config) {
     const config = 
-        loadInternal(io, allocator)
+        loadInternal(io, allocator, setting)
         catch {
             return .{
                 .help = &ArgHelp.toplevel,
@@ -37,13 +37,13 @@ pub fn load(io: std.Io, allocator: std.mem.Allocator) !core.settings.types.LoadR
     };
 }
 
-pub fn loadInternal(io: std.Io, allocator: std.mem.Allocator) !Config {
-    const host = loader.loadHost(io, allocator)
+fn loadInternal(io: std.Io, allocator: std.mem.Allocator, setting: *const Setting) !Config {
+    const host = loader.loadHost(io, allocator, setting.general.scope)
     catch |err| {
         handleError(err);
         return err;
     }; 
-    const guests = loader.loadGuest(io, allocator)
+    const guests = loader.loadGuest(io, allocator, setting.command.tag(), setting.general.scope)
     catch |err| {
         handleError(err);
         return err;

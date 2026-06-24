@@ -13,13 +13,14 @@ const Defaults = default_args.Defaults;
 const DufaultArg = default_args.DufaultArg;
 
 const HostGenerateArg = @import("../settings/commands/Generate.zig");
+const SubcommandArgId = @import("../settings/commands/Subcommand.zig").Setting.ArgId(.{});
 
-pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator) !std.MultiArrayList(config_types.Guest) {
-    return loadGuestInternal(io, allocator, HostGenerateArg.strategies);
+pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator, command: SubcommandArgId, scope: Symbol) !std.MultiArrayList(config_types.Guest) {
+    const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .configs, .root = config_types.path_candidates };
+    return loadGuestInternal(io, allocator, HostGenerateArg.strategies, options);
 }
 
-fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
-    const options: core.configs.supports.FileResolveOptions = .{ .command = "generate", .scope = "default", .category = .configs, .root = config_types.path_candidates };
+fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy, options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) {
     const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return error.CofigLoadFailed;
     defer file.close(io);
 
@@ -150,8 +151,8 @@ fn GuestTemplate(comptime ArgId: type) type {
     };
 }
 
-pub fn loadHost(io: std.Io, allocator: std.mem.Allocator) !config_types.Host {
-    const options: core.configs.supports.FileResolveOptions = .{ .command = "runner", .scope = "default", .category = .configs, .root = config_types.path_candidates };
+pub fn loadHost(io: std.Io, allocator: std.mem.Allocator, scope: Symbol) !config_types.Host {
+    const options: core.configs.supports.FileResolveOptions = .{ .command = "runner", .scope = scope, .category = .configs, .root = config_types.path_candidates };
     const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return hostConfigFromTemplate(.{});
     defer file.close(io);
 

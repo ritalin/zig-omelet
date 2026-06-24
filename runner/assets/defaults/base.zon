@@ -1,0 +1,32 @@
+.{
+    // Comminicate Req/Rep endpoint for nng
+    // Available entries: values, default
+    // default: use random dir IPC channel
+    .req_rep_channel = .default,
+    // Comminicate Pub/Sub endpoint for nng
+    // Available entries: values, default
+    // default: use random dir IPC channel
+    .pub_sub_channel = .default,
+    // Comminicate Push/Pull endpont for nng
+    // Available entries: values, default
+    // default: use random dir IPC channel
+    .push_pull_channel = .default,
+    // Pass through log level (err / warn / info / debug / trace)
+    // Available entries: values, default
+    // default: 
+    //    release buld: .{.values = .{"info"}}, 
+    //    debug build: .{.values = .{"debug"}}, 
+    .log_level = .default,
+    // Disable all host and guest log output
+    // Available entries: enabled, default
+    // default: .{enabled = false}
+    .log_quiet = .default,
+    // Disable colored log
+    // Available entries: enabled, default
+    // default: .{enabled = false}
+    .no_color = .default,
+    // Use environment scope
+    // Available entries: values, default
+    // default: .{.values = .{"default"}}
+    .use_scope = .default,
+}

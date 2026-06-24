@@ -8,10 +8,10 @@ const ArgHelp = @import("../help/ArgHelp.zig");
 const Setting = @This();
 
 // arena: *std.heap.ArenaAllocator,
-general: GeneralSetting,
+general: BaseSetting,
 command: SubcommandSetting,
 
-pub const GeneralSetting = @import("./commands/GeneralSetting.zig");
+pub const BaseSetting = @import("./commands/BaseSetting.zig");
 pub const SubcommandSetting = @import("./commands/Subcommand.zig").Setting;
 
 pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.Args) !core.settings.types.LoadResult(Setting, *const ArgHelp.Config) {
@@ -20,7 +20,7 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.
 
     _ = args_iter.next();
 
-    var res = GeneralSetting.Builder.fromArgs(allocator, &args_iter)
+    var res = BaseSetting.Builder.fromArgs(allocator, &args_iter)
     catch {
         return .{.help = &ArgHelp.toplevel};
     };

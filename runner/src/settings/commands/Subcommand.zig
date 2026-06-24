@@ -4,7 +4,6 @@ const core = @import("core");
 
 const config_types = @import("../../configs/types.zig");
 
-const GeneralSetting = @import("./GeneralSetting.zig");
 const Generate = @import("./Generate.zig");
 const Initialize = @import("./Initialize.zig");
 

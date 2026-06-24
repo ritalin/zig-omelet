@@ -31,6 +31,11 @@ pub fn tick(self: *Self) !void {
     _ = try self.select.awaitMany(&results, 0);
 }
 
+pub fn cancel(self: *Self, io: std.Io) void {
+    self.select.cancelDiscard();
+    _ = io;
+}
+
 const ReapTask = union(enum) {
     processed: std.Io.Cancelable!void,
 };

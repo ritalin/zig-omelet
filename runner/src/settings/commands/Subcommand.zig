@@ -69,7 +69,7 @@ pub fn buildFromArgs(
     const command_setting: SubcommandSetting = command: {
         switch (command) {
             .generate => {
-                var builder = Generate.Builder.fromArgs(allocator, iter) catch return .{.help = &ArgHelp.generate};
+                var builder = Generate.Builder(std.process.Args.Iterator).fromArgs(allocator, iter, .stderr) catch return .{.help = &ArgHelp.generate};
                 defer builder.deinit();
 
                 const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .defaults, .root = config_types.path_candidates };

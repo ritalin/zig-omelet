@@ -8,10 +8,10 @@ const FilterKind = core.types.FilterKind;
 const GenerateArgId = ArgId(.{});
 const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(GenerateArgId));
 
-source_dir_set: []FilePath,
-schema_dir_set: []FilePath,
-include_filter_set: []FilePath,
-exclude_filter_set: []FilePath,
+source_dir_set: []const FilePath,
+schema_dir_set: []const FilePath,
+include_filter_set: []const FilePath,
+exclude_filter_set: []const FilePath,
 output_dir_path: FilePath,
 watch: bool,
 

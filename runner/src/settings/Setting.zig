@@ -19,13 +19,13 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.
 
     _ = args_iter.next();
 
-    var res = BaseSetting.Builder.fromArgs(allocator, &args_iter)
+    var res = BaseSetting.Builder(std.process.Args.Iterator).fromArgs(allocator, &args_iter, .stderr)
     catch {
         return .{.help = &ArgHelp.toplevel};
     };
 
     const options: core.configs.supports.FileResolveOptions = .{ .command = "base", .scope = res.builder.scope, .category = .defaults, .root = config_types.path_candidates };
-    const general_setting = try res.builder.build(io, allocator, options);
+    const general_setting = try res.builder.build(io, options);
 
     const sub_res = SubcommandSetting.fromArgs(io, allocator, &args_iter, res.command, general_setting.scope);
     const command_setting = switch (sub_res) {

@@ -29,7 +29,7 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
         pub fn handle(self: *Self, stage: *HostRunner, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
             switch (entry.event) {
                 .launching => {
-                    const ep = stage.setting.general.endpoints;
+                    const ep = stage.setting.base.endpoints;
 
                     try stage.log(.debug, "Launched", .{});
 

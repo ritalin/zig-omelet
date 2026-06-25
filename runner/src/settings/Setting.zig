@@ -7,8 +7,7 @@ const config_types = @import("../configs/types.zig");
 const ArgHelp = @import("../help/ArgHelp.zig");
 const Setting = @This();
 
-// arena: *std.heap.ArenaAllocator,
-general: BaseSetting,
+base: BaseSetting,
 command: SubcommandSetting,
 
 pub const BaseSetting = @import("./commands/BaseSetting.zig");
@@ -36,13 +35,13 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.
 
     return .{
         .success = .{
-            .general = general_setting,
+            .base = general_setting,
             .command = command_setting,
         }
     };
 }
 
 pub fn deinit(self: *Setting, io: std.Io, allocator: std.mem.Allocator) void {
-    self.general.deinit(io, allocator);
+    self.base.deinit(io, allocator);
     self.command.deinit(allocator);
 }

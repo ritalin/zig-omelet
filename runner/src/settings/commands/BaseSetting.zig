@@ -4,7 +4,7 @@ const core = @import("core");
 
 const Endpoint = core.configs.Endpoint;
 
-const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(GeneralArgId));
+const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(BaseArgId));
 const Self = @This();
 
 log_level: core.events.LogLevel,
@@ -53,24 +53,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
     };
 }
 
-// TODO:
-// pub fn StageArgId(comptime descriptions: core.settings.DescriptionMap) type {
-//     return enum {
-//         request_channel,
-//         subscribe_channel,
-//         log_level,
-
-//         pub const Decls: []const clap.Param(@This()) = &.{
-//             .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
-//             .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
-//             .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
-//         };
-//         pub usingnamespace core.settings.ArgHelp(@This(), descriptions);
-//         pub const options: core.settings.ArgHelpOption = .{.category_name = "Stage general options"};
-//     };
-// }
-
-const GeneralArgId = ArgId(.{});
+const BaseArgId = ArgId(.{});
 
 const Subcommand = @import("./Subcommand.zig");
 const SubcommandArgid = Subcommand.Setting.ArgId(.{});
@@ -86,10 +69,10 @@ pub const Builder = struct {
     scope: core.types.Symbol,
 
     pub fn fromArgs(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !struct{ builder: Builder, command: SubcommandArgid } {
-        const params = GeneralArgId.Decls;
+        const params = BaseArgId.Decls;
         var diag: clap.Diagnostic = .{}; 
 
-        var parser = clap.streaming.Clap(GeneralArgId, std.process.Args.Iterator){
+        var parser = clap.streaming.Clap(BaseArgId, std.process.Args.Iterator){
             .params = params,
             .iter = iter,
             .diagnostic = &diag,        
@@ -138,19 +121,6 @@ pub const Builder = struct {
             }
         }
     }
-
-//     fn makeIPCChannel(allocator: std.mem.Allocator) ![]const u8 {
-//         var seed = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
-//         var rand = seed.random();
-
-//         var buf: [24]u8 = undefined;
-//         rand.bytes(&buf);
-
-//         const sub_path = try core.bytesToHexAlloc(allocator, &buf);
-//         defer allocator.free(sub_path);
-
-//         return std.fmt.allocPrint(allocator, "{s}/{s}", .{core.CHANNEL_ROOT, sub_path});
-//     }
 
     fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
         var self: *Builder = @ptrCast(@alignCast(ptr));

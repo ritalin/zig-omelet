@@ -112,7 +112,7 @@ pub const senction_descriptors: DescriptorMap = .{
 };
 
 pub const general_arg_desc: ArgHelp.Descriptor = .{
-    .name = "General Args:",
+    .name = "Base Args:",
 };
 pub const command_arg_desc: ArgHelp.Descriptor = .{
     .name = "Command Args:",

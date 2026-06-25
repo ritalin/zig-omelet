@@ -41,7 +41,7 @@ fn renderArgs(writer: *std.Io.Writer, desc: ArgHelp.Descriptor, config: *const A
 
     switch (config.tag) {
         .toplevel => {
-            try renderArgsInternal(writer, ArgHelp.GeneralSettingArgId);
+            try renderArgsInternal(writer, ArgHelp.BaseSettingArgId);
         },
         .generate => {
             try renderArgsInternal(writer, ArgHelp.GenerateCommandArgId);

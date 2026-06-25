@@ -2,13 +2,7 @@ const std = @import("std");
 const core = @import("core");
 
 const ArgHelp = @import("../help/ArgHelp.zig");
-
 const loader = @import("./config_loader.zig");
-// const mappings = @import("./bind_mappings.zig");
-const GeneralConfig = @import("./GeneralConfig.zig");
-const GenerateConfig = @import("./GenerateConfig.zig");
-const InitializeConfig = @import("./InitializeConfig.zig");
-
 const Setting = @import("../settings/Setting.zig");
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
@@ -38,12 +32,12 @@ pub fn load(io: std.Io, allocator: std.mem.Allocator, setting: *const Setting) !
 }
 
 fn loadInternal(io: std.Io, allocator: std.mem.Allocator, setting: *const Setting) !Config {
-    const host = loader.loadHost(io, allocator, setting.general.scope)
+    const host = loader.loadHost(io, allocator, setting.base.scope)
     catch |err| {
         handleError(err);
         return err;
     }; 
-    const guests = loader.loadGuest(io, allocator, setting.command.tag(), setting.general.scope)
+    const guests = loader.loadGuest(io, allocator, setting.command.tag(), setting.base.scope)
     catch |err| {
         handleError(err);
         return err;

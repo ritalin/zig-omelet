@@ -15,9 +15,9 @@ exclude_filter_set: []FilePath,
 output_dir_path: FilePath,
 watch: bool,
 
-const Self = @This();
+const Setting = @This();
 
-pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *Setting, allocator: std.mem.Allocator) void {
     _ = self;
     _ = allocator;
 } 
@@ -58,198 +58,438 @@ const PathFilter = struct {
     path: FilePath,
 };
 
-pub const Builder = struct {
-    allocator: std.mem.Allocator,
-    source_dir_set: std.ArrayListUnmanaged(?FilePath),
-    schema_dir_set: std.ArrayListUnmanaged(?FilePath),
-    filter_set: std.ArrayListUnmanaged(PathFilter),
-    filter_set_counts: std.enums.EnumArray(FilterKind, usize),
-    output_dir_path: ?FilePath = null,
-    watch: ?bool = null,
+pub fn Builder(comptime ArgsIterator: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        log_style: core.Logger.LogStyle,
+        source_dir_set: std.ArrayListUnmanaged(?FilePath),
+        schema_dir_set: std.ArrayListUnmanaged(?FilePath),
+        filter_set: std.ArrayListUnmanaged(PathFilter),
+        filter_set_counts: std.enums.EnumArray(FilterKind, usize),
+        output_dir_path: ?FilePath = null,
+        watch: ?bool = null,
 
-    pub fn deinit(self: *Builder) void {
-        self.source_dir_set.deinit(self.allocator);
-        self.schema_dir_set.deinit(self.allocator);
-        self.filter_set.deinit(self.allocator);
-    }
+        pub fn deinit(self: *Builder(ArgsIterator)) void {
+            self.source_dir_set.deinit(self.allocator);
+            self.schema_dir_set.deinit(self.allocator);
+            self.filter_set.deinit(self.allocator);
+        }
 
-    pub fn fromArgs(allocator: std.mem.Allocator, iter: *std.process.Args.Iterator) !Builder {
-        var builder: Builder = .{
-            .allocator = allocator,
-            .source_dir_set = .empty,
-            .schema_dir_set = .empty,
-            .filter_set = .empty,
-            .filter_set_counts = std.enums.EnumArray(FilterKind, usize).initFill(0),
-        };
-
-        var diag: clap.Diagnostic = .{};
-        var parser = clap.streaming.Clap(GenerateArgId, std.process.Args.Iterator){
-            .params = GenerateArgId.Decls,
-            .iter = iter,
-            .diagnostic = &diag,
-        };
-
-        while (true) {
-            const next_arg = parser.next() catch |err| {
-                try core.log_supports.reportClapError(&diag, err);
-                return error.ShowCommandHelp;
+        pub fn fromArgs(allocator: std.mem.Allocator, iter: *ArgsIterator, log_style: core.Logger.LogStyle) !Builder(ArgsIterator) {
+            var builder: Builder(ArgsIterator) = .{
+                .allocator = allocator,
+                .log_style = log_style,
+                .source_dir_set = .empty,
+                .schema_dir_set = .empty,
+                .filter_set = .empty,
+                .filter_set_counts = std.enums.EnumArray(FilterKind, usize).initFill(0),
             };
-            if (next_arg == null) {
-                return builder;
-            }
-            const arg = next_arg.?;
 
-            switch (arg.param.id) {
-                .source_dir_set => try builder.source_dir_set.append(allocator, arg.value),
-                .schema_dir_set => try builder.schema_dir_set.append(allocator, arg.value),
-                .include_filter_set => {
-                    if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .include , .path = v});
-                    builder.filter_set_counts.getPtr(.include).* += 1;
-                },
-                .exclude_filter_set => {
-                    if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .exclude , .path = v});
-                    builder.filter_set_counts.getPtr(.exclude).* += 1;
-                },
-                .output_dir_path => builder.output_dir_path = arg.value,
-                .watch => builder.watch = true,
-            }
-        }
-    }
+            var diag: clap.Diagnostic = .{};
+            var parser = clap.streaming.Clap(GenerateArgId, ArgsIterator){
+                .params = GenerateArgId.Decls,
+                .iter = iter,
+                .diagnostic = &diag,
+            };
 
-    fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
-        var self: *Builder = @ptrCast(@alignCast(ptr));
-        var iter = defaults.iterator();
-
-        while (iter.next()) |entry| {
-            switch (entry.key) {
-                .source_dir_set => if (entry.value.tag() == .values) {
-                    if (self.source_dir_set.items.len == 0) {
-                        for (entry.value.values) |value| {
-                            try self.source_dir_set.append(self.allocator, value);
-                        }
-                    }
-                },
-                .schema_dir_set => if (entry.value.tag() == .values) {
-                    if (self.schema_dir_set.items.len == 0) {
-                        for (entry.value.values) |value| {
-                            try self.schema_dir_set.append(self.allocator, value);
-                        }
-                    }
-                },
-                .include_filter_set => if (entry.value.tag() == .values) {
-                    if (self.filter_set_counts.get(.include) == 0) {
-                        for (entry.value.values) |value| {
-                            try self.filter_set.append(self.allocator, .{.kind = .include, .path = value});
-                        }
-                    }
-                },
-                .exclude_filter_set => if (entry.value.tag() == .values) {
-                    if (self.filter_set_counts.get(.exclude) == 0) {
-                        for (entry.value.values) |value| {
-                            try self.filter_set.append(self.allocator, .{.kind = .exclude, .path = value});
-                        }
-                    }
-                },
-                .output_dir_path => if (entry.value.tag() == .values) {
-                    if ((self.output_dir_path == null) and (entry.value.values.len > 0)) {
-                        self.output_dir_path = entry.value.values[0];
-                    }
-                },
-                .watch => if (entry.value.tag() == .enabled) {
-                    if (self.watch == null) {
-                        self.watch = entry.value.enabled;
-                    }
-                },
-            }
-        }
-    }
-
-    pub fn build(self: *Builder, io: std.Io, options: core.configs.supports.FileResolveOptions) !Self {
-        if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
-            defer file.close(io);
-
-            const callback: Defaults.ApplyDefaultHandler = .{ .ptr = self, .handler = Builder.applyDefaults };
-            try Defaults.loadFromFile(io, self.allocator, file, callback);
-        }
-
-        const base_dir = std.Io.Dir.cwd();
-        var has_err = false;
-        
-        const sources = sources: {
-            const slice = try self.allocator.alloc(FilePath, self.source_dir_set.items.len);        
-            for (self.source_dir_set.items, 0..) |path, i| {
-                if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
-                    slice[i] = path_abs;
+            while (true) {
+                const next_arg = parser.next() catch |err| {
+                    try core.log_supports.reportClapError(&diag, err);
+                    return error.ShowCommandHelp;
+                };
+                if (next_arg == null) {
+                    return builder;
                 }
-                else |err| {
-                    has_err = true;
-                    std.log.warn("Cannot access source folder/name: {s}, err: {}", .{path.?, err});
-                }
-            }
-            break:sources slice;
-        };
-        const schemas = schemas: {
-            const slice = try self.allocator.alloc(FilePath, self.schema_dir_set.items.len);
-            for (self.schema_dir_set.items, 0..) |path, i| {
-                if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
-                    slice[i] = path_abs;
-                }
-                else |err| {
-                    has_err = true;
-                    std.log.warn("Cannot access schema folder/name: {s}, err: {}", .{path.?, err});
-                }
-            }
-            break:schemas slice;
-        };
+                const arg = next_arg.?;
 
-        if ((sources.len == 0) and (schemas.len == 0)) {
-            has_err = true;
-            std.log.warn("Need to specify SQL source and/or schema folder at least one", .{});
-        }
-
-        var include_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
-        var exclude_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
-        filters: {
-            for (self.filter_set.items) |filter| {
-                switch (filter.kind) {
-                    .include => {
-                        try include_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
+                switch (arg.param.id) {
+                    .source_dir_set => try builder.source_dir_set.append(allocator, arg.value),
+                    .schema_dir_set => try builder.schema_dir_set.append(allocator, arg.value),
+                    .include_filter_set => {
+                        if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .include , .path = v});
+                        builder.filter_set_counts.getPtr(.include).* += 1;
                     },
-                    .exclude => {
-                        try exclude_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
-                    }
+                    .exclude_filter_set => {
+                        if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .exclude , .path = v});
+                        builder.filter_set_counts.getPtr(.exclude).* += 1;
+                    },
+                    .output_dir_path => builder.output_dir_path = arg.value,
+                    .watch => builder.watch = true,
                 }
             }
-            break:filters;
         }
-        const output_dir_path = path: {
-            if (self.output_dir_path == null) {
+
+        fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
+            var self: *Builder(ArgsIterator) = @ptrCast(@alignCast(ptr));
+            var iter = defaults.iterator();
+
+            while (iter.next()) |entry| {
+                switch (entry.key) {
+                    .source_dir_set => if (entry.value.tag() == .values) {
+                        if (self.source_dir_set.items.len == 0) {
+                            for (entry.value.values) |value| {
+                                try self.source_dir_set.append(self.allocator, value);
+                            }
+                        }
+                    },
+                    .schema_dir_set => if (entry.value.tag() == .values) {
+                        if (self.schema_dir_set.items.len == 0) {
+                            for (entry.value.values) |value| {
+                                try self.schema_dir_set.append(self.allocator, value);
+                            }
+                        }
+                    },
+                    .include_filter_set => if (entry.value.tag() == .values) {
+                        if (self.filter_set_counts.get(.include) == 0) {
+                            for (entry.value.values) |value| {
+                                try self.filter_set.append(self.allocator, .{.kind = .include, .path = value});
+                            }
+                        }
+                    },
+                    .exclude_filter_set => if (entry.value.tag() == .values) {
+                        if (self.filter_set_counts.get(.exclude) == 0) {
+                            for (entry.value.values) |value| {
+                                try self.filter_set.append(self.allocator, .{.kind = .exclude, .path = value});
+                            }
+                        }
+                    },
+                    .output_dir_path => if (entry.value.tag() == .values) {
+                        if ((self.output_dir_path == null) and (entry.value.values.len > 0)) {
+                            self.output_dir_path = entry.value.values[0];
+                        }
+                    },
+                    .watch => if (entry.value.tag() == .enabled) {
+                        if (self.watch == null) {
+                            self.watch = entry.value.enabled;
+                        }
+                    },
+                }
+            }
+        }
+
+        pub fn build(self: *Builder(ArgsIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !Setting {
+            if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
+                defer file.close(io);
+
+                const callback: Defaults.ApplyDefaultHandler = .{ 
+                    .ptr = self, 
+                    .handler = Builder(ArgsIterator).applyDefaults 
+                };
+                try Defaults.loadFromFile(io, self.allocator, file, self.log_style, callback);
+            }
+
+            const base_dir = std.Io.Dir.cwd();
+            var has_err = false;
+            
+            const sources = sources: {
+                const slice = try self.allocator.alloc(FilePath, self.source_dir_set.items.len);        
+                for (self.source_dir_set.items, 0..) |path, i| {
+                    if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
+                        slice[i] = path_abs;
+                    }
+                    else |err| {
+                        has_err = true;
+                        if (self.log_style == .stderr) {
+                            std.log.warn("Cannot access source folder/name: {s}, err: {}", .{path.?, err});
+                        }
+                    }
+                }
+                break:sources slice;
+            };
+            const schemas = schemas: {
+                const slice = try self.allocator.alloc(FilePath, self.schema_dir_set.items.len);
+                for (self.schema_dir_set.items, 0..) |path, i| {
+                    if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
+                        slice[i] = path_abs;
+                    }
+                    else |err| {
+                        has_err = true;
+                        if (self.log_style == .stderr) {
+                            std.log.warn("Cannot access schema folder/name: {s}, err: {}", .{path.?, err});
+                        }
+                    }
+                }
+                break:schemas slice;
+            };
+
+            if ((sources.len == 0) and (schemas.len == 0)) {
                 has_err = true;
-                std.log.warn("Need to specify output folder", .{});
-                break:path null;
+                if (self.log_style == .stderr) {
+                    std.log.warn("Need to specify SQL source and/or schema folder at least one", .{});
+                }
             }
-            else {
-                try base_dir.createDirPath(io, self.output_dir_path.?);
-                break :path try base_dir.realPathFileAlloc(io, self.output_dir_path.?, self.allocator);
-            }
-        };
 
-        if (has_err) {
-            return error.LoadSettingFailed;
+            var include_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
+            var exclude_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
+            filters: {
+                for (self.filter_set.items) |filter| {
+                    switch (filter.kind) {
+                        .include => {
+                            try include_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
+                        },
+                        .exclude => {
+                            try exclude_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
+                        }
+                    }
+                }
+                break:filters;
+            }
+            const output_dir_path = path: {
+                if (self.output_dir_path == null) {
+                    has_err = true;
+                    if (self.log_style == .stderr) {
+                        std.log.warn("Need to specify output folder", .{});
+                    }
+                    break:path null;
+                }
+                else {
+                    try base_dir.createDirPath(io, self.output_dir_path.?);
+                    break :path try base_dir.realPathFileAlloc(io, self.output_dir_path.?, self.allocator);
+                }
+            };
+
+            if (has_err) {
+                return error.LoadSettingFailed;
+            }
+
+            return .{
+                .source_dir_set = sources,
+                .schema_dir_set = schemas,
+                .include_filter_set = try include_filters.toOwnedSlice(self.allocator),
+                .exclude_filter_set = try exclude_filters.toOwnedSlice(self.allocator),
+                .output_dir_path = output_dir_path.?,
+                .watch = self.watch orelse false,
+            };
         }
+    };
+}
 
-        return .{
-            .source_dir_set = sources,
-            .schema_dir_set = schemas,
-            .include_filter_set = try include_filters.toOwnedSlice(self.allocator),
-            .exclude_filter_set = try exclude_filters.toOwnedSlice(self.allocator),
-            .output_dir_path = output_dir_path.?,
-            .watch = self.watch orelse false,
+test "generate setting test" {
+    std.testing.refAllDecls(@This());
+}
+
+pub const tests = struct {
+    const ConfigFileCandidates = core.configs.types.ConfigFileCandidates;
+    const FileResolveOptions = core.configs.supports.FileResolveOptions;
+    const writeAssetFile = @import("../../supports/test_support.zig").writeAssetFile;
+    const TetsArgsIterator = clap.args.SliceIterator;
+
+    test "All explicit args" {
+        const io = std.testing.io;
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path_abs = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+
+        const e1_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "explicit-src-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
         };
+        const e2_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "explicit-src-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const e3_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "explicit-schema-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const e4_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "explicit-schema-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const e5_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{tmp_dir_path_abs, "explicit-out"})});
+
+        var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
+        try args.appendSlice(allocator, &.{
+            "--source-dir", e1_path,
+            "--source-dir", e2_path,
+            "--schema-dir", e3_path,
+            "--schema-dir", e4_path,
+            "--include-filter=foo",
+            "--include-filter=bar",
+            "--exclude-filter=baz",
+            "--exclude-filter=quax",
+            "--output-dir", e5_path,
+            "--watch",
+        });
+
+        const defaults_source = ".{}";
+
+        const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
+        const options: FileResolveOptions = .{
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+        };
+
+        try writeAssetFile(&tmp_dir, options, defaults_source);
+
+        var iter: TetsArgsIterator = .{.args = args.items};
+
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        defer builder.deinit();
+
+        const setting: Setting = try builder.build(io, options);
+
+        try std.testing.expectEqualDeep(&[_][]const u8{e1_path, e2_path}, setting.source_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{e3_path, e4_path}, setting.schema_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"foo", "bar"}, setting.include_filter_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"baz", "quax"}, setting.exclude_filter_set);
+        try std.testing.expectEqualStrings(e5_path, setting.output_dir_path);
+        try std.testing.expectEqual(true, setting.watch);
     }
 
+    test "All default args" {
+        const io = std.testing.io;
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
 
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path_abs = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
 
+        const d1_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-src-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d2_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-src-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d3_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-schema-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d4_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-schema-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d5_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{tmp_dir_path_abs, "default-out"})});
 
-//     }
+        var buffer: std.Io.Writer.Allocating = .init(allocator);
+        try buffer.writer.print(
+            \\.{{
+            \\    .source_dir_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .schema_dir_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .include_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .exclude_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .output_dir_path = .{{ .values = .{{ "{s}" }} }},
+            \\    .watch = .{{ .enabled = true }},
+            \\}}
+            , .{ d1_path, d2_path, d3_path, d4_path, "quax", "baz", "bar", "foo", d5_path }
+        );
+        try buffer.writer.flush();
+
+        const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
+        const options: FileResolveOptions = .{
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+        };
+
+        try writeAssetFile(&tmp_dir, options, buffer.written());
+        
+        var iter: TetsArgsIterator = .{.args = &.{}};
+
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        defer builder.deinit();
+
+        const setting: Setting = try builder.build(io, options);
+
+        try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"quax", "baz"}, setting.include_filter_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"bar", "foo"}, setting.exclude_filter_set);
+        try std.testing.expectEqualStrings(d5_path, setting.output_dir_path);
+        try std.testing.expectEqual(true, setting.watch);
+    }
+
+    test "Explict + default args" {
+        const io = std.testing.io;
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        const tmp_dir_path_abs = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
+
+        const d1_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-src-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d2_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-src-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d3_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-schema-1", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d4_path = dir: {
+            const d = try tmp_dir.dir.createDirPathOpen(io, "default-schema-2", .{});
+            defer d.close(io);
+            break:dir try d.realPathFileAlloc(io, ".", allocator);
+        };
+        const d5_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{tmp_dir_path_abs, "default-out"})});
+
+        var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
+        try args.appendSlice(allocator, &.{
+            "--source-dir", "/path/to/explicit-src-1",
+            "--source-dir", "/path/to/explicit-src-2",
+            "--schema-dir", "/path/to/explicit-schema-1",
+            "--schema-dir", "/path/to/explicit-schema-2",
+            "--include-filter=foo",
+            "--include-filter=bar",
+            "--exclude-filter=baz",
+            "--exclude-filter=quax",
+            "--output-dir", "explicit-out",
+        });
+
+        var buffer: std.Io.Writer.Allocating = .init(allocator);
+        try buffer.writer.print(
+            \\.{{
+            \\    .source_dir_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .schema_dir_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .include_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .exclude_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
+            \\    .output_dir_path = .{{ .values = .{{ "{s}" }} }},
+            \\    .watch = .{{ .enabled = true }},
+            \\}}
+            , .{ d1_path, d2_path, d3_path, d4_path, "quax", "baz", "bar", "foo", d5_path }
+        );
+        try buffer.writer.flush();
+
+        const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
+        const options: FileResolveOptions = .{
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+        };
+
+        try writeAssetFile(&tmp_dir, options, buffer.written());
+        
+        var iter: TetsArgsIterator = .{.args = &.{}};
+
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        defer builder.deinit();
+
+        const setting: Setting = try builder.build(io, options);
+
+        try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"quax", "baz"}, setting.include_filter_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"bar", "foo"}, setting.exclude_filter_set);
+        try std.testing.expectEqualStrings(d5_path, setting.output_dir_path);
+        try std.testing.expectEqual(true, setting.watch);
+    }
 };

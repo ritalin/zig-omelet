@@ -25,7 +25,7 @@ pub fn Defaults(comptime ArgId: type) type {
 
         pub const default: Self = .{ .map = Self.Map.initFull(.default) };
 
-        pub fn loadFromFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, on_apply: ApplyDefaultHandler) !void {
+        pub fn loadFromFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File, log_style: core.Logger.LogStyle, on_apply: ApplyDefaultHandler) !void {
             var buffer: [1024]u8 = undefined;
             var reader = file.reader(io, &buffer);
             const content = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .@"1", 0);
@@ -33,15 +33,23 @@ pub fn Defaults(comptime ArgId: type) type {
 
             var self: Self = .{ .map = .{} };
 
-            try self.loadFromSource(allocator, content);
+            try self.loadFromSource(allocator, content, log_style);
 
             try (on_apply.handler)(on_apply.ptr, &self);
         }
 
-        fn loadFromSource(self: *Self, allocator: std.mem.Allocator, contents: [:0]const u8) !void {
+        fn loadFromSource(self: *Self, allocator: std.mem.Allocator, contents: [:0]const u8, error_style: core.Logger.LogStyle) !void {
             var ast = try std.zig.Ast.parse(allocator, contents, .zon);
             defer ast.deinit(allocator);
             if (ast.errors.len > 0) {
+                if (error_style == .stderr) {
+                    for (ast.errors) |err| {
+                        var buffer: [1024]u8 = undefined;
+                        const t = std.debug.lockStderr(&buffer).terminal();
+                        defer std.debug.unlockStderr();
+                        try ast.renderError(err, t.writer);
+                    }
+                }
                 return error.InvalidSettingFile;
             }
 
@@ -106,7 +114,7 @@ pub const tests = struct {
         const contents: [:0]const u8 = ".{}";
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try self.loadFromSource(allocator, contents);
+        try self.loadFromSource(allocator, contents, .discard);
         try std.testing.expectEqual(0, self.map.count());
     }
 
@@ -128,7 +136,7 @@ pub const tests = struct {
         const expect: Defaults(ArgId) = .default;
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try self.loadFromSource(allocator, contents);
+        try self.loadFromSource(allocator, contents, .discard);
 
         try std.testing.expectEqualDeep(expect.map, self.map);
     }
@@ -160,7 +168,7 @@ pub const tests = struct {
         };
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try self.loadFromSource(allocator, contents);
+        try self.loadFromSource(allocator, contents, .discard);
 
         try std.testing.expectEqualDeep(expect.map, self.map);
     }
@@ -173,7 +181,7 @@ pub const tests = struct {
         const contents: [:0]const u8 = "[]";
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try std.testing.expectError(error.InvalidSettingFile, self.loadFromSource(allocator, contents));
+        try std.testing.expectError(error.InvalidSettingFile, self.loadFromSource(allocator, contents, .discard));
     }
 
     test "Invalid default#2 (unknown key)" {
@@ -184,7 +192,7 @@ pub const tests = struct {
         const contents: [:0]const u8 = ".{.qwerty = .default}";
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try std.testing.expectError(error.InvalidSettingKey, self.loadFromSource(allocator, contents));
+        try std.testing.expectError(error.InvalidSettingKey, self.loadFromSource(allocator, contents, .discard));
     }
 
     test "Invalid default#3 (unknown arg tag#1)" {
@@ -195,6 +203,6 @@ pub const tests = struct {
         const contents: [:0]const u8 = ".{.output_dir_path = .xyz}";
 
         var self: Defaults(ArgId) = .{ .map = .{} };
-        try std.testing.expectError(error.InvalidSettingEntry, self.loadFromSource(allocator, contents));
+        try std.testing.expectError(error.InvalidSettingEntry, self.loadFromSource(allocator, contents, .discard));
     }
 };

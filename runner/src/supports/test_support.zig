@@ -20,6 +20,29 @@ pub const releaseEndpoint = core.test_supports.releaseEndpoint;
 pub const POLLER_SIZE = 4;
 pub const Connection = core.sockets.Connection.Server(stage_name);
 
+pub fn writeAssetFile(tmp_dir: *const std.testing.TmpDir, options: core.configs.supports.FileResolveOptions, content: core.types.Symbol) !void {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    const category_name: core.types.Symbol = @tagName(options.category);
+    const dir_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{options.root.current_dir.?, options.scope, category_name})});
+    defer allocator.free(dir_path);
+
+    const dir = try tmp_dir.dir.createDirPathOpen(io, dir_path, .{});
+    defer dir.close(io);
+
+    const fle_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{options.command});
+    defer allocator.free(fle_name);
+
+    const file = try dir.createFile(io, fle_name, .{});
+    defer file.close(io);
+
+    var buffer: [1024]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    try writer.interface.writeAll(content);
+    try writer.flush();
+}
+
 pub fn sendMessage(channel: core.sockets.RpcChannel, event: core.events.Event) void {
     channel.submit(std.testing.io, event, .{}) catch |err| {
         std.debug.print("*** Test:sendMessage/err: {}\n", .{err});
@@ -38,7 +61,7 @@ pub const TestStage = struct {
     pub fn init(connection: *Connection, ep: core.types.Endpoints, limit: HeartbeatTask.Limit) !TestStage {
         return .{
             .setting = .{
-                .general = .{
+                .base = .{
                     .log_level = .debug,
                     .log_quiet = false,
                     .no_color = false,

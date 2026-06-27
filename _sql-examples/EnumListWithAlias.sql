@@ -1,0 +1,1 @@
+select child_visibles::Visibility[], id from Element

@@ -4,14 +4,14 @@ const core = @import("core");
 
 const log = core.Logger.TraceDirect(@import("build_options").app_context);
 
-const help = @import("../settings/help.zig");
+const ArgHelp = @import("../help/ArgHelp.zig");
 const mappings = @import("./bind_mappings.zig");
 const GenerateSetting = @import("../settings/commands/Generate.zig");
 const DufaultArg = @import("../settings/default_args.zig");
 
 pub const ArgId = std.meta.FieldEnum(GenerateSetting);
 
-pub fn applyValue(setting: GenerateSetting, arg_id: ArgId, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting) {
+pub fn applyValue(setting: GenerateSetting, arg_id: ArgId, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config) {
     return switch (arg_id) {
         .source_dir_set => Binder.SourceDir.bind(setting, args),
         .schema_dir_set => Binder.SchemaDir.bind(setting, args),
@@ -40,7 +40,7 @@ const Binder = struct {
     const SourceDir = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .source_dir).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             for (setting.source_dir_set) |path| {
                 try args.append(name);
                 try args.append(path);
@@ -52,7 +52,7 @@ const Binder = struct {
     const SchemaDir = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .schema_dir).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             for (setting.schema_dir_set) |path| {
                 try args.append(name);
                 try args.append(path);
@@ -63,7 +63,7 @@ const Binder = struct {
     const OutputDir = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .output_dir).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             try args.append(name);
             try args.append(setting.output_dir_path);
 
@@ -73,7 +73,7 @@ const Binder = struct {
     const WatchMode = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .watch).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             if (setting.watch) {
                 try args.append(name);
             }
@@ -84,7 +84,7 @@ const Binder = struct {
     const IncludeFilter = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .include_filter).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             for (setting.include_filter_set) |filter| {
                 try args.append(name);
                 try args.append(filter);
@@ -95,7 +95,7 @@ const Binder = struct {
     const ExcludeFilter = struct {
         const name = "--" ++ mappings.findDecl(Binder.ArgId, decls, .exclude_filter).names.long.?;
 
-        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, help.ArgHelpSetting)  {
+        fn bind(setting: GenerateSetting, args: *std.ArrayList(core.Symbol)) !core.settings.LoadResult(void, ArgHelp.Config)  {
             for (setting.exclude_filter_set) |filter| {
                 try args.append(name);
                 try args.append(filter);

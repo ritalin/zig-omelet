@@ -9,16 +9,12 @@ const help = @import("../help.zig");
 pub const Generate = @import("./Generate.zig");
 pub const Initialize = @import("./Initialize.zig");
 
-const path_candidates: core.configs.ConfigFileCandidates = .{
-    .current_dir = ".omelet",
-    .home_dir = ".omelet",
-    .executable_dir = "",
-};
-
 pub const CommandSetting = union(core.SubcommandArgId) {
     generate: Generate,
     @"init-default": Initialize,
     @"init-config": Initialize,
+
+    
 
     pub fn loadArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser, scope: core.Symbol) !core.settings.LoadResult(CommandSetting, help.ArgHelpSetting) {
         const id = findTag(parser.diagnostic) catch  |err| switch (err) {

@@ -2,8 +2,9 @@ const std = @import("std");
 // const clap = @import("clap");
 const core = @import("core");
 
-const config_types = @import("../configs/types.zig");
+const ArgScanner = core.settings.types.ArgScanner;
 
+const config_types = @import("../configs/types.zig");
 const ArgHelp = @import("../help/ArgHelp.zig");
 const Setting = @This();
 
@@ -19,24 +20,24 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.
 
     _ = args_iter.next();
 
-    var res = BaseSetting.Builder(std.process.Args.Iterator).fromArgs(allocator, &args_iter, .stderr)
+    var scanner = ArgScanner(std.process.Args.Iterator).init(&args_iter);
+    var res = BaseSetting.Builder(std.process.Args.Iterator).fromArgs(allocator, &scanner, .stderr)
     catch {
         return .{.help = &ArgHelp.toplevel};
     };
 
-    const options: core.configs.supports.FileResolveOptions = .{ .command = "base", .scope = res.builder.scope, .category = .defaults, .root = config_types.path_candidates };
-    const general_setting = try res.builder.build(io, options);
 
-    const sub_res = SubcommandSetting.fromArgs(io, allocator, &args_iter, res.command, general_setting.scope);
-    const command_setting = switch (sub_res) {
+    const sub_res = SubcommandSetting.fromArgs(io, allocator, &scanner, &res.builder, res.command);
+
+    const setting_pair = switch (sub_res) {
         .help => |help| return .{.help = help},
-        .success => |setting| setting,
+        .success => |settings| settings,
     };
 
     return .{
         .success = .{
-            .base = general_setting,
-            .command = command_setting,
+            .base = setting_pair.base,
+            .command = setting_pair.command,
         }
     };
 }

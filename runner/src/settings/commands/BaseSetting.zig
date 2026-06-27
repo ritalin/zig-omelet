@@ -3,9 +3,11 @@ const clap = @import("clap");
 const core = @import("core");
 
 const Endpoint = core.configs.Endpoint;
+const ArgScanner = core.settings.types.ArgScanner;
+const ArgParserPair = core.settings.types.ArgParserPair;
 
 const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(BaseArgId));
-const Setting = @This();
+const BaseSetting = @This();
 
 log_level: core.events.LogLevel,
 log_quiet: bool,
@@ -14,7 +16,7 @@ endpoints: core.types.Endpoints,
 ipc_config: Endpoint.Config,
 scope: core.types.Symbol,
 
-pub fn deinit(self: *Setting, io: std.Io, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *BaseSetting, io: std.Io, allocator: std.mem.Allocator) void {
     Endpoint.releaseIpcStorage(io, &self.ipc_config);
     Endpoint.releaseIpcConfig(allocator, &self.ipc_config);
 
@@ -70,15 +72,9 @@ pub fn Builder(comptime ArgIterator: type) type {
         push_pull_channel: ?core.types.Symbol,
         scope: core.types.Symbol,
 
-        pub fn fromArgs(allocator: std.mem.Allocator, iter: *ArgIterator, log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgId } {
-            const params = BaseArgId.Decls;
+        pub fn fromArgs(allocator: std.mem.Allocator, scanner: *ArgScanner(ArgIterator), log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgId } {
             var diag: clap.Diagnostic = .{}; 
-
-            var parser = clap.streaming.Clap(BaseArgId, ArgIterator){
-                .params = params,
-                .iter = iter,
-                .diagnostic = &diag,        
-            };
+            var parsers = ArgParserPair(BaseArgId, SubcommandArgId, ArgIterator).init(scanner, &diag);
 
             var builder: Builder(ArgIterator) = .{
                 .allocator = allocator,
@@ -92,41 +88,48 @@ pub fn Builder(comptime ArgIterator: type) type {
                 .scope = "default",
             };
             
-            while (true) {
-                const next_arg = parser.next() catch |err| switch (err) {
-                    error.InvalidArgument => {
-                        const command = SubcommandArgId.fromString(diag.arg) orelse {
-                            if (builder.log_style == .stderr) {
-                                std.log.err("Invalid subcommand/arg: {s}", .{diag.arg});
-                            }
-                            return error.ShowHelp;
-                        };
-                        return .{ .builder = builder, .command = command };
-                    },
-                    else => {
+            while (scanner.scan()) {
+                const next_arg = parsers.next(scanner) catch |err| {
+                    if (log_style == .stderr) {
                         try core.log_supports.reportClapError(&diag, err);
-                        return error.SettingLoadFailed;
                     }
+                    return err;
                 };
-                if (next_arg == null) {
-                    return error.SettingLoadFailed;
-                }
-                const arg = next_arg.?;
+                if (next_arg == null) break; 
 
-                switch (arg.param.id) {
-                    .help => return error.ShowHelp,
-                    .req_rep_channel => builder.req_rep_channel = arg.value,
-                    .pub_sub_channel => builder.pub_sub_channel = arg.value,
-                    .push_pull_channel => builder.push_pull_channel = arg.value,
-                    .log_level => {
-                        builder.log_level = core.Logger.resolveLogLevel(arg.value) catch null;
+                switch (next_arg.?) {
+                    .base => |arg| {
+                        try builder.handleArg(allocator, arg);
                     },
-                    .log_quiet => builder.log_quiet = true,
-                    .no_color => builder.no_color = true,
-                    .use_scope => {
-                        if (arg.value) |v| builder.scope = v;
-                    },
+                    .extra => |arg| {
+                        return .{ .builder = builder, .command = arg.param.id };
+                    }
                 }
+            }
+
+            if (log_style == .stderr) {
+                std.log.warn("Missing command", .{});
+            }
+
+            return error.MissngCommand;
+        }
+
+        pub fn handleArg(self: *Builder(ArgIterator), allocator: std.mem.Allocator, arg: clap.streaming.Arg(BaseArgId)) !void {
+            _ = allocator;
+
+            switch (arg.param.id) {
+                .help => return error.ShowHelp,
+                .req_rep_channel => self.req_rep_channel = arg.value,
+                .pub_sub_channel => self.pub_sub_channel = arg.value,
+                .push_pull_channel => self.push_pull_channel = arg.value,
+                .log_level => {
+                    self.log_level = core.Logger.resolveLogLevel(arg.value) catch null;
+                },
+                .log_quiet => self.log_quiet = true,
+                .no_color => self.no_color = true,
+                .use_scope => {
+                    if (arg.value) |v| self.scope = v;
+                },
             }
         }
 
@@ -162,7 +165,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
         }
 
-        pub fn build (self: *Builder(ArgIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !Setting {
+        pub fn build (self: *Builder(ArgIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !BaseSetting {
             if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
                 defer file.close(io);
 
@@ -245,7 +248,7 @@ pub const tests = struct {
         var iter: TetsArgsIterator = .{.args = args.items};
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
-        const setting: Setting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("inproc://req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("inproc://pub-sub", setting.endpoints.pub_sub);
@@ -287,7 +290,7 @@ pub const tests = struct {
         var iter: TetsArgsIterator = .{.args = &.{ "generate" }};
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
-        const setting: Setting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("ipc:///path/to/pub-sub", setting.endpoints.pub_sub);
@@ -339,7 +342,7 @@ pub const tests = struct {
         var iter: TetsArgsIterator = .{.args = args.items};
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
-        const setting: Setting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("ipc:///path/to/pub-sub", setting.endpoints.pub_sub);

@@ -2,8 +2,11 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const ArgScanner = core.settings.types.ArgScanner;
+
 const config_types = @import("../../configs/types.zig");
 
+const BaseSetting = @import("./BaseSetting.zig");
 const Generate = @import("./Generate.zig");
 const Initialize = @import("./Initialize.zig");
 
@@ -61,18 +64,25 @@ fn enumFromString(s: ?core.types.Symbol) ?SubcommandArgd {
 pub fn buildFromArgs(
     io: std.Io,
     allocator: std.mem.Allocator,
-    iter: *std.process.Args.Iterator, 
-    command: SubcommandArgd,
-    scope: core.types.Symbol) core.settings.types.LoadResult(SubcommandSetting, *const ArgHelp.Config)
+    scanner: *ArgScanner(std.process.Args.Iterator), 
+    base_builder: *BaseSetting.Builder(std.process.Args.Iterator),
+    command: SubcommandArgd) core.settings.types.LoadResult(struct{base: BaseSetting, command: SubcommandSetting}, *const ArgHelp.Config)
 {
     const command_setting: SubcommandSetting = command: {
         switch (command) {
             .generate => {
-                var builder = Generate.Builder(std.process.Args.Iterator).fromArgs(allocator, iter, .stderr) catch return .{.help = &ArgHelp.generate};
+                var builder = Generate.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .stderr) catch return .{.help = &ArgHelp.generate};
                 defer builder.deinit();
 
-                const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .defaults, .root = config_types.path_candidates };
-                const setting = builder.build(io, options) catch return .{.help = &ArgHelp.generate};
+                const setting = build: {
+                    const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = base_builder.scope, .category = .defaults, .root = config_types.path_candidates };
+                    break:build builder.build(io, options) 
+                    catch |err| switch (err) {
+                        error.ShowCommandHelp => return .{.help = &ArgHelp.generate},
+                        else => return .{.help = &ArgHelp.toplevel},
+                    };
+                };
+
                 break:command .{ .generate = setting};
             },
             .@"init-default" => {
@@ -84,5 +94,10 @@ pub fn buildFromArgs(
         }
     };
 
-    return .{ .success = command_setting };
+    const base_setting = build: {
+        const options: core.configs.supports.FileResolveOptions = .{ .command = "base", .scope = base_builder.scope, .category = .defaults, .root = config_types.path_candidates };
+        break:build base_builder.build(io, options) catch return .{ .help = &ArgHelp.toplevel };
+    };
+
+    return .{ .success = .{.base = base_setting, .command = command_setting} };
 }

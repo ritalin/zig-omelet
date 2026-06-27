@@ -5,6 +5,12 @@ const core = @import("core");
 const FilePath = core.types.FilePath;
 const FilterKind = core.types.FilterKind;
 
+const ArgScanner = core.settings.types.ArgScanner;
+const ArgParserPair = core.settings.types.ArgParserPair;
+
+const BaseSetting = @import("./BaseSetting.zig");
+
+const BaseSettingArgId = BaseSetting.ArgId(.{});
 const GenerateArgId = ArgId(.{});
 const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(GenerateArgId));
 
@@ -58,7 +64,7 @@ const PathFilter = struct {
     path: FilePath,
 };
 
-pub fn Builder(comptime ArgsIterator: type) type {
+pub fn Builder(comptime ArgIterator: type) type {
     return struct {
         allocator: std.mem.Allocator,
         log_style: core.Logger.LogStyle,
@@ -69,14 +75,22 @@ pub fn Builder(comptime ArgsIterator: type) type {
         output_dir_path: ?FilePath = null,
         watch: ?bool = null,
 
-        pub fn deinit(self: *Builder(ArgsIterator)) void {
+        pub fn deinit(self: *Builder(ArgIterator)) void {
             self.source_dir_set.deinit(self.allocator);
             self.schema_dir_set.deinit(self.allocator);
             self.filter_set.deinit(self.allocator);
         }
 
-        pub fn fromArgs(allocator: std.mem.Allocator, iter: *ArgsIterator, log_style: core.Logger.LogStyle) !Builder(ArgsIterator) {
-            var builder: Builder(ArgsIterator) = .{
+        pub fn fromArgs(
+            allocator: std.mem.Allocator, 
+            scanner: *ArgScanner(ArgIterator), 
+            base_builder: *BaseSetting.Builder(ArgIterator), 
+            log_style: core.Logger.LogStyle) !Builder(ArgIterator) 
+        {
+            var diag: clap.Diagnostic = .{}; 
+            var parsers = ArgParserPair(GenerateArgId, BaseSettingArgId, ArgIterator).init(scanner, &diag);
+
+            var builder: Builder(ArgIterator) = .{
                 .allocator = allocator,
                 .log_style = log_style,
                 .source_dir_set = .empty,
@@ -85,42 +99,66 @@ pub fn Builder(comptime ArgsIterator: type) type {
                 .filter_set_counts = std.enums.EnumArray(FilterKind, usize).initFill(0),
             };
 
-            var diag: clap.Diagnostic = .{};
-            var parser = clap.streaming.Clap(GenerateArgId, ArgsIterator){
-                .params = GenerateArgId.Decls,
-                .iter = iter,
-                .diagnostic = &diag,
-            };
+            // var diag: clap.Diagnostic = .{};
 
-            while (true) {
-                const next_arg = parser.next() catch |err| {
-                    try core.log_supports.reportClapError(&diag, err);
-                    return error.ShowCommandHelp;
+            // var parser = clap.streaming.Clap(GenerateArgId, ArgsIterator){
+            //     .params = GenerateArgId.Decls,
+            //     .iter = iter,
+            //     .diagnostic = &diag,
+            // };
+
+            while (scanner.scan()) {
+                const next_arg = parsers.next(scanner) catch |err| {
+                    if (log_style == .stderr) {
+                        try core.log_supports.reportClapError(&diag, err);
+                    }
+                    return err;
                 };
-                if (next_arg == null) {
-                    return builder;
-                }
-                const arg = next_arg.?;
+                if (next_arg == null) break;
 
-                switch (arg.param.id) {
-                    .source_dir_set => try builder.source_dir_set.append(allocator, arg.value),
-                    .schema_dir_set => try builder.schema_dir_set.append(allocator, arg.value),
-                    .include_filter_set => {
-                        if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .include , .path = v});
-                        builder.filter_set_counts.getPtr(.include).* += 1;
+                switch (next_arg.?) {
+                    .base => |arg| {
+                        try builder.handleArg(allocator, arg);
                     },
-                    .exclude_filter_set => {
-                        if (arg.value) |v| try builder.filter_set.append(allocator, .{.kind = .exclude , .path = v});
-                        builder.filter_set_counts.getPtr(.exclude).* += 1;
-                    },
-                    .output_dir_path => builder.output_dir_path = arg.value,
-                    .watch => builder.watch = true,
+                    .extra => |arg| {
+                        base_builder.handleArg(allocator, arg) catch return error.ShowCommandHelp;
+                    }
                 }
             }
+
+            return builder;
+        }
+
+        fn handleArg(self: *Builder(ArgIterator), allocator: std.mem.Allocator, arg: clap.streaming.Arg(GenerateArgId)) !void {
+            // while (true) {
+            //     const next_arg = parser.next() catch |err| {
+            //         try core.log_supports.reportClapError(&diag, err);
+            //         return error.ShowCommandHelp;
+            //     };
+            //     if (next_arg == null) {
+            //         return builder;
+            //     }
+            //     const arg = next_arg.?;
+
+                switch (arg.param.id) {
+                    .source_dir_set => try self.source_dir_set.append(allocator, arg.value),
+                    .schema_dir_set => try self.schema_dir_set.append(allocator, arg.value),
+                    .include_filter_set => {
+                        if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .include , .path = v});
+                        self.filter_set_counts.getPtr(.include).* += 1;
+                    },
+                    .exclude_filter_set => {
+                        if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .exclude , .path = v});
+                        self.filter_set_counts.getPtr(.exclude).* += 1;
+                    },
+                    .output_dir_path => self.output_dir_path = arg.value,
+                    .watch => self.watch = true,
+                }
+            // }
         }
 
         fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
-            var self: *Builder(ArgsIterator) = @ptrCast(@alignCast(ptr));
+            var self: *Builder(ArgIterator) = @ptrCast(@alignCast(ptr));
             var iter = defaults.iterator();
 
             while (iter.next()) |entry| {
@@ -167,13 +205,13 @@ pub fn Builder(comptime ArgsIterator: type) type {
             }
         }
 
-        pub fn build(self: *Builder(ArgsIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !Setting {
+        pub fn build(self: *Builder(ArgIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !Setting {
             if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
                 defer file.close(io);
 
                 const callback: Defaults.ApplyDefaultHandler = .{ 
                     .ptr = self, 
-                    .handler = Builder(ArgsIterator).applyDefaults 
+                    .handler = Builder(ArgIterator).applyDefaults 
                 };
                 try Defaults.loadFromFile(io, self.allocator, file, self.log_style, callback);
             }

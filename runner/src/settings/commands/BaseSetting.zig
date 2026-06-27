@@ -246,8 +246,9 @@ pub const tests = struct {
         try writeAssetFile(&tmp_dir, options, defaults_source);
 
         var iter: TetsArgsIterator = .{.args = args.items};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("inproc://req-rep", setting.endpoints.req_rep);
@@ -288,8 +289,9 @@ pub const tests = struct {
         try writeAssetFile(&tmp_dir, options, defaults_source);
 
         var iter: TetsArgsIterator = .{.args = &.{ "generate" }};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
@@ -340,8 +342,9 @@ pub const tests = struct {
         try writeAssetFile(&tmp_dir, options, defaults_source);
 
         var iter: TetsArgsIterator = .{.args = args.items};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         const setting: BaseSetting = try res.builder.build(io, options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);

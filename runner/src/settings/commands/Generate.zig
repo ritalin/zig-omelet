@@ -346,6 +346,7 @@ pub const tests = struct {
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         try args.appendSlice(allocator, &.{
+            "generate",
             "--source-dir", e1_path,
             "--source-dir", e2_path,
             "--schema-dir", e3_path,
@@ -368,8 +369,10 @@ pub const tests = struct {
         try writeAssetFile(&tmp_dir, options, defaults_source);
 
         var iter: TetsArgsIterator = .{.args = args.items};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
         defer builder.deinit();
 
         const setting: Setting = try builder.build(io, options);
@@ -435,9 +438,11 @@ pub const tests = struct {
 
         try writeAssetFile(&tmp_dir, options, buffer.written());
         
-        var iter: TetsArgsIterator = .{.args = &.{}};
+        var iter: TetsArgsIterator = .{.args = &.{"generate"}};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
         defer builder.deinit();
 
         const setting: Setting = try builder.build(io, options);
@@ -484,15 +489,16 @@ pub const tests = struct {
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         try args.appendSlice(allocator, &.{
-            "--source-dir", "/path/to/explicit-src-1",
-            "--source-dir", "/path/to/explicit-src-2",
-            "--schema-dir", "/path/to/explicit-schema-1",
-            "--schema-dir", "/path/to/explicit-schema-2",
+            "generate",
+            "--source-dir", d1_path,
+            "--source-dir", d2_path,
+            "--schema-dir", d3_path,
+            "--schema-dir", d4_path,
             "--include-filter=foo",
             "--include-filter=bar",
             "--exclude-filter=baz",
             "--exclude-filter=quax",
-            "--output-dir", "explicit-out",
+            "--output-dir", d5_path,
         });
 
         var buffer: std.Io.Writer.Allocating = .init(allocator);
@@ -505,7 +511,7 @@ pub const tests = struct {
             \\    .output_dir_path = .{{ .values = .{{ "{s}" }} }},
             \\    .watch = .{{ .enabled = true }},
             \\}}
-            , .{ d1_path, d2_path, d3_path, d4_path, "quax", "baz", "bar", "foo", d5_path }
+            , .{ "/path/to/default-src-1", "/path/to/default-src-2", "/path/to/default-schema-1", "/path/to/default-schema-2", "quax", "baz", "bar", "foo", "explicit-out" }
         );
         try buffer.writer.flush();
 
@@ -516,17 +522,19 @@ pub const tests = struct {
 
         try writeAssetFile(&tmp_dir, options, buffer.written());
         
-        var iter: TetsArgsIterator = .{.args = &.{}};
+        var iter: TetsArgsIterator = .{.args = args.items};
+        var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
-        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &iter, .discard);
+        var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
+        var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .stderr);
         defer builder.deinit();
 
         const setting: Setting = try builder.build(io, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
-        try std.testing.expectEqualDeep(&[_][]const u8{"quax", "baz"}, setting.include_filter_set);
-        try std.testing.expectEqualDeep(&[_][]const u8{"bar", "foo"}, setting.exclude_filter_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"foo", "bar"}, setting.include_filter_set);
+        try std.testing.expectEqualDeep(&[_][]const u8{"baz", "quax"}, setting.exclude_filter_set);
         try std.testing.expectEqualStrings(d5_path, setting.output_dir_path);
         try std.testing.expectEqual(true, setting.watch);
     }

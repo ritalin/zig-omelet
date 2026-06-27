@@ -8,15 +8,14 @@ const Generate = @import("./Generate.zig");
 const Initialize = @import("./Initialize.zig");
 
 const ArgHelp = @import("../../help/ArgHelp.zig");
-const SubcommandArgId = @This()._ArgId(.{});
 const SubcommandSetting = @This().Setting;
 
-pub const Setting = union(SubcommandArgId) {
+const SubcommandArgd = ArgId(.{});
+
+pub const Setting = union(SubcommandArgd) {
     generate: Generate,
     @"init-default": Initialize,
     @"init-config": Initialize,
-
-    pub const ArgId = _ArgId;
 
     pub const deinit = deinitSetting;
     pub const fromArgs = buildFromArgs;
@@ -31,17 +30,17 @@ fn deinitSetting(self: *Setting, allocator: std.mem.Allocator) void {
     }
 }
 
-fn activeTag(self: *const Setting) SubcommandArgId {
+fn activeTag(self: *const Setting) SubcommandArgd {
     return std.meta.activeTag(self.*);
 }
 
-fn _ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
+pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
     return enum {
         generate,
         @"init-default",
         @"init-config",
 
-        pub const Decls: []const clap.Param(SubcommandArgId) = &.{
+        pub const Decls: []const clap.Param(ArgId(descriptions)) = &.{
             .{.id = .generate, .takes_value = .none },
             .{.id = .@"init-default", .takes_value = .none},
             .{.id = .@"init-config", .takes_value = .none},
@@ -54,16 +53,16 @@ fn _ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
     };
 }
 
-fn enumFromString(s: ?core.types.Symbol) ?SubcommandArgId {
+fn enumFromString(s: ?core.types.Symbol) ?SubcommandArgd {
     if (s == null) return null;
-    return std.meta.stringToEnum(SubcommandArgId, s.?);
+    return std.meta.stringToEnum(SubcommandArgd, s.?);
 }
 
 pub fn buildFromArgs(
     io: std.Io,
     allocator: std.mem.Allocator,
     iter: *std.process.Args.Iterator, 
-    command: SubcommandArgId,
+    command: SubcommandArgd,
     scope: core.types.Symbol) core.settings.types.LoadResult(SubcommandSetting, *const ArgHelp.Config)
 {
     const command_setting: SubcommandSetting = command: {

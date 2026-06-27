@@ -37,6 +37,11 @@ pub const LogLevel = enum(u8) {
             .trace => .debug,
         };
     }
+
+    pub fn resolveLogLevel(s: ?Symbol) ?LogLevel {
+        if (s == null) return null;
+        return std.meta.stringToEnum(LogLevel, s.?);
+    }
 };
 pub const LogLevelSet = std.enums.EnumSet(LogLevel);
 

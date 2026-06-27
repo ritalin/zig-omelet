@@ -80,7 +80,7 @@ fn writeBaseArgs(
         const log_level: core.types.Symbol = @tagName(base_setting.log_level);
         const log_style: core.types.Symbol = if (base_setting.log_quiet) @tagName(LogStyleTag.discard) else @tagName(LogStyleTag.integrated);
 
-        const base_setting_args: ExtraArg(BaseSettingArgId) = .{
+        const base_setting_args: ExtraArg(GuestBaseArgId) = .{
             .log_level = .{.values = &.{ log_level }},
             .log_style = .{.values = &.{ log_style }},
             .no_color = .{.enabled = base_setting.no_color },
@@ -88,12 +88,12 @@ fn writeBaseArgs(
             .pub_sub = .{.values = &.{ base_setting.endpoints.pub_sub }},
             .push_pull = .{.values = &.{ base_setting.endpoints.push_pull }},
         };
-        try writeArgs(allocator, BaseSettingArgId, &base_setting_args, &.{}, args);
+        try writeArgs(allocator, GuestBaseArgId, &base_setting_args, &.{}, args);
         break:base_setting;
     }
 }
 
-const BaseSettingArgId = core.configs.guests.GuestBaseConfiig.ArgId(.{});
+const GuestBaseArgId = core.configs.guests.GuestBaseConfig.ArgId(.{});
 const GuestWatchArgId = core.configs.guests.GuestWatch.ArgId(.{});
 const GuestExtractArgId = core.configs.guests.GuestExtract.ArgId(.{});
 const GuestGenerateArgId = core.configs.guests.GuestGenerate.ArgId(.{});
@@ -147,11 +147,12 @@ fn writeArgs(
         }
         const value = @field(extra_set, f.name);
 
-        writeArgsInternal(allocator, decl.names.long, value, args)
+        const arg_name = decl.names.long.?;
+        writeArgsInternal(allocator, arg_name, value, args)
         catch |err| switch (err) {
             error.NeedDefaultValue => {
                 const default_value = @field(default_extra_args, f.name);
-                try writeArgsInternal(allocator, decl.names.long, default_value, args);
+                try writeArgsInternal(allocator, arg_name, default_value, args);
             },
             else => return err,
         };

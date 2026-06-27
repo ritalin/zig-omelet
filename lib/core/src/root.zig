@@ -29,8 +29,7 @@ pub const TaskReaper = @import("./supports/TaskReaper.zig");
 
 pub const settings = struct {
     pub const types = @import("./settings/types.zig");
-//     pub usingnamespace @import("./settings/help.zig");
-//     pub usingnamespace @import("./settings/supports.zig");
+    pub const supports = @import("./settings/support.zig");
 };
 pub const configs = struct {
     pub const types =  @import("./configs/types.zig");
@@ -39,12 +38,18 @@ pub const configs = struct {
     pub const Endpoint = @import("./default_config/endpoint_support.zig");
 };
 
+pub const help = struct {
+    pub const types = @import("./settings/help_renderer.zig").types;
+    pub const ArgHelpRenderer = @import("./settings/help_renderer.zig").ArgHelpRenderer;
+};
+
 pub const test_supports = @import("./supports/test_support.zig");
 pub const log_supports = @import("./supports/log_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(sockets);
+    std.testing.refAllDecls(settings);
 
     const run_catch2 = @import("test_runner").run_catch2;
     try std.testing.expectEqual(0, try run_catch2(std.testing.io, std.testing.allocator, .{}));

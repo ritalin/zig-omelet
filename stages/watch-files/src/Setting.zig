@@ -2,13 +2,21 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
-const DescriptionItem = core.settings.DescriptionItem;
-const log = core.Logger.SystemDirect(@import("build_options").app_context);
-const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
+const Symbol = core.types.Symbol;
+const FilePath = core.types.FilePath;
 
+const ArgScanner = core.settings.types.ArgScanner;
+const ArgParserPair = core.settings.types.ArgParserPair;
+
+const GuestBaseConfigArgId = core.configs.guests.GuestBaseConfig.ArgId(.{});
+const GuestWatchArgId = core.configs.guests.GuestWatch.ArgId(.{});
+
+const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
+
+const ArgHelp = @import("./help/ArgHelp.zig");
+const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 const Setting = @This();
 
-// arena: *std.heap.ArenaAllocator,
 log_level: core.events.LogLevel,
 log_style: core.Logger.LogStyle,
 no_color: bool,
@@ -17,7 +25,6 @@ sources: []const SourceDir,
 filter: PathMatcher,
 default_dialect: core.types.Symbol,
 watch: bool,
-// daemon_mode: bool,
 
 pub const SourceDir = struct {
     category: core.events.TopicCategory,
@@ -30,210 +37,218 @@ pub const FilterDir = struct {
     dir_path: core.types.FilePath, 
 };
 
-// pub fn loadFromArgs(allocator: std.mem.Allocator) !Setting {
-//     var arena = try allocator.create(std.heap.ArenaAllocator);
-//     arena.* = std.heap.ArenaAllocator.init(allocator);
-//     const managed_allocator = arena.allocator();
+pub fn loadFromArgs(allocator: std.mem.Allocator, args: std.process.Args) core.settings.types.LoadResult(Setting, *const ArgHelp.Config) {
+    var args_iter = try args.iterateAllocator(allocator);
+    defer args_iter.deinit();
 
-//     var args = try std.process.argsWithAllocator(allocator);
-//     defer args.deinit();
+    _ = args_iter.next();
     
-//     var builder = try loadInternal(managed_allocator, &args);
-//     defer builder.deinit();
+    var scanner: ArgScanner(std.process.Args.Iterator) = .init(&args_iter);
+    var builder = Builder(std.process.Args.Iterator).fromArgs(allocator, &scanner, .stderr) catch return .{ .help = &ArgHelp.toplevel };
+    defer builder.deinit(allocator);
+    const setting = builder.build(allocator) catch return .{ .help = &ArgHelp.toplevel };
 
-//     return builder.build(arena);
-// }
+    return .{ .success = setting };
+}
 
-// pub fn deinit(self: *Setting) void {
-//     self.arena.deinit();
-//     self.arena.child_allocator.destroy(self.arena);
-//     self.* = undefined;
-// }
+pub fn deinit(self: *Setting, allocator: std.mem.Allocator) void {
+    allocator.free(self.endpoints.req_rep);
+    allocator.free(self.endpoints.pub_sub);
+    allocator.free(self.endpoints.push_pull);
+    allocator.free(self.default_dialect);
 
-// pub fn help(writer: anytype) !void {
-//     try writer.print("usage: {s} [{?s}]\n\n", .{
-//         @import("build_options").exe_name, ArgId.options.category_name
-//     });
-//     try core.settings.showHelp(writer, ArgId);
-// }
+    self.filter.deinit();
 
-// const ArgDescriptions = core.settings.DescriptionMap.initComptime(.{
-//     .{@tagName(.request_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for zmq", .value = "CHANNEL"}},
-//     .{@tagName(.subscribe_channel), DescriptionItem{.desc = "Comminicate Pub/Sub endpoint for zmq", .value = "CHANNEL"}},
-//     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
-//     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL directores or files", .value = "PATH"}},
-//     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL directores or files", .value = "PATH"}},
-//     .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied", .value = "PATH"}},
-//     .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied", .value = "PATH"}},
-//     .{@tagName(.watch), DescriptionItem{.desc = "Enter to watch-mode", .value = ""}},
-// });
+    for (self.sources) |item| {
+        allocator.free(item.dir_path);
+    }
+    allocator.free(self.sources);
+}
 
-// const ArgId = enum {
-//     request_channel,
-//     subscribe_channel,
-//     log_level,
-//     source_dir,
-//     schema_dir,
-//     include_filter,
-//     exclude_filter,
-//     watch,
-//     standalone,
+fn Builder(comptime ArgIterator: type) type {
+    return struct {
+        builder_log_style: core.Logger.LogStyle,
+        reqrep_channel: ?Symbol,
+        pubsub_channel: ?Symbol,
+        pushpull_channel: ?Symbol,
+        log_level: ?Symbol,
+        log_style: ?Symbol,
+        no_color: bool,
+        sources: SourceList,
+        filters: FilterList,
+        default_dialect: ?Symbol,
+        watch: bool,
 
-//     pub const Decls: []const clap.Param(ArgId) = &.{
-//         .{.id = .request_channel, .names = .{.long = "request-channel"}, .takes_value = .one},
-//         .{.id = .subscribe_channel, .names = .{.long = "subscribe-channel"}, .takes_value = .one},
-//         .{.id = .log_level, .names = .{.long = "log-level"}, .takes_value = .one},
-//         .{.id = .source_dir, .names = .{.long = "source-dir"}, .takes_value = .many},
-//         .{.id = .schema_dir, .names = .{.long = "schema-dir"}, .takes_value = .many},
-//         .{.id = .include_filter, .names = .{.long = "include-filter"}, .takes_value = .many},
-//         .{.id = .exclude_filter, .names = .{.long = "exclude-filter"}, .takes_value = .many},
-//         .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
-//         .{.id = .standalone, .names = .{.long = "standalone"}, .takes_value = .none},
-//         // .{.id = ., .names = , .takes_value = },
-//     };
-//     pub usingnamespace core.settings.ArgHelp(@This(), ArgDescriptions);
-//     pub const options: core.settings.ArgHelpOption = .{.category_name = "Stage options"};
-// };
+        const SourceList = std.ArrayListUnmanaged(struct {category: core.events.TopicCategory, path: FilePath});
+        const FilterKind = enum {include, exclude};
+        const FilterList = std.ArrayListUnmanaged(struct {kind: PathMatcher.FilterKind, path: FilePath});
+        
+        pub fn fromArgs(allocator: std.mem.Allocator, scanner: *ArgScanner(ArgIterator), log_style: core.Logger.LogStyle) !Builder(ArgIterator) {
+            var diag: clap.Diagnostic = .{};
+            var parsers = ArgParserPair(GuestBaseConfigArgId, GuestWatchArgId, ArgIterator).init(scanner, &diag);
 
-// fn loadInternal(allocator: std.mem.Allocator, args_iter: *std.process.ArgIterator) !Builder {
-//     _ = args_iter.next();
+            var builder: Builder(ArgIterator) = .{
+                .builder_log_style = log_style,
+                .reqrep_channel = null,
+                .pubsub_channel = null,
+                .pushpull_channel = null,
+                .log_level = null,
+                .log_style = null,
+                .no_color = false,
+                .sources = .empty,
+                .filters = .empty,
+                .default_dialect = null,
+                .watch = false,
+            };
 
-//     var diag = clap.Diagnostic{};
-//     var parser = clap.streaming.Clap(ArgId, std.process.ArgIterator){
-//         .params = ArgId.Decls,
-//         .iter = args_iter,
-//         .diagnostic = &diag,
-//     };
+            while (scanner.scan()) {
+                const next_arg = parsers.next(scanner) catch |err| {
+                    if (log_style == .stderr) {
+                        try core.log_supports.reportClapError(&diag, err);
+                    }
+                    return err;
+                };
+                if (next_arg == null) break;
+                
+                switch (next_arg.?) {
+                    .base => |arg| {
+                        builder.handleBaseArg(arg);
+                    },
+                    .extra => |arg| {
+                        try builder.handleExtraArg(allocator, arg);
+                    }
+                }
+            }
 
-//     var builder = Builder.init(allocator);
+            return builder;
+        }
 
-//     while (true) {
-//         const arg_ = parser.next() catch |err| {
-//             try diag.report(std.io.getStdErr().writer(), err);
-//             return err;
-//         };
-//         const arg = arg_ orelse break;
+        pub fn deinit(self: *Builder(ArgIterator), allocator: std.mem.Allocator) void {
+            self.sources.deinit(allocator);
+            self.filters.deinit(allocator);
+        }
 
-//         switch (arg.param.id) {
-//             .request_channel => builder.request_channel = arg.value,
-//             .subscribe_channel => builder.subscribe_channel = arg.value,
-//             .log_level => builder.log_level = arg.value,
-//             .source_dir => {
-//                 if (arg.value) |v| try builder.addSourceDir(.source, v);
-//             },
-//             .schema_dir => {
-//                 if (arg.value) |v| try builder.addSourceDir(.schema, v);
-//             },
-//             .include_filter => {
-//                 if (arg.value) |v| try builder.addFilterDir(.include, v);
-//             },
-//             .exclude_filter => {
-//                 if (arg.value) |v| try builder.addFilterDir(.exclude, v);
-//             },
-//             .watch => builder.watch = true,
-//             .standalone => builder.standalone = true,
-//         }
-//     }
+        fn handleBaseArg(self: *Builder(ArgIterator), arg: clap.streaming.Arg(GuestBaseConfigArgId)) void {
+            switch (arg.param.id) {
+                .req_rep => self.reqrep_channel = arg.value,
+                .pub_sub => self.pubsub_channel = arg.value,
+                .push_pull => self.pushpull_channel = arg.value,
+                .log_level => self.log_level = arg.value,
+                .log_style => self.log_style = arg.value,
+                .no_color => self.no_color = true,
+            }
+        }
 
-//     return builder;
-// }
+        fn handleExtraArg(self: *Builder(ArgIterator), allocator: std.mem.Allocator, arg: clap.streaming.Arg(GuestWatchArgId)) !void {
+            switch (arg.param.id) {
+                .source_dir_set => {
+                    if (arg.value) |v| try self.addSourceDir(allocator, .source, v);
+                },
+                .schema_dir_set => {
+                    if (arg.value) |v| try self.addSourceDir(allocator, .schema, v);
+                },
+                .include_filter_set => {
+                    if (arg.value) |v| try self.addFilterDir(allocator, .include, v);
+                },
+                .exclude_filter_set => {
+                    if (arg.value) |v| try self.addFilterDir(allocator, .exclude, v);
+                },
+                .watch => self.watch = true,
+            }
+        }
 
-// const Builder = struct {
-//     request_channel: ?core.Symbol,
-//     subscribe_channel: ?core.Symbol,
-//     log_level: ?core.Symbol,
-//     sources: SourceList,
-//     filters: FilterList,
-//     watch: bool,
-//     standalone: bool,
+        pub fn addSourceDir(self: *Builder(ArgIterator), allocator: std.mem.Allocator, category: core.events.TopicCategory, path: FilePath) !void {
+            return self.sources.append(allocator, .{.category = category, .path = path});
+        }
 
-//     const SourceList = std.ArrayList(struct {category: core.TopicCategory, path: core.FilePath});    const FilterKind = enum {include, exclude};
-//     const FilterList = std.ArrayList(struct {kind: PathMatcher.FilterKind, path: core.FilePath});
-    
-//     pub fn init(allocator: std.mem.Allocator) Builder {
-//         return .{
-//             .request_channel = null,
-//             .subscribe_channel = null,
-//             .log_level = null,
-//             .sources = SourceList.init(allocator),
-//             .filters = FilterList.init(allocator),
-//             .watch = false,
-//             .standalone = false,
-//         };
-//     }
+        pub fn addFilterDir(self: *Builder(ArgIterator), allocator: std.mem.Allocator, kind: PathMatcher.FilterKind, path: FilePath) !void {
+            return self.filters.append(allocator, .{.kind = kind, .path = path});
+        }
 
-//     pub fn deinit(self: *Builder) void {
-//         self.sources.deinit();
-//         self.filters.deinit();
-//     }
+        pub fn build (self: Builder(ArgIterator), allocator: std.mem.Allocator) !Setting {
+            var has_err = false;
 
-//     pub fn addSourceDir(self: *Builder, category: core.TopicCategory, path: core.FilePath) !void {
-//         return self.sources.append(.{.category = category, .path = path});
-//     }
+            if (self.reqrep_channel == null) {
+                has_err = true;
+                if (self.builder_log_style == .stderr) {
+                    std.log.warn("Need to specify a `request-channel` arg.", .{});
+                }
+            }
+            if (self.pubsub_channel == null) {
+                has_err = true;
+                if (self.builder_log_style == .stderr) {
+                    std.log.warn("Need to specify a `subscribe-channel` arg.", .{});
+                }
+            }
+            if (self.pushpull_channel == null) {
+                has_err = true;
+                if (self.builder_log_style == .stderr) {
+                    std.log.warn("Need to specify a `push-channel` arg.", .{});
+                }
+            }
 
-//     pub fn addFilterDir(self: *Builder, kind: PathMatcher.FilterKind, path: core.FilePath) !void {
-//         return self.filters.append(.{.kind = kind, .path = path});
-//     }
+            const log_level = core.events.LogLevel.resolveLogLevel(self.log_level) orelse log_level: {
+                has_err = true;
+                if (self.builder_log_style == .stderr) {
+                    std.log.warn("Unresolved log level: {?s}", .{self.log_level});
+                }
+                break:log_level null;
+            };
 
-//     pub fn build (self: Builder, arena: *std.heap.ArenaAllocator) !Setting {
-//         const allocator = arena.allocator();
+            const log_style = core.settings.supports.resolveGuestLogStyle(self.log_style) orelse log_style: {
+                has_err = true;
+                if (self.builder_log_style == .stderr) {
+                    std.log.warn("Unresolved log style: {?s}", .{self.log_style});
+                }                
+                break:log_style null;
+            };
 
-//         if (self.request_channel == null) {
-//             log.warn("Need to specify a `request-channel` arg.\n\n", .{});
-//             return error.SettingLoadFailed;
-//         }
-//         if (self.subscribe_channel == null) {
-//             log.warn("Need to specify a `subscribe-channel` arg.\n\n", .{});
-//             return error.SettingLoadFailed;
-//         }
-//         if (self.sources.items.len == 0) {
-//             log.warn("Need to specify at least one `source-dir` arg(s).\n\n", .{});
-//             return error.SettingLoadFailed;
-//         }
+            const default_dialect = try allocator.dupe(u8, self.default_dialect orelse "duckdb");
 
-//         const log_level = core.settings.resolveLogLevel(self.log_level) catch |err| {
-//             log.warn("Unresolved log level: {?s}", .{self.log_level});
-//             return err;
-//         };
+            var sources: std.ArrayListUnmanaged(SourceDir) = .empty;
+            defer sources.deinit(allocator);
 
-//         var sources = std.ArrayList(SourceDir).init(allocator);
-//         defer sources.deinit();
+            if (self.sources.items.len == 0) {
+                has_err = true;
+                std.log.warn("Need to specify at least one `source-dir` arg(s).", .{});
+            }
+            else {
+                for (self.sources.items) |item| {
+                try sources.append(allocator, .{
+                    .category = item.category,
+                    .dir_path = try allocator.dupe(u8, item.path),
+                });
+                }
+            }
 
-//         for (self.sources.items) |item| {
-//             const path_abs = std.fs.cwd().realpathAlloc(allocator, item.path) catch {
-//                 log.warn("can not resolve `{s}-dir` arg ({s}).\n\n", .{@tagName(item.category), item.path});
-//                 return error.SettingLoadFailed;
-//             };
+            var filter_builder: PathMatcher.Builder = .init;
+            defer filter_builder.deinit(allocator);
 
-//             try sources.append(.{
-//                 .category = item.category,
-//                 .dir_path = path_abs,
-//             });
-//         }
+            for (self.filters.items) |filter| {
+                const filter_u = try toUnicodeString(allocator, filter.path);
+                defer allocator.free(filter_u);
 
-//         var filter_builder = PathMatcher.Builder.init(allocator);
-//         defer filter_builder.deinit();
+                try filter_builder.addFilterDir(allocator, filter.kind, filter_u);
+            }
 
-//         for (self.filters.items) |filter| {
-//             const filter_u = try toUnicodeString(allocator, filter.path);
-//             defer allocator.free(filter_u);
+            if (has_err) {
+                return error.SettingLoadFailed;
+            }
 
-//             try filter_builder.addFilterDir(filter.kind, filter_u);
-//         }
-
-//         return .{
-//             .arena = arena,
-//             .endpoints = .{
-//                 .req_rep = try allocator.dupe(u8, self.request_channel.?),
-//                 .pub_sub = try allocator.dupe(u8, self.subscribe_channel.?),
-//             },
-//             .log_level = log_level,
-//             .sources = try sources.toOwnedSlice(),
-//             .filter = try filter_builder.build(),
-//             .watch = self.watch,
-//             .standalone = self.standalone,
-//         };
-//     }
-// };
-
-// pub const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
+            return .{
+                .endpoints = .{
+                    .req_rep = try allocator.dupe(u8, self.reqrep_channel.?),
+                    .pub_sub = try allocator.dupe(u8, self.pubsub_channel.?),
+                    .push_pull = try allocator.dupe(u8, self.pushpull_channel.?),
+                },
+                .log_level = log_level.?,
+                .log_style = log_style.?,
+                .no_color = self.no_color,
+                .sources = try sources.toOwnedSlice(allocator),
+                .filter = try filter_builder.build(allocator),
+                .default_dialect = default_dialect,
+                .watch = self.watch,
+            };
+        }
+    };
+}

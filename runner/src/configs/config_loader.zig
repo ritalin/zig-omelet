@@ -13,7 +13,7 @@ const Defaults = default_args.Defaults;
 const DufaultArg = default_args.DufaultArg;
 
 const HostGenerateArg = @import("../settings/commands/Generate.zig");
-const SubcommandArgId = @import("../settings/commands/Subcommand.zig").Setting.ArgId(.{});
+const SubcommandArgId = @import("../settings/commands/Subcommand.zig").ArgId(.{});
 
 pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator, command: SubcommandArgId, scope: Symbol) !std.MultiArrayList(config_types.Guest) {
     const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .configs, .root = config_types.path_candidates };

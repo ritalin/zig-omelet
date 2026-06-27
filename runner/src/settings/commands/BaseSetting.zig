@@ -56,7 +56,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
 const BaseArgId = ArgId(.{});
 
 const Subcommand = @import("./Subcommand.zig");
-const SubcommandArgid = Subcommand.Setting.ArgId(.{});
+const SubcommandArgId = Subcommand.ArgId(.{});
 
 pub fn Builder(comptime ArgIterator: type) type {
     return struct {
@@ -70,7 +70,7 @@ pub fn Builder(comptime ArgIterator: type) type {
         push_pull_channel: ?core.types.Symbol,
         scope: core.types.Symbol,
 
-        pub fn fromArgs(allocator: std.mem.Allocator, iter: *ArgIterator, log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgid } {
+        pub fn fromArgs(allocator: std.mem.Allocator, iter: *ArgIterator, log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgId } {
             const params = BaseArgId.Decls;
             var diag: clap.Diagnostic = .{}; 
 
@@ -95,7 +95,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             while (true) {
                 const next_arg = parser.next() catch |err| switch (err) {
                     error.InvalidArgument => {
-                        const command = SubcommandArgid.fromString(diag.arg) orelse {
+                        const command = SubcommandArgId.fromString(diag.arg) orelse {
                             if (builder.log_style == .stderr) {
                                 std.log.err("Invalid subcommand/arg: {s}", .{diag.arg});
                             }

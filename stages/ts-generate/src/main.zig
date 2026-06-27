@@ -4,6 +4,8 @@ const core = @import("core");
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
+const renderHelp = @import("./help/rendering.zig").render;
+
 pub const std_options: std.Options = .{
     .log_scope_levels = &.{
         core.Logger.AppLevel,
@@ -15,23 +17,14 @@ pub const std_options: std.Options = .{
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    // TODO:
-    const setting: Setting = .{
-        .log_level = .trace,
-        // .log_style = .stderr,
-        .log_style = .{.integrated = .batch},
-        .no_color = false,
-        .endpoints = .{
-            .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
-            .pub_sub = "ipc:///tmp/omelet/default/pub_sub.sock",
-            .push_pull = "ipc:///tmp/omelet/default/push_pull.sock",
+    var setting = switch(Setting.loadFromArgs(allocator, init.minimal.args)) {
+        .help => |help| {
+            try renderHelp(help);
+            std.process.exit(1);
         },
+        .success => |setting| setting,
     };
-    // var setting = Setting.loadFromArgs(allocator) catch {
-    //     try Setting.help(std.io.getStdErr().writer());
-    //     std.process.exit(1);
-    // };
-    // defer setting.deinit();
+    defer setting.deinit(allocator);
 
     core.Logger.filterWith(setting.log_level);
 

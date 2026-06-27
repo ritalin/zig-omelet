@@ -1,109 +1,84 @@
 const std = @import("std");
 const clap = @import("clap");
+const core = @import("core");
 
 const ArgHelp = @import("./ArgHelp.zig");
+const HelpRenderer = core.help.ArgHelpRenderer(ArgHelp.Config.Tag);
 
 pub fn renderToStderr(help: *const ArgHelp.Config) !void {
-    var buffer: [1024]u8 = undefined;
-    const t = std.debug.lockStderr(&buffer).terminal();
-    defer std.debug.unlockStderr();
-    
-    try renderHelp(t.writer, help);
+    const renderer = HelpRenderer.init(onRenderHelp);
+    try renderer.renderToStderr(help);
 }
 
-fn renderHelp(writer: *std.Io.Writer, help: *const ArgHelp.Config) !void {
-    // render app title
-    try renderDescriptor(writer, ArgHelp.resolveDescriptor(help.tag), .{.spacing_between_parameters = 1});
-    // render general args
-    try renderArgs(writer, ArgHelp.general_arg_desc, &ArgHelp.toplevel);
-
-    // render sections
-    for (help.sections) |section| {
-        try writer.writeByte('\n');
-        switch (section.tag) {
-            .subcommands => {
-                try renderSubcommands(writer, ArgHelp.senction_descriptors.subcommands, &section);
-            },
-            .args => {
-                try renderArgs(writer, ArgHelp.command_arg_desc, help);
-            },
-            else => {
-                unreachable;
-            }
-        }
+fn onRenderHelp(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config, session_setting: *const ArgHelp.Config, depth: usize) !void {
+    switch (session_setting.tag) {
+        .title => {
+            try renderTitle(writer, parent_settng);
+        },
+        .base_args => {
+            try renderArgs(writer, &ArgHelp.toplevel, depth);
+        },
+        .extra_args => {
+            try renderArgs(writer, parent_settng, depth);
+        },
+        .subcommands => {
+            try renderSubcommandList(writer, ArgHelp.SubcommandArgId, depth);
+        },
+        else => unreachable,
     }
-
-    try writer.flush();
 }
 
-fn renderArgs(writer: *std.Io.Writer, desc: ArgHelp.Descriptor, config: *const ArgHelp.Config) !void {
-    try renderDescriptor(writer, desc, .{ .indent = 0 });
-
-    switch (config.tag) {
+fn renderTitle(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config) !void {
+    switch (parent_settng.tag) {
         .toplevel => {
-            try renderArgsInternal(writer, ArgHelp.BaseSettingArgId);
+            try HelpRenderer.Support.renderTitle(writer, ArgHelp.toplevel_title_desc);
         },
         .generate => {
-            try renderArgsInternal(writer, ArgHelp.GenerateCommandArgId);
+            try HelpRenderer.Support.renderTitle(writer, ArgHelp.generate_cmd_desc);
         },
-        else => {
-            unreachable;
-        }
+        else => unreachable,
+    }
+}
+fn renderArgs(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config, depth: usize) !void {
+    switch (parent_settng.tag) {
+        .toplevel => {
+            try HelpRenderer.Support.renderDescriptor(writer, ArgHelp.base_args_desc, .{ .name_after_colon = true });
+            try HelpRenderer.Support.renderArgs(writer, ArgHelp.BaseSettingArgId, depth);
+        },
+        .generate => {
+            try HelpRenderer.Support.renderDescriptor(writer, ArgHelp.command_args_desc, .{ .name_after_colon = true });
+            try HelpRenderer.Support.renderArgs(writer, ArgHelp.GenerateCommandArgId, depth);
+        },
+        else => unreachable,
     }
 }
 
-fn renderDescriptor(writer: *std.Io.Writer, desc: ?ArgHelp.Descriptor, options: HelpOptions) !void {
-    if (desc == null) return;
-    if (options.indent) |indent| {
-        try writer.splatByteAll(' ', indent);
-    }
-    if (options.name_width) |w| {
-        try writer.print("{s:<[w]}", .{.@"0" = desc.?.name, .w = w});
-    }
-    else {
-        try writer.writeAll(desc.?.name);
-    }
-    try writer.splatByteAll(' ', options.description_indent);
-    if (desc.?.description) |d| {
-        try writer.writeAll(d);
-    }
-    try writer.splatByteAll('\n', options.spacing_between_parameters + 1);
-}
 
-fn renderArgsInternal(writer: *std.Io.Writer, comptime ArgId: type) !void {
-    try clap.help(writer, ArgId, ArgId.Decls, .{.description_on_new_line = false, .spacing_between_parameters = 0, .description_indent = 0, .indent = 4});
-}
 
-fn renderSubcommands(writer: *std.Io.Writer, desc: ?ArgHelp.Descriptor, config: *const ArgHelp.Config) !void {
+fn renderSubcommandList(writer: *std.Io.Writer, comptime ArgId: type, depth: usize) !void {
     // render capton
-    try renderDescriptor(writer, desc, .{ .indent = 0 });
+    try HelpRenderer.Support.renderDescriptor(writer, ArgHelp.command_list_desc, .{ .name_after_colon = true });
 
-    const width = try measureNameWidth(config.sections);
+    const width = try measureNameWidth(ArgId);
 
     // render subcommands
-    for (config.sections) |section| {
-        try renderDescriptor(writer, ArgHelp.resolveDescriptor(section.tag), .{.description_indent = 4, .name_width = width, .indent = 4});
+    inline for (ArgId.Decls) |decl| {
+        const desc: ArgHelp.Descriptor = .{
+            .name = @tagName(decl.id),
+            .description = decl.id.description(),
+        };
+        try HelpRenderer.Support.renderDescriptor(writer, desc, .{.description_indent = 4, .name_width = width, .indent = 4 * depth});
     }
 }
 
-fn measureNameWidth(sections: []const ArgHelp.Config) !usize {
+fn measureNameWidth(comptime ArgId: type) !usize {
     var width: usize = 0;
 
-    for (sections) |section| {
-        const desc = ArgHelp.resolveDescriptor(section.tag);
-        if (desc) |d| {
-            var discarding: std.Io.Writer.Discarding = .init(&.{});
-            var cc: clap.ccw.CodepointCountingWriter = .init(&discarding.writer);
-            try cc.interface.writeAll(d.name);
-            width = @max(width, cc.codepoints_written);
-        }
+    for (std.meta.fieldNames(ArgId)) |name| {
+        var discarding: std.Io.Writer.Discarding = .init(&.{});
+        var cc: clap.ccw.CodepointCountingWriter = .init(&discarding.writer);
+        try cc.interface.writeAll(name);
+        width = @max(width, cc.codepoints_written);
     }
     return width;
 }
-
-const HelpOptions = struct {
-    spacing_between_parameters: usize = 0,
-    description_indent: usize = 1,
-    name_width: ?usize = null,
-    indent: ?usize = null,
-};

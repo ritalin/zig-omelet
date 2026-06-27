@@ -27,3 +27,10 @@ pub fn ArgHelp(comptime Id: type, comptime _description: DescriptionMap) type {
         }
     };
 }
+
+pub const ArgScanner = @import("./args_parser.zig").ArgScanner;
+pub const ArgParserPair = @import("./args_parser.zig").ArgParserPair;
+
+test "setting test" {
+    std.testing.refAllDecls(@This());
+}

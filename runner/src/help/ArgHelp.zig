@@ -1,24 +1,10 @@
 const std = @import("std");
-const clap = @import("clap");
 const core = @import("core");
 
 const DescriptionItem = core.settings.types.DescriptionItem;
 
 // TODO:
 const ArgDescriptions = core.settings.types.DescriptionMap.initComptime(.{
-//     // General
-//     // Commands
-//     .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
-//     .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
-//     .{@tagName(.@"init-config"), DescriptionItem{.desc = "Initialize subcommand configuration environment", .value = "",}},
-//     .{log_style: "Set log output style (integrated / stderr / discard). Default: stderr."},
-//     // Command/Generate
-//     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
-//     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
-//     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
-//     .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
-//     .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
-//     // Command/init-default
 //     .{@tagName(.subcommand), DescriptionItem{.desc = "Subcommand name", .value = "COMMAND", .required = true}},
 //     .{@tagName(.new_scope), DescriptionItem{.desc = "init environment scope (default: default)", .value = "VALUE", .required = false}},
 //     .{@tagName(.from_scope), DescriptionItem{.desc = "source environment scope (optional)", .value = "VALUE", .required = false}},
@@ -39,7 +25,7 @@ const BaseSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
 pub const BaseSettingArgId = BaseSetting.ArgId(BaseSettingDescMap);
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
-const GenerateCommandDescmap: core.settings.types.DescriptionMap = .initComptime(.{
+const GenerateCommandDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.source_dir), DescriptionItem{.desc = "Source SQL folder(s) or file(s)", .value = "PATH", .required = true}},
     .{@tagName(.output_dir), DescriptionItem{.desc = "Output folder", .value = "PATH", .required = true}},  
     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
@@ -47,117 +33,75 @@ const GenerateCommandDescmap: core.settings.types.DescriptionMap = .initComptime
     .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
     .{@tagName(.watch), DescriptionItem{.desc = "Launch as interactive mode", .value = ""}},
 });
-pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescmap);
+pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescMap);
 
 // const InitializeSetting = @import("./commands/Initialize.zig");
 // const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
 
 const SubcommandSetting = @import("../settings/commands/Subcommand.zig");
-pub const SubcommandArgId = SubcommandSetting.ArgId(.{
-    .{@tagName(.generate), DescriptionItem{.desc = "Generate query parameters/result-sets", .value = "",}},
-    .{@tagName(.@"init-default"), DescriptionItem{.desc = "Initialize subcommand default value environment", .value = "",}},
-    .{@tagName(.@"init-config"), DescriptionItem{.desc = "Initialize subcommand configuration environment", .value = "",}}, 
+const SubcommandDescMap: core.settings.types.DescriptionMap = .initComptime(.{
+    .{@tagName(.generate), DescriptionItem{.desc = generate_cmd_desc.description.?, .value = "",}},
+    .{init_config_cmd_desc.name, DescriptionItem{.desc = init_config_cmd_desc.description.?, .value = "",}},
+    .{init_default_cmd_desc.name, DescriptionItem{.desc = init_default_cmd_desc.description.?, .value = "",}}, 
 });
-// const SubcommandHelp = struct {
-//     pub usingnamespace core.settings.ArgHelp(core.SubcommandArgId, ArgDescriptions);
-//     pub const options: core.settings.ArgHelpOption = .{.category_name = "Subcommands"};
-// };
+pub const SubcommandArgId = SubcommandSetting.ArgId(SubcommandDescMap);
 
 const ArgHelp = @This();
 
-pub const Config = struct {
-    tag: ArgHelp.Config.Tag,
-    sections: []const ArgHelp.Config,
-
-    const Self = @This();
-
-    pub const Tag = enum {
-        toplevel,
-        args,
-        subcommands,
-        generate,
-        init_config,
-        init_default,
-    };
+pub const ConfigTag = enum {
+    toplevel,
+    title,
+    base_args,
+    extra_args,
+    subcommands,
+    generate,
+    init_config,
+    init_default,
 };
 
-pub const Descriptor = struct {
-    name: []const u8,
-    description: ?[]const u8 = null,
+pub const Config = core.help.types.HelpConfig(ConfigTag);
+pub const Descriptor = core.help.types.Descriptor;
+
+pub const toplevel_title_desc: Descriptor = .{ 
+    .name = @import("build_options").exe_name, 
+    .description = "Language binding declaration generator from SQL." 
+};
+pub const base_args_desc: Descriptor = .{
+    .name = "Base Args",
+};
+pub const command_args_desc: Descriptor = .{
+    .name = "Command Args",
+};
+pub const command_list_desc: Descriptor = .{ 
+    .name = "Subcommands"
 };
 
-pub const DescriptorMap = std.enums.EnumFieldStruct(ArgHelp.Config.Tag, ?ArgHelp.Descriptor, null);
+//
+// Command descriptors
+//
 
-pub const senction_descriptors: DescriptorMap = .{
-    .toplevel = .{ 
-        .name = "omelet:", 
-        .description = "Language binding declaration generator from SQL." 
-    },
-    .subcommands = .{ 
-        .name = "Subcommands:" 
-    },
-    .generate = .{ 
-        .name = "generate", 
-        .description = "Generate language data binding." 
-    },
-    .init_config = .{ 
-        .name = "init-config", 
-        .description = "Initialize new guest component configuration." 
-    },
-    .init_default = .{
-        .name = "init-default",
-        .description = "Initialize new default settings."
-    },
-    .args = null,
+// const SubcommandDescArgId = SubcommandSetting.Setting.ArgId(.{});
+
+pub const generate_cmd_desc: Descriptor = .{ 
+    .name = @tagName(.generate), 
+    .description = "Generate query parameters/result-sets."
+};
+pub const init_config_cmd_desc: Descriptor = .{ 
+    .name = @tagName(.@"init-config"), 
+    .description = "Initialize new guest component configuration." 
+};
+pub const init_default_cmd_desc: Descriptor = .{
+    .name = @tagName(.@"init-default"),
+    .description = "Initialize new default settings."
 };
 
-pub const general_arg_desc: ArgHelp.Descriptor = .{
-    .name = "Base Args:",
-};
-pub const command_arg_desc: ArgHelp.Descriptor = .{
-    .name = "Command Args:",
-};
+pub const title: ArgHelp.Config = .{ .tag = .title, .sections = &.{} };
+pub const base_args: ArgHelp.Config = .{ .tag = .base_args, .sections = &.{} };
+pub const extra_args: ArgHelp.Config = .{ .tag = .extra_args, .sections = &.{} };
+pub const subcommands: ArgHelp.Config = .{ .tag = .subcommands, .sections = &.{} };
 
-pub fn resolveDescriptor(tag: ArgHelp.Config.Tag) ?ArgHelp.Descriptor {
-    inline for (std.meta.fields(ArgHelp.Config.Tag)) |f| {
-        if (f.value == @intFromEnum(tag)) {
-            return @field(senction_descriptors, f.name);
-        }
-    }
-    unreachable;
-}
-
-
-//     pub fn help(self: ArgHelpSetting, writer: anytype) !void {
-//         try writer.print("usage: {s} [General options] {s} [Subcommand options]\n\n", .{
-//             @import("build_options").exe_name, 
-//             if (self.command) |c| @tagName(c) 
-//             else SubcommandHelp.options.category_name.?
-//         });
-
-//         for (self.tags) |tag| {
-//             switch (tag) {
-//                 .general => {
-//                     try core.settings.showHelp(writer, GeneralSettingArgId);
-//                 },
-//                 .cmd_general => {
-//                     try core.settings.showHelp(writer, CommandGeneralArgId);
-//                 },
-//                 .subcommand => {
-//                     try core.settings.showSubcommandAll(writer, core.SubcommandArgId, SubcommandHelp);
-//                 },
-//                 .cmd_generate => {
-//                     try core.settings.showHelp(writer, GenerateCommandArgId);
-//                 },
-//                 .cmd_init_default, .cmd_init_config => {
-//                     try core.settings.showHelp(writer, InitializeCommandArgId);
-//                 },
-//             }
-//         }
-//     }
-pub const toplevel: ArgHelp.Config = .{ .tag = .toplevel, .sections = &.{ subcommands } };
-pub const args: ArgHelp.Config = .{ .tag = .args, .sections = &.{} };
-pub const subcommands: ArgHelp.Config = .{ .tag = .subcommands, .sections = &.{generate, init_config, } };
-pub const generate: ArgHelp.Config = .{ .tag = .generate, .sections = &.{args} };
-pub const init_config: ArgHelp.Config = .{ .tag = .init_config, .sections = &.{args} };
+pub const toplevel: ArgHelp.Config = .{ .tag = .toplevel, .sections = &.{ title, base_args, subcommands } };
+pub const generate: ArgHelp.Config = .{ .tag = .generate, .sections = &.{ title, base_args, extra_args, } };
+pub const init_config: ArgHelp.Config = .{ .tag = .init_config, .sections = &.{ title, base_args, extra_args} };
+pub const init_default: ArgHelp.Config = .{ .tag = .init_default, .sections = &.{ title, base_args, extra_args} };
 

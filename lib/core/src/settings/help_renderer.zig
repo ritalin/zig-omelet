@@ -86,7 +86,7 @@ pub fn ArgHelpRenderer(comptime Tag: type) type {
                 if (desc.?.description) |d| {
                     try writer.writeAll(d);
                 }
-                try writer.splatByteAll('\n', options.spacing_between_parameters + 1);
+                try writer.splatByteAll('\n', options.spacing_between_parameters);
             }
 
             pub fn renderArgs(writer: *std.Io.Writer, comptime ArgId: type, depth: usize) !void {
@@ -98,7 +98,7 @@ pub fn ArgHelpRenderer(comptime Tag: type) type {
 }
 
 pub const HelpDecorateOptions = struct {
-    spacing_between_parameters: usize = 0,
+    spacing_between_parameters: usize = 1,
     description_indent: usize = 1,
     name_width: ?usize = null,
     indent: ?usize = null,

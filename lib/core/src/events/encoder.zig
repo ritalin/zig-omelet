@@ -122,5 +122,8 @@ fn encodePayload(writer: *CborStream.Writer, event: Event) !void {
             _ = try writer.writeTuple(StructView(Event.Payload.Log), payload.values());
         },
         .pending_fatal_quit => {},
+        .worker_response => |payload| {
+            _ = try writer.writeString(payload);
+        },
     }
 }

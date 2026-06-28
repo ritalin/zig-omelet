@@ -70,6 +70,7 @@ pub const EventHeader = union(EventType) {
     log,
     report_fatal,
     pending_fatal_quit,
+    worker_response,
 
     pub const fromEvent = headerFromEvent;
     pub const tag = headerTag;

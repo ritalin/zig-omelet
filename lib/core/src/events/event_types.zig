@@ -101,6 +101,7 @@ pub const EventType = enum (u8) {
     log,
     report_fatal,
     pending_fatal_quit,
+    worker_response,
 };
 
 pub const EventHeader = @import("./event_impl.zig").EventHeader;
@@ -364,6 +365,7 @@ pub const Event = union(EventType) {
     log: Payload.Log,
     report_fatal: Payload.Log,
     pending_fatal_quit: void,
+    worker_response: Symbol,
 
     pub const Payload = EventPayload;
     pub const deinit = deinitEvent;
@@ -402,6 +404,7 @@ fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
         .log => |*data| data.deinit(),
         .report_fatal => |*data| data.deinit(),
         .pending_fatal_quit => {},
+        .worker_response => {},
     }
 }
 

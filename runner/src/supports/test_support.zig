@@ -65,6 +65,7 @@ pub const TestStage = struct {
                     .log_level = .debug,
                     .log_quiet = false,
                     .no_color = false,
+                    .interactive = false,
                     .endpoints = ep,
                     .ipc_config = .default,
                     .scope = "default",

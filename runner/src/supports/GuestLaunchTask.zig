@@ -31,7 +31,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, guest_configs: *const st
             defer args.deinit(managed_allocator);
 
             try writeBaseArgs(managed_allocator, path, &setting.base, &args);
-            try stitchGuestArgs(managed_allocator, kind, &extra, &setting.command, &args);
+            try stitchGuestArgs(managed_allocator, kind, setting.base.interactive, &extra, &setting.command, &args);
 
             processes[i] = try std.process.spawn(io, .{ .argv = args.items });
         }
@@ -101,6 +101,7 @@ const GuestGenerateArgId = core.configs.guests.GuestGenerate.ArgId(.{});
 fn stitchGuestArgs(
     allocator: std.mem.Allocator,
     kind: core.configs.types.StageKind, 
+    is_interactive: bool,
     extra_set: *const Config.Guest.ExtraArgSet,
     command_setting: *const Setting.SubcommandSetting,
     args: *std.ArrayListUnmanaged(core.types.Symbol)) !void
@@ -112,7 +113,7 @@ fn stitchGuestArgs(
                 .schema_dir_set = .{.values = command_setting.generate.schema_dir_set},
                 .include_filter_set = .{.values = command_setting.generate.include_filter_set},
                 .exclude_filter_set = .{.values = command_setting.generate.exclude_filter_set},
-                .watch = .{.enabled = command_setting.generate.watch},
+                .watch = .{.enabled = is_interactive},
             };
             try writeArgs(allocator, GuestWatchArgId, &extra_set.watch, &default_args, args);
         },
@@ -193,6 +194,7 @@ pub const tests = struct {
             .log_level = .info,
             .log_quiet = false,
             .no_color = true,
+            .interactive = false,
             .scope = "test",
             .endpoints = .{
                 .req_rep = "ipc:///path/to/req-rep",
@@ -228,16 +230,15 @@ pub const tests = struct {
             .include_filter_set = &.{ "foo", "baz" },
             .exclude_filter_set = &.{ "bar", "quax" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
         const extra_args: ExtraArg(GuestWatchArgId) = .{};
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .watch, &.{.watch = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .watch, true, &.{.watch = extra_args}, &.{.generate = setting}, &args);
 
-        try std.testing.expectEqual(8, args.items.len);
+        try std.testing.expectEqual(9, args.items.len);
         try std.testing.expectEqualStrings("--source-dir=/path/to/setting-source-1", args.items[0]);
         try std.testing.expectEqualStrings("--source-dir=/path/to/setting-source-2", args.items[1]);
         try std.testing.expectEqualStrings("--schema-dir=/path/to/setting-schema-2", args.items[2]);
@@ -246,6 +247,7 @@ pub const tests = struct {
         try std.testing.expectEqualStrings("--include-filter=baz", args.items[5]);
         try std.testing.expectEqualStrings("--exclude-filter=bar", args.items[6]);
         try std.testing.expectEqualStrings("--exclude-filter=quax", args.items[7]);
+        try std.testing.expectEqualStrings("--watch", args.items[8]);
     }
 
     test "write guest-watch setting#1 (all explicit extra)" {
@@ -259,27 +261,24 @@ pub const tests = struct {
             .include_filter_set = &.{ "foo", "baz" },
             .exclude_filter_set = &.{ "bar", "quax" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
         const extra_args: ExtraArg(GuestWatchArgId) = .{
             .source_dir_set = .{ .values = &[_]core.types.FilePath{ "/path/to/explicit-source" } },
             .schema_dir_set = .{ .values = &[_]core.types.FilePath{ "/path/to/explicit-schema" } },
             .include_filter_set = .{ .values = &[_]core.types.FilePath{ "baz" } },
             .exclude_filter_set = .{ .values = &[_]core.types.FilePath{ "bar" } },
-            .watch = .{ .enabled = true },
         };
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .watch, &.{.watch = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .watch, false, &.{.watch = extra_args}, &.{.generate = setting}, &args);
 
-        try std.testing.expectEqual(5, args.items.len);
+        try std.testing.expectEqual(4, args.items.len);
         try std.testing.expectEqualStrings("--source-dir=/path/to/explicit-source", args.items[0]);
         try std.testing.expectEqualStrings("--schema-dir=/path/to/explicit-schema", args.items[1]);
         try std.testing.expectEqualStrings("--include-filter=baz", args.items[2]);
         try std.testing.expectEqualStrings("--exclude-filter=bar", args.items[3]);
-        try std.testing.expectEqualStrings("--watch", args.items[4]);
     }
 
     test "write guest-extract setting#1 (all default extra)" {
@@ -293,14 +292,13 @@ pub const tests = struct {
             .include_filter_set = &[_]core.types.FilePath{ "foo" },
             .exclude_filter_set = &[_]core.types.FilePath{ "bar" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
         const extra_args: ExtraArg(GuestExtractArgId) = .{};
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .extract, &.{.extract = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .extract, false, &.{.extract = extra_args}, &.{.generate = setting}, &args);
 
         try std.testing.expectEqual(1, args.items.len);
         try std.testing.expectEqualStrings("--schema-dir=/path/to/setting-schema", args.items[0]);
@@ -317,7 +315,6 @@ pub const tests = struct {
             .include_filter_set = &.{ "foo" },
             .exclude_filter_set = &.{ "bar" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
         const extra_args: ExtraArg(GuestExtractArgId) = .{
             .schema_dir_set = .{ .values = &[_]core.types.FilePath{ "/path/to/explicit-schema" } }
@@ -326,7 +323,7 @@ pub const tests = struct {
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .extract, &.{.extract = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .extract, false, &.{.extract = extra_args}, &.{.generate = setting}, &args);
 
         try std.testing.expectEqual(1, args.items.len);
         try std.testing.expectEqualStrings("--schema-dir=/path/to/explicit-schema", args.items[0]);
@@ -343,14 +340,13 @@ pub const tests = struct {
             .include_filter_set = &.{ "foo" },
             .exclude_filter_set = &.{ "bar" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
         const extra_args: ExtraArg(GuestGenerateArgId) = .{};
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .generate, &.{.generate = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .generate, false, &.{.generate = extra_args}, &.{.generate = setting}, &args);
 
         try std.testing.expectEqual(1, args.items.len);
         try std.testing.expectEqualStrings("--output-dir=/path/to/setting-out", args.items[0]);
@@ -367,7 +363,6 @@ pub const tests = struct {
             .include_filter_set = &.{ "foo" },
             .exclude_filter_set = &.{ "bar" },
             .output_dir_path = "/path/to/setting-out",
-            .watch = false,
         };
 
         const extra_args: ExtraArg(GuestGenerateArgId) = .{
@@ -377,7 +372,7 @@ pub const tests = struct {
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         defer args.deinit(allocator);
 
-        try stitchGuestArgs(allocator, .generate, &.{.generate = extra_args}, &.{.generate = setting}, &args);
+        try stitchGuestArgs(allocator, .generate, false, &.{.generate = extra_args}, &.{.generate = setting}, &args);
 
         try std.testing.expectEqual(1, args.items.len);
         try std.testing.expectEqualStrings("--output-dir=/path/to/explicit-out", args.items[0]);

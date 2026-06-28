@@ -11,6 +11,11 @@ const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 const CacheManager = @import("../cache_manager.zig").CacheManager;
 const GuestConfig = @import("../configs/Config.zig").Guest;
 
+const CommandPaletteTask = @import("../tasks/CommandPalletTask.zig");
+
+const ArgHelp = @import("../help/ArgHelp.zig");
+const renderHelp = @import("../help/rendering.zig").renderToStderr;
+
 pub fn ReadyPhaseState(comptime HostRunner: type) type {
     return struct {
         allocator: std.mem.Allocator,
@@ -58,10 +63,15 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                     if (self.left_guests.count() == 0) {
                         // All guests is ready
                         try stage.transitPhase(.ready, .confirmed);
-                        try stage.sendProgressHeartbeat();
 
-                        // TODO: Do not send in interactive mode
-                        try stage.dispatcher.queue.post(.ready_source_path, try stage.connection.commandChannel());
+                        if (stage.setting.base.interactive) {
+                            try stage.log(.info, "Interactive mode now!", .{});
+                            try stage.reapers.detach(CommandPaletteTask.run, .{stage.io, stage.connection.inproc_socket.pipe });
+                        }
+                        else {
+                            try stage.dispatcher.queue.post(.ready_source_path, try stage.connection.commandChannel());
+                            try stage.sendProgressHeartbeat();
+                        }
                     }
                 },
                 .heartbeat => |payload| {
@@ -77,9 +87,11 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                             }
                         },
                         .ready_progress => {
-                            if ((self.cache.header_entries.count() > 0) and (self.cache.body_entries.count() == 0)) {
-                                const names: DescNames = .{.iter = self.cache.header_entries.keyIterator()};
-                                try stage.log(.debug, "Unreceived source(s)/{f}", .{ names });
+                            if (self.cache.header_entries.count() > 0) {
+                                if (self.cache.body_entries.count() == 0) {
+                                    const names: DescNames = .{.iter = self.cache.header_entries.keyIterator()};
+                                    try stage.log(.debug, "Unreceived source(s)/{f}", .{ names });
+                                }
                             }
                             try stage.dispatcher.queue.post(.ready_progress, try stage.connection.commandChannel());
                             try stage.sendProgressHeartbeat();
@@ -129,9 +141,28 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                     try stage.log(.info, "{s} {s}", .{toGnetatedMark(payload.status), payload.message});
                     self.cache.finishBodyEntry(self.allocator, entry.from_stage, payload.desc);
 
-                    if (self.isCompleted()) {
+                    if ((!stage.setting.base.interactive) and self.isCompleted()) {
                         try stage.transitPhase(.terminating, .pending);
                     }
+                },
+                .worker_response => |payload| {
+                    if (decodePalletResponse(payload)) |command| {
+                        switch (command) {
+                            .quit => {
+                                try stage.transitPhase(.terminating, .pending);
+                                return;
+                            },
+                            .run => {
+                                try stage.sendProgressHeartbeat();
+                                try stage.dispatcher.queue.post(.ready_source_path, try stage.connection.commandChannel());
+                            },
+                            .help => {
+                                try renderHelp(&ArgHelp.pallet_help);
+                            }
+                        }
+                    }
+
+                    try stage.reapers.detach(CommandPaletteTask.run, .{stage.io, stage.connection.inproc_socket.pipe });
                 },
                 else => {
                     try stage.defaultHandler(entry, dirty);
@@ -153,6 +184,14 @@ fn toGnetatedMark(status: events.Event.Payload.GenerateResponse.Status) types.Sy
     };
 }
 
+fn decodePalletResponse(data: types.BinaryData) ?CommandPaletteTask.Response.Command {
+    const res = CommandPaletteTask.Response.fromRaw(data) catch return null;
+    return switch (res.status) {
+        .accept => |command| command,
+        .invalid => null,
+    };
+}
+
 const Status = enum {
     preparing,
     ready,
@@ -169,3 +208,5 @@ const DescNames = struct {
         }
     }
 };
+
+const interactve_help: ArgHelp.Config = .{};

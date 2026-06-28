@@ -1,166 +1,179 @@
 const std = @import("std");
-const zmq = @import("zmq");
+const clap = @import("clap");
+const nnng = @import("nnng");
+const cbor = @import("cbor");
 const core = @import("core");
 
-const Symbol = core.Symbol;
-const worker_context = "command-pallet";
+const Symbol = core.types.Symbol;
+const Event = core.events.Event;
 
-allocator: std.mem.Allocator,
-buffer: std.ArrayList(u8),
+const app_context = @import("build_options").app_context;
 
 const Self = @This();
 
-pub fn init(allocator: std.mem.Allocator) !*Self {
-    const self = try allocator.create(Self);
-    self.* = .{
-        .allocator = allocator,
-        .buffer = std.ArrayList(u8).init(allocator),
-    };
-
-    return self;
+pub fn run(io: std.Io, pipe: nnng.Pipe.Sync) void {
+    handleInput(io, std.heap.c_allocator, pipe) catch {};
 }
 
-pub fn deinit(self: *Self) void {
-    self.buffer.deinit();
-    self.allocator.destroy(self);
-}
+fn handleInput(io: std.Io, allocator: std.mem.Allocator, pipe: nnng.Pipe.Sync) !void {
+    prompt: {
+        var buffer: [256]u8 = undefined;
+        const stdout = std.Io.File.stdout();
+        var writer = stdout.writer(io, &buffer);
+        try writer.interface.writeAll("> ");
+        try writer.interface.flush();
+        break:prompt;
+    }
 
-pub fn run(self: *Self, socket: *zmq.ZSocket) !void {
-    const stdin = std.io.getStdIn().reader();
+    var buffer: [256]u8 = undefined;
+    const stdin = std.Io.File.stdin();
+    var reader = stdin.reader(io, &buffer);
 
-    const input = wait_input: while (true) {
-        try stdin.streamUntilDelimiter(self.buffer.writer(), '\n', null);
-        const s = try self.buffer.toOwnedSliceSentinel(0);
-
-        if (std.mem.trim(u8, s, &.{ ' ', '\t' }).len > 0) {
-            break:wait_input s;
+    const input = reader.interface.takeDelimiterExclusive('\n') catch |err| {
+        log: {
+            var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, app_context, pipe.item.sender());
+            defer channel.deinit();
+            try sendLog(allocator, &channel, .err, "Could not read from stdin/ err: {}", .{err});
+            break:log;
         }
-        self.allocator.free(s);
+        response: {
+            var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, app_context, pipe.item.sender());
+            defer channel.deinit();
+            try sendResponse(allocator, &channel, .invalid, &.{});
+            break:response;
+        }
+        return;
     };
-    defer self.allocator.free(input);
+    _ = try reader.interface.discardDelimiterInclusive('\n');
 
-    var tokens = std.zig.Tokenizer.init(input);
-    const tk = tokens.next();
-    switch (tk.tag) {
-        .identifier => {
-            const s = input[tk.loc.start..tk.loc.end];
+    var iter = std.mem.splitScalar(u8, std.mem.trim(u8, input, &std.ascii.whitespace), ' ');
+    const s = iter.next();
 
-            if (evaluateCommand(s)) |cmd| {
-                try invokeCommand(self.allocator, socket, cmd, &tokens);
+    const command = 
+        resolveCommand(s)
+        orelse {
+            if ((s != null) and (s.?.len > 0)) {
+                log: {
+                    var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, app_context, pipe.item.sender());
+                    defer channel.deinit();
+                    try sendLog(allocator, &channel, .err, "Undefined command: `{?s}`", .{s});
+                    break:log;
+                }
             }
-            else {
-                try invalidCommand(self.allocator, socket, s);
+            response: {
+                var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, app_context, pipe.item.sender());
+                defer channel.deinit();
+                try sendResponse(allocator, &channel, .invalid, &.{});
+                break:response;
             }
-        },
-        else => {
-            try invalidCommand(self.allocator, socket, input);
+            return;
         }
-    }
+    ;
+
+    var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, app_context, pipe.item.sender());
+    defer channel.deinit();
+    try sendResponse(allocator, &channel, .{.accept = command}, std.mem.trimStart(u8, iter.rest(), &std.ascii.whitespace));
 }
 
-fn evaluateCommand(s: Symbol) ?Command {
-    const cmd = std.meta.stringToEnum(Command, s);
-    if (cmd != null) {
-        return cmd.?;
-    }
+fn resolveCommand(input: ?Symbol) ?Response.Command {
+    if (input == null) return null;
+    if (input.?.len == 0) return null;
 
-    inline for (std.meta.fields(Command)) |f| {
-        if (std.mem.startsWith(u8, f.name, s)) {
-            return @enumFromInt(f.value);
-        }
-    }
-    
-    return null;
+    const command_parser = clap.parsers.enumeration(Response.Command);
+    return command_parser(input.?) catch null;
 }
 
-fn invokeCommand(allocator: std.mem.Allocator, socket: *zmq.ZSocket, command: Command, next_tokens: *std.zig.Tokenizer) !void {
-    _ = next_tokens;
-
-    var writer = try core.CborStream.Writer.init(allocator);
-    defer writer.deinit();
-
-    _ = try writer.writeEnum(Status, .accept);
-    _ = try writer.writeEnum(Command, command);
-
-    const content = try writer.buffer.toOwnedSlice();
-    defer allocator.free(content);
-
-    const event: core.Event = .{ 
-        .worker_response = try core.Event.Payload.WorkerResponse.init(allocator, .{ content })
-    };
-    defer event.deinit();
-
-    try core.sendEvent(allocator, socket, .{.kind = .post, .from = worker_context, .event = event});
-}
-
-fn invalidCommand(allocator: std.mem.Allocator, socket: *zmq.ZSocket, command: Symbol) !void {
-    const message = try std.fmt.allocPrint(allocator, "Invalid command: `{s}`\n", .{command});
-    defer allocator.free(message);
-
-    var writer = try core.CborStream.Writer.init(allocator);
-    defer writer.deinit();
-
-    _ = try writer.writeEnum(Status, .invalid);
-    _ = try writer.writeString(message);
-
-    const event: core.Event = .{ 
-        .worker_response = try core.Event.Payload.WorkerResponse.init(allocator, .{ writer.buffer.items })
-    };
-    defer event.deinit();
-
-    try core.sendEvent(allocator, socket, .{.kind = .post, .from = worker_context, .event = event});
-}
-
-
-pub const Command = enum(u8) {
-    help = 1,
-    quit,
-    run,
-};
-
-pub const Status = enum(u8) {
-    invalid = 1,
-    accept,
-};
-
-const CommandHelp = std.StaticStringMap(Symbol).initComptime(.{
-    .{ @tagName(.help), "Show help text." },
-    .{ @tagName(.quit), "Exit this program." },
-    .{ @tagName(.run), "Run invoked subcommand again." },
-});
-
-pub fn showCommandhelp(allocator: std.mem.Allocator) !void {
-    var command_width: usize = 0;    
-
-    for (0..CommandHelp.kvs.len) |i| {
-        var writer = std.io.countingWriter(std.io.null_writer);
-        const w = try writer.write(CommandHelp.kvs.keys[i]);
-        command_width = @max(w + 4, command_width);
-    }
-
-    var buffer = std.ArrayList(u8).init(allocator);
+fn sendLog(allocator: std.mem.Allocator, channel: *core.sockets.SendChannel, comptime level: core.events.LogLevel, comptime fmt: []const u8, args: anytype) !void {
+    var buffer = std.Io.Writer.Allocating.init(allocator);
     defer buffer.deinit();
 
-    var writer = buffer.writer();
+    try buffer.writer.print(fmt, args);
+    try buffer.writer.flush();
 
-    const commands = try allocator.dupe(core.Symbol, CommandHelp.keys());
-    defer allocator.free(commands);
+    const log: Event.Payload.Log = .{ .level = level, .content = buffer.written() };
+    try channel.encode(.{.log = log});
+    try channel.submit(.{});
+} 
 
-    std.mem.sort(
-        core.Symbol, commands, .{}, 
-        struct {
-            fn lessThan(_: @TypeOf(.{}), lhs: Symbol, rhs: Symbol) bool {
-                return std.mem.order(u8, lhs, rhs) == .lt;
-            }
-        }.lessThan
-    );
+fn sendResponse(allocator: std.mem.Allocator, channel: *core.sockets.SendChannel, status: Response.Status, rest: Symbol) !void {
+    const res: Response = .{
+        .status = status,
+        .rest = rest,
+    };
+    const data = try res.intoRaw(allocator);
+    defer allocator.free(data);
 
-    for (commands) |command| {
-        _ = try writer.writeAll(command);
-        _ = try writer.writeByteNTimes(' ', command_width - command.len);
-        _ = try writer.writeAll(CommandHelp.get(command).?);
-        _ = try writer.writeByte('\n');
+    try channel.encode(.{.worker_response = data});
+    try channel.submit(.{});
+}
+
+pub const Response = struct {
+    status: Response.Status,
+    rest: core.types.Symbol,
+
+    pub const fromRaw = decodeFromRawBynary;
+    pub const intoRaw = encodeIntoRawBynary;
+
+    pub const Command = CommandArgIid(.{});
+    pub const Status = union(enum) {
+        invalid: void,
+        accept: Command,
+    };
+};
+
+fn encodeIntoRawBynary(res: *const Response, allocator: std.mem.Allocator) !core.types.BinaryData {
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    defer buffer.deinit();
+
+    var writer = try cbor.CborStream.Writer.init(&buffer.writer);
+
+    switch (res.status) {
+        .invalid => {
+            _ = try writer.writeEnum(std.meta.FieldEnum(Response.Status), .invalid);
+            _ = try writer.writeString(res.rest);
+        },
+        .accept => |cmd| {
+            _ = try writer.writeEnum(std.meta.FieldEnum(Response.Status), .accept);
+            _ = try writer.writeEnum(Response.Command, cmd);
+            _ = try writer.writeString(res.rest);
+        }
     }
 
-    std.debug.print("\n{s}\n", .{buffer.items});
+    try buffer.writer.flush();
+    return buffer.toOwnedSlice();
+}
+
+fn decodeFromRawBynary(data: core.types.BinaryData) !Response {
+    var reader = cbor.CborStream.Reader.createFromSlice(data);
+    const tag = try reader.readEnum(std.meta.FieldEnum(Response.Status));
+
+    switch (tag) {
+        .invalid => {
+            const rest = try reader.readString();
+            return .{ .status = .invalid, .rest = rest };
+        },
+        .accept => {
+            const status: Response.Status = .{ .accept = try reader.readEnum(Response.Command) };
+            const rest = try reader.readString();
+            return .{ .status = status, .rest = rest };
+        },
+    }
+}
+
+pub fn CommandArgIid(comptime descriptions: core.settings.types.DescriptionMap) type {
+    return enum {
+        help,
+        quit,
+        run,
+
+        pub const Decls: []const clap.Param(@This()) = &.{
+            .{.id = .help, .takes_value = .none},
+            .{.id = .quit, .takes_value = .none},
+            .{.id = .run, .takes_value = .none},
+        };
+
+        const arg_view = core.settings.types.ArgHelp(@This(), descriptions);
+        pub const description = arg_view.description;
+        pub const value = arg_view.value;        
+    };
 }

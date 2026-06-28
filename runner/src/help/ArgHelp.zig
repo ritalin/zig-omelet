@@ -38,6 +38,13 @@ pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescMap);
 // const InitializeSetting = @import("./commands/Initialize.zig");
 // const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
 
+const PalletHelpDescMap: core.settings.types.DescriptionMap = .initComptime(.{
+    .{@tagName(.help), DescriptionItem{.desc = "Show help text.", .value = "",}},  
+    .{@tagName(.quit), DescriptionItem{.desc = "Exit this program.", .value = "",}},      
+    .{@tagName(.run), DescriptionItem{.desc = "Run invoked subcommand again.", .value = "",}},  
+});
+pub const PalletCommandArgId = @import("../tasks/CommandPalletTask.zig").CommandArgIid(PalletHelpDescMap);
+
 const SubcommandSetting = @import("../settings/commands/Subcommand.zig");
 const SubcommandDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.generate), DescriptionItem{.desc = generate_cmd_desc.description.?, .value = "",}},
@@ -57,6 +64,8 @@ pub const ConfigTag = enum {
     generate,
     init_config,
     init_default,
+    pallet_help,
+    pallet_commands,
 };
 
 pub const Config = core.help.types.HelpConfig(ConfigTag);
@@ -80,8 +89,6 @@ pub const command_list_desc: Descriptor = .{
 // Command descriptors
 //
 
-// const SubcommandDescArgId = SubcommandSetting.Setting.ArgId(.{});
-
 pub const generate_cmd_desc: Descriptor = .{ 
     .name = @tagName(.generate), 
     .description = "Generate query parameters/result-sets."
@@ -99,9 +106,11 @@ pub const title: ArgHelp.Config = .{ .tag = .title, .sections = &.{} };
 pub const base_args: ArgHelp.Config = .{ .tag = .base_args, .sections = &.{} };
 pub const extra_args: ArgHelp.Config = .{ .tag = .extra_args, .sections = &.{} };
 pub const subcommands: ArgHelp.Config = .{ .tag = .subcommands, .sections = &.{} };
+pub const pallet_commands: ArgHelp.Config = .{ .tag = .pallet_commands, .sections = &.{} };
 
 pub const toplevel: ArgHelp.Config = .{ .tag = .toplevel, .sections = &.{ title, base_args, subcommands } };
 pub const generate: ArgHelp.Config = .{ .tag = .generate, .sections = &.{ title, base_args, extra_args, } };
 pub const init_config: ArgHelp.Config = .{ .tag = .init_config, .sections = &.{ title, base_args, extra_args} };
 pub const init_default: ArgHelp.Config = .{ .tag = .init_default, .sections = &.{ title, base_args, extra_args} };
 
+pub const pallet_help: ArgHelp.Config = .{ .tag = .pallet_help, .sections = &.{ pallet_commands } };

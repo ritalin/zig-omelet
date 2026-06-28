@@ -24,6 +24,9 @@ fn onRenderHelp(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config, se
         .subcommands => {
             try renderSubcommandList(writer, ArgHelp.SubcommandArgId, depth);
         },
+        .pallet_commands => {
+            try renderPalletCommandList(writer, ArgHelp.PalletCommandArgId, depth);
+        },
         else => unreachable,
     }
 }
@@ -71,13 +74,37 @@ fn renderSubcommandList(writer: *std.Io.Writer, comptime ArgId: type, depth: usi
     }
 }
 
+fn renderPalletCommandList(writer: *std.Io.Writer, comptime ArgId: type, depth: usize) !void {
+    _ = depth;
+
+    const width = try measureNameWidth(ArgId);
+
+    inline for (ArgId.Decls) |decl| {
+        const command_desc: ArgHelp.Descriptor = .{
+            .name = @tagName(decl.id),
+            .description = decl.id.value(),
+        };
+        try HelpRenderer.Support.renderDescriptor(writer, command_desc, .{.spacing_between_parameters = 0, .description_indent = 4, .name_width = width, .indent = 0});
+
+        try writer.writeAll(decl.id.description());
+        try writer.writeByte('\n');
+    }
+
+    try writer.writeByte('\n');
+}
+
 fn measureNameWidth(comptime ArgId: type) !usize {
     var width: usize = 0;
 
-    for (std.meta.fieldNames(ArgId)) |name| {
+    for (ArgId.Decls) |decl| {
         var discarding: std.Io.Writer.Discarding = .init(&.{});
         var cc: clap.ccw.CodepointCountingWriter = .init(&discarding.writer);
-        try cc.interface.writeAll(name);
+        try cc.interface.writeAll(@tagName(decl.id));
+
+        if (decl.id.value().len > 0) {
+            try cc.interface.writeByte(' ');
+            try cc.interface.writeAll(decl.id.value());
+        }
         width = @max(width, cc.codepoints_written);
     }
     return width;

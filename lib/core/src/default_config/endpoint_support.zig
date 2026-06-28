@@ -27,7 +27,7 @@ pub const Config = struct {
 pub fn renewIpcConfig(io: std.Io, allocator: std.mem.Allocator, config: *const Config) !Config {
     var random_bytes: [12]u8 = undefined;
     io.random(&random_bytes);
-    var sub_path: [24]u8 = undefined;
+    var sub_path: [16]u8 = undefined;
     _ = std.base64.url_safe.Encoder.encode(&sub_path, &random_bytes);
 
     return .{
@@ -82,43 +82,3 @@ pub fn releaseIpcStorage(io: std.Io, config: *const @This().Config) void {
 
     dir.deleteTree(io, config.channel_dir) catch {};
 }
-
-// TODO:
-// const StageChannel = std.StaticStringMap(types.Symbol).initComptime(.{
-//     .{"--request-channel", std.fmt.comptimePrint("--request-channel={s}", .{REQ_C2S_PORT})},
-//     .{"--subscribe-channel", std.fmt.comptimePrint("--subscribe-channel={s}", .{CMD_S2C_PORT})},
-//     .{"--push-channel", std.fmt.comptimePrint("--push-channel={s}", .{PUSH_C2S_PORT})},
-// });
-//
-// pub fn applyStageChannel(runner: *std.Build.Step.Run) !void {
-//     for (StageChannel.keys()) |k| {
-//         arg: {
-//             for (runner.argv.items) |arg| {
-//                 if (std.meta.activeTag(arg) == .bytes) {
-//                     if (std.mem.startsWith(u8, arg.bytes, k)) break :arg;
-//                 }
-//             }
-//             runner.addArg(StageChannel.get(k).?);
-//         }
-//     }
-
-//     runner.addArg("--standalone");
-// }
-
-// const RunnerChannel = std.StaticStringMap(types.Symbol).initComptime(.{
-//     .{"--reqrep-channel", std.fmt.comptimePrint("--reqrep-channel={s}", .{REQ_C2S_PORT})},
-//     .{"--pubsub-channel", std.fmt.comptimePrint("--pubsub-channel={s}", .{CMD_S2C_PORT})},
-// });
-
-// pub fn applyRunnerChannel(runner: *std.Build.Step.Run) void {
-//     for (RunnerChannel.keys()) |k| {
-//         arg: {
-//             for (runner.argv.items) |arg| {
-//                 if (std.meta.activeTag(arg) == .bytes) {
-//                     if (std.mem.startsWith(u8, arg.bytes, k)) break :arg;
-//                 }
-//             }
-//             runner.addArg(RunnerChannel.get(k).?);
-//         }
-//     }
-// }

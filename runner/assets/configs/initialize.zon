@@ -19,27 +19,6 @@
                 // .output_dir_path = .{.values = .{ "/path/to" } }
                 // ```
                 .output_dir_path = .default,
-                // Generate for specified subcommand
-                // .default: Passed from CLI arg
-                // .values: Specify <SUBCOMMAND> name
-                // ```
-                // .command = .{ .values = .{"generate"} }
-                // ```
-                .command = .default,
-                // SConfiguration scope name(s)
-                // .default: Passed from CLI arg
-                // .values: Accept multiple scope name
-                // ```
-                // .scope_set = .{ .values = .{"s_01", ...} }
-                // ```
-                .scope_set = .default,
-                // Configuration template scope name
-                // .default: Passed from CLI arg
-                // .values: Accept single scope name
-                // ```
-                // .scope_set = .{ .values = .{"s_01"} }
-                // ```
-                .from_scope = .default,
             },
             // wheather launch stage automatic
             .managed = true,

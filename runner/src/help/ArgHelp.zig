@@ -19,6 +19,7 @@ const BaseSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.log_level), DescriptionItem{.desc = "Pass through log level (err / warn / info / debug / trace). default: info", .value = "LEVEL",}},
     .{@tagName(.log_quiet), DescriptionItem{.desc = "Disable all host and guest log output", .value = ""}},
     .{@tagName(.no_color), DescriptionItem{.desc = "Disable colored log", .value = ""}},
+    .{@tagName(.interactive), DescriptionItem{.desc = "Launch as interactive mode", .value = ""}},
     .{@tagName(.use_scope), DescriptionItem{.desc = "Use environment scope. default: default", .value = "VALUE",}},
     .{@tagName(.help), DescriptionItem{.desc = "Print command-specific usage", .value = "",}},  
 });
@@ -31,7 +32,6 @@ const GenerateCommandDescMap: core.settings.types.DescriptionMap = .initComptime
     .{@tagName(.schema_dir), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH", .required = true}},
     .{@tagName(.include_filter), DescriptionItem{.desc = "Filter passing source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
     .{@tagName(.exclude_filter), DescriptionItem{.desc = "Filter rejecting source/schema SQL directores or files satisfied (optional)", .value = "PATH"}},
-    .{@tagName(.watch), DescriptionItem{.desc = "Launch as interactive mode", .value = ""}},
 });
 pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescMap);
 

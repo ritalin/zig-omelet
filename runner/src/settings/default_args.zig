@@ -35,7 +35,7 @@ pub fn Defaults(comptime ArgId: type) type {
 
             try self.loadFromSource(allocator, content, log_style);
 
-            try (on_apply.handler)(on_apply.ptr, &self);
+            try (on_apply.handler)(on_apply.ptr, allocator, &self);
         }
 
         fn loadFromSource(self: *Self, allocator: std.mem.Allocator, contents: [:0]const u8, error_style: core.Logger.LogStyle) !void {
@@ -94,7 +94,7 @@ pub fn Defaults(comptime ArgId: type) type {
 
         pub const ApplyDefaultHandler = struct {
             ptr: *anyopaque,
-            handler: *const fn (ptr: *anyopaque, defaults: *Self) anyerror!void,
+            handler: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, defaults: *Self) anyerror!void,
         };
     };
 }
@@ -130,7 +130,6 @@ pub const tests = struct {
             \\    .include_filter_set = .default,
             \\    .exclude_filter_set = .default,
             \\    .output_dir_path = .default,
-            \\    .watch = .default, 
             \\}
         ;
         const expect: Defaults(ArgId) = .default;
@@ -153,7 +152,6 @@ pub const tests = struct {
             \\    .include_filter_set = .{.values = .{"queries"}},
             \\    .exclude_filter_set = .{.values = .{"./table", "./indexes"}},
             \\    .output_dir_path = .{.values = .{"./output"}},
-            \\    .watch = .{.enabled = true}, 
             \\}
         ;
         const expect: Defaults(ArgId) = .{ 
@@ -163,7 +161,6 @@ pub const tests = struct {
                 .include_filter_set = .{.values = &.{"queries"}},
                 .exclude_filter_set = .{.values = &.{"./table", "./indexes"}},
                 .output_dir_path = .{.values = &.{"./output"}},
-                .watch = .{.enabled = true},
             }),
         };
 

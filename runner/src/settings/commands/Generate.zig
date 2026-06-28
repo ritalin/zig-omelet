@@ -19,7 +19,6 @@ schema_dir_set: []const FilePath,
 include_filter_set: []const FilePath,
 exclude_filter_set: []const FilePath,
 output_dir_path: FilePath,
-watch: bool,
 
 const Setting = @This();
 
@@ -35,7 +34,6 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
         include_filter_set,
         exclude_filter_set,
         output_dir_path,
-        watch,
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .source_dir_set, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
@@ -43,7 +41,6 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
             .{.id = .include_filter_set, .names = .{.long = "include-filter"}, .takes_value = .many},
             .{.id = .exclude_filter_set, .names = .{.long = "exclude-filter"}, .takes_value = .many},
             .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},
-            .{.id = .watch, .names = .{.long = "watch"}, .takes_value = .none},
             // .{.id = ., .names = .{}, .takes_value = },
         };
 
@@ -66,19 +63,17 @@ const PathFilter = struct {
 
 pub fn Builder(comptime ArgIterator: type) type {
     return struct {
-        allocator: std.mem.Allocator,
-        log_style: core.Logger.LogStyle,
-        source_dir_set: std.ArrayListUnmanaged(?FilePath),
-        schema_dir_set: std.ArrayListUnmanaged(?FilePath),
-        filter_set: std.ArrayListUnmanaged(PathFilter),
-        filter_set_counts: std.enums.EnumArray(FilterKind, usize),
+        build_log_style: core.Logger.LogStyle,
+        source_dir_set: std.ArrayListUnmanaged(?FilePath) = .empty,
+        schema_dir_set: std.ArrayListUnmanaged(?FilePath) = .empty,
+        filter_set: std.ArrayListUnmanaged(PathFilter) = .empty,
+        filter_set_counts: std.enums.EnumArray(FilterKind, usize) = std.enums.EnumArray(FilterKind, usize).initFill(0),
         output_dir_path: ?FilePath = null,
-        watch: ?bool = null,
 
-        pub fn deinit(self: *Builder(ArgIterator)) void {
-            self.source_dir_set.deinit(self.allocator);
-            self.schema_dir_set.deinit(self.allocator);
-            self.filter_set.deinit(self.allocator);
+        pub fn deinit(self: *Builder(ArgIterator), allocator: std.mem.Allocator) void {
+            self.source_dir_set.deinit(allocator);
+            self.schema_dir_set.deinit(allocator);
+            self.filter_set.deinit(allocator);
         }
 
         pub fn fromArgs(
@@ -90,22 +85,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             var diag: clap.Diagnostic = .{}; 
             var parsers = ArgParserPair(GenerateArgId, BaseSettingArgId, ArgIterator).init(scanner, &diag);
 
-            var builder: Builder(ArgIterator) = .{
-                .allocator = allocator,
-                .log_style = log_style,
-                .source_dir_set = .empty,
-                .schema_dir_set = .empty,
-                .filter_set = .empty,
-                .filter_set_counts = std.enums.EnumArray(FilterKind, usize).initFill(0),
-            };
-
-            // var diag: clap.Diagnostic = .{};
-
-            // var parser = clap.streaming.Clap(GenerateArgId, ArgsIterator){
-            //     .params = GenerateArgId.Decls,
-            //     .iter = iter,
-            //     .diagnostic = &diag,
-            // };
+            var builder: Builder(ArgIterator) = .{ .build_log_style = log_style };
 
             while (scanner.scan()) {
                 const next_arg = parsers.next(scanner) catch |err| {
@@ -130,34 +110,22 @@ pub fn Builder(comptime ArgIterator: type) type {
         }
 
         fn handleArg(self: *Builder(ArgIterator), allocator: std.mem.Allocator, arg: clap.streaming.Arg(GenerateArgId)) !void {
-            // while (true) {
-            //     const next_arg = parser.next() catch |err| {
-            //         try core.log_supports.reportClapError(&diag, err);
-            //         return error.ShowCommandHelp;
-            //     };
-            //     if (next_arg == null) {
-            //         return builder;
-            //     }
-            //     const arg = next_arg.?;
-
-                switch (arg.param.id) {
-                    .source_dir_set => try self.source_dir_set.append(allocator, arg.value),
-                    .schema_dir_set => try self.schema_dir_set.append(allocator, arg.value),
-                    .include_filter_set => {
-                        if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .include , .path = v});
-                        self.filter_set_counts.getPtr(.include).* += 1;
-                    },
-                    .exclude_filter_set => {
-                        if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .exclude , .path = v});
-                        self.filter_set_counts.getPtr(.exclude).* += 1;
-                    },
-                    .output_dir_path => self.output_dir_path = arg.value,
-                    .watch => self.watch = true,
-                }
-            // }
+            switch (arg.param.id) {
+                .source_dir_set => try self.source_dir_set.append(allocator, arg.value),
+                .schema_dir_set => try self.schema_dir_set.append(allocator, arg.value),
+                .include_filter_set => {
+                    if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .include , .path = v});
+                    self.filter_set_counts.getPtr(.include).* += 1;
+                },
+                .exclude_filter_set => {
+                    if (arg.value) |v| try self.filter_set.append(allocator, .{.kind = .exclude , .path = v});
+                    self.filter_set_counts.getPtr(.exclude).* += 1;
+                },
+                .output_dir_path => self.output_dir_path = arg.value,
+            }
         }
 
-        fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
+        fn applyDefaults(ptr: *anyopaque, allocator: std.mem.Allocator, defaults: *Defaults) !void {
             var self: *Builder(ArgIterator) = @ptrCast(@alignCast(ptr));
             var iter = defaults.iterator();
 
@@ -166,68 +134,70 @@ pub fn Builder(comptime ArgIterator: type) type {
                     .source_dir_set => if (entry.value.tag() == .values) {
                         if (self.source_dir_set.items.len == 0) {
                             for (entry.value.values) |value| {
-                                try self.source_dir_set.append(self.allocator, value);
+                                try self.source_dir_set.append(allocator, value);
                             }
                         }
                     },
                     .schema_dir_set => if (entry.value.tag() == .values) {
                         if (self.schema_dir_set.items.len == 0) {
                             for (entry.value.values) |value| {
-                                try self.schema_dir_set.append(self.allocator, value);
+                                try self.schema_dir_set.append(allocator, value);
                             }
                         }
                     },
                     .include_filter_set => if (entry.value.tag() == .values) {
                         if (self.filter_set_counts.get(.include) == 0) {
                             for (entry.value.values) |value| {
-                                try self.filter_set.append(self.allocator, .{.kind = .include, .path = value});
+                                try self.filter_set.append(allocator, .{.kind = .include, .path = value});
                             }
                         }
                     },
                     .exclude_filter_set => if (entry.value.tag() == .values) {
                         if (self.filter_set_counts.get(.exclude) == 0) {
                             for (entry.value.values) |value| {
-                                try self.filter_set.append(self.allocator, .{.kind = .exclude, .path = value});
+                                try self.filter_set.append(allocator, .{.kind = .exclude, .path = value});
                             }
                         }
                     },
                     .output_dir_path => if (entry.value.tag() == .values) {
                         if ((self.output_dir_path == null) and (entry.value.values.len > 0)) {
-                            self.output_dir_path = entry.value.values[0];
-                        }
-                    },
-                    .watch => if (entry.value.tag() == .enabled) {
-                        if (self.watch == null) {
-                            self.watch = entry.value.enabled;
+                            self.output_dir_path = try allocator.dupe(u8, entry.value.values[0]);
                         }
                     },
                 }
             }
         }
 
-        pub fn build(self: *Builder(ArgIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !Setting {
-            if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
+        pub fn build(self: *Builder(ArgIterator), io: std.Io, allocator: std.mem.Allocator, options: core.configs.supports.FileResolveOptions) !Setting {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            
+            var builder_default: Builder(ArgIterator) = .{ .build_log_style = self.build_log_style };            
+
+            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), options)) |file| {
                 defer file.close(io);
 
                 const callback: Defaults.ApplyDefaultHandler = .{ 
-                    .ptr = self, 
+                    .ptr = &builder_default, 
                     .handler = Builder(ArgIterator).applyDefaults 
                 };
-                try Defaults.loadFromFile(io, self.allocator, file, self.log_style, callback);
+                try Defaults.loadFromFile(io, arena.allocator(), file, self.build_log_style, callback);
             }
 
             const base_dir = std.Io.Dir.cwd();
             var has_err = false;
             
             const sources = sources: {
-                const slice = try self.allocator.alloc(FilePath, self.source_dir_set.items.len);        
-                for (self.source_dir_set.items, 0..) |path, i| {
-                    if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
+                const source_dir_set = if (self.source_dir_set.items.len > 0) self.source_dir_set.items else builder_default.source_dir_set.items;
+        
+                const slice = try allocator.alloc(FilePath, source_dir_set.len);        
+                for (source_dir_set, 0..) |path, i| {
+                    if (base_dir.realPathFileAlloc(io, path.?, allocator)) |path_abs| {
                         slice[i] = path_abs;
                     }
                     else |err| {
                         has_err = true;
-                        if (self.log_style == .stderr) {
+                        if (self.build_log_style == .stderr) {
                             std.log.warn("Cannot access source folder/name: {s}, err: {}", .{path.?, err});
                         }
                     }
@@ -235,14 +205,15 @@ pub fn Builder(comptime ArgIterator: type) type {
                 break:sources slice;
             };
             const schemas = schemas: {
-                const slice = try self.allocator.alloc(FilePath, self.schema_dir_set.items.len);
-                for (self.schema_dir_set.items, 0..) |path, i| {
-                    if (base_dir.realPathFileAlloc(io, path.?, self.allocator)) |path_abs| {
+                const schema_dir_set = if (self.schema_dir_set.items.len > 0) self.schema_dir_set.items else builder_default.schema_dir_set.items;
+                const slice = try allocator.alloc(FilePath, schema_dir_set.len);
+                for (schema_dir_set, 0..) |path, i| {
+                    if (base_dir.realPathFileAlloc(io, path.?, allocator)) |path_abs| {
                         slice[i] = path_abs;
                     }
                     else |err| {
                         has_err = true;
-                        if (self.log_style == .stderr) {
+                        if (self.build_log_style == .stderr) {
                             std.log.warn("Cannot access schema folder/name: {s}, err: {}", .{path.?, err});
                         }
                     }
@@ -252,7 +223,7 @@ pub fn Builder(comptime ArgIterator: type) type {
 
             if ((sources.len == 0) and (schemas.len == 0)) {
                 has_err = true;
-                if (self.log_style == .stderr) {
+                if (self.build_log_style == .stderr) {
                     std.log.warn("Need to specify SQL source and/or schema folder at least one", .{});
                 }
             }
@@ -260,29 +231,30 @@ pub fn Builder(comptime ArgIterator: type) type {
             var include_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
             var exclude_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
             filters: {
-                for (self.filter_set.items) |filter| {
+                const filter_set = if (self.filter_set.items.len > 0) self.filter_set.items else builder_default.filter_set.items;
+                for (filter_set) |filter| {
                     switch (filter.kind) {
                         .include => {
-                            try include_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
+                            try include_filters.append(allocator, try allocator.dupe(u8, filter.path));
                         },
                         .exclude => {
-                            try exclude_filters.append(self.allocator, try self.allocator.dupe(u8, filter.path));
+                            try exclude_filters.append(allocator, try allocator.dupe(u8, filter.path));
                         }
                     }
                 }
                 break:filters;
             }
             const output_dir_path = path: {
-                if (self.output_dir_path == null) {
+                if (self.output_dir_path orelse builder_default.output_dir_path) |path| {
+                    try base_dir.createDirPath(io, path);
+                    break :path try base_dir.realPathFileAlloc(io, path, allocator);
+                }
+                else {
                     has_err = true;
-                    if (self.log_style == .stderr) {
+                    if (self.build_log_style == .stderr) {
                         std.log.warn("Need to specify output folder", .{});
                     }
                     break:path null;
-                }
-                else {
-                    try base_dir.createDirPath(io, self.output_dir_path.?);
-                    break :path try base_dir.realPathFileAlloc(io, self.output_dir_path.?, self.allocator);
                 }
             };
 
@@ -293,10 +265,9 @@ pub fn Builder(comptime ArgIterator: type) type {
             return .{
                 .source_dir_set = sources,
                 .schema_dir_set = schemas,
-                .include_filter_set = try include_filters.toOwnedSlice(self.allocator),
-                .exclude_filter_set = try exclude_filters.toOwnedSlice(self.allocator),
+                .include_filter_set = try include_filters.toOwnedSlice(allocator),
+                .exclude_filter_set = try exclude_filters.toOwnedSlice(allocator),
                 .output_dir_path = output_dir_path.?,
-                .watch = self.watch orelse false,
             };
         }
     };
@@ -373,16 +344,15 @@ pub const tests = struct {
 
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
-        defer builder.deinit();
+        defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, options);
+        const setting: Setting = try builder.build(io, allocator, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{e1_path, e2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{e3_path, e4_path}, setting.schema_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"foo", "bar"}, setting.include_filter_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"baz", "quax"}, setting.exclude_filter_set);
         try std.testing.expectEqualStrings(e5_path, setting.output_dir_path);
-        try std.testing.expectEqual(true, setting.watch);
     }
 
     test "All default args" {
@@ -425,7 +395,6 @@ pub const tests = struct {
             \\    .include_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
             \\    .exclude_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
             \\    .output_dir_path = .{{ .values = .{{ "{s}" }} }},
-            \\    .watch = .{{ .enabled = true }},
             \\}}
             , .{ d1_path, d2_path, d3_path, d4_path, "quax", "baz", "bar", "foo", d5_path }
         );
@@ -443,16 +412,15 @@ pub const tests = struct {
 
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
-        defer builder.deinit();
+        defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, options);
+        const setting: Setting = try builder.build(io, allocator, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"quax", "baz"}, setting.include_filter_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"bar", "foo"}, setting.exclude_filter_set);
         try std.testing.expectEqualStrings(d5_path, setting.output_dir_path);
-        try std.testing.expectEqual(true, setting.watch);
     }
 
     test "Explict + default args" {
@@ -509,7 +477,6 @@ pub const tests = struct {
             \\    .include_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
             \\    .exclude_filter_set = .{{ .values = .{{ "{s}", "{s}" }} }},
             \\    .output_dir_path = .{{ .values = .{{ "{s}" }} }},
-            \\    .watch = .{{ .enabled = true }},
             \\}}
             , .{ "/path/to/default-src-1", "/path/to/default-src-2", "/path/to/default-schema-1", "/path/to/default-schema-2", "quax", "baz", "bar", "foo", "explicit-out" }
         );
@@ -527,15 +494,14 @@ pub const tests = struct {
 
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .stderr);
-        defer builder.deinit();
+        defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, options);
+        const setting: Setting = try builder.build(io, allocator, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"foo", "bar"}, setting.include_filter_set);
         try std.testing.expectEqualDeep(&[_][]const u8{"baz", "quax"}, setting.exclude_filter_set);
         try std.testing.expectEqualStrings(d5_path, setting.output_dir_path);
-        try std.testing.expectEqual(true, setting.watch);
     }
 };

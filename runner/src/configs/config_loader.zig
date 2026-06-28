@@ -33,21 +33,22 @@ fn loadGuestConfigFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.Fi
     const source = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .@"1", 0);
     defer allocator.free(source);
 
-    return loadGuestConfigSource(allocator, source, strategies);
+    return loadGuestConfigSource(allocator, source, strategies, .stderr);
 }
 
-fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, strategies: core.configs.types.StageStrategy) !std.MultiArrayList(config_types.Guest) {
+fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, strategies: core.configs.types.StageStrategy, log_style: core.Logger.LogStyle) !std.MultiArrayList(config_types.Guest) {
     var ast = try std.zig.Ast.parse(allocator, source, .zon);
     defer ast.deinit(allocator);
     if (ast.errors.len > 0) {
-        // TODO:
-        // var buffer: [1024]u8 = undefined;
-        // const t = std.debug.lockStderr(&buffer).terminal();
-        // defer std.debug.unlockStderr();
+        if (log_style == .stderr) {
+            var buffer: [1024]u8 = undefined;
+            const t = std.debug.lockStderr(&buffer).terminal();
+            defer std.debug.unlockStderr();
 
-        // for (ast.errors) |err| {
-        //     try ast.renderError(err, t.writer);
-        // }
+            for (ast.errors) |err| {
+                try ast.renderError(err, t.writer);
+            }
+        }
         return error.InvalidConfigFile;
     }
 
@@ -227,208 +228,6 @@ const HostTemplate = struct {
     ready_progress_interval: Interval = .default,
 };
 
-// pub fn Stage(comptime _ArgId: type) type {
-//     return struct {
-//         category: core.configs.GuestKind,
-//         location: FilePath,
-//         extra_args: ExtraArgSet,
-//         managed: bool,
-
-//         pub const ArgId = _ArgId;
-//         pub const ExtraArgSet = Defaults(ArgId).Map;
-//     };
-// }
-
-// pub fn StageLoader(comptime ArgId: type) type {
-//     return struct {
-//         pub fn load(allocator: std.mem.Allocator, contents: [:0]const u8, strategy_map: core.configs.StageStrategy) ![]const Stage(ArgId) {
-//             var ast = try std.zig.Ast.parse(allocator, contents, .zon);
-//             defer ast.deinit(allocator);
-
-//             const node_datas = ast.nodes.items(.data);
-//             var buf: [2]std.zig.Ast.Node.Index = undefined;
-
-//             if (ast.fullStructInit(&buf, node_datas[0].lhs)) |node| {
-//                 return loadFromZon(allocator, ast, node, strategy_map);
-//             }
-//             else {
-//                 return error.InvalidConfig;
-//             }
-//         }
-
-//         pub fn loadFromFile(allocator: std.mem.Allocator, file: *std.fs.File, strategy_map: core.configs.StageStrategy) ![]const Stage(ArgId) {
-//             const meta = try file.metadata();
-
-//             const contents = try file.readToEndAllocOptions(allocator, meta.size(), null, @alignOf(u8), 0);
-//             defer allocator.free(contents);
-
-//             return load(allocator, contents, strategy_map);
-//         }
-
-//         fn loadFromZon(allocator: std.mem.Allocator, ast: std.zig.Ast, node: std.zig.Ast.full.StructInit, strategy_map: core.configs.StageStrategy) ![]const Stage(ArgId) {
-//             var stages = std.ArrayList(Stage(ArgId)).init(allocator);
-//             defer stages.deinit();
-
-//             const node_tags = ast.nodes.items(.tag);
-//             var buf: [2]std.zig.Ast.Node.Index = undefined;
-
-//             for (node.ast.fields) |cat_index| {
-//                 const token_index = ast.firstToken(cat_index) - 2;
-//                 const ident_name = ast.tokenSlice(token_index);
-//                 const category = std.meta.stringToEnum(core.configs.StageCategory, ident_name) orelse return error.InvalidCategory;
-//                 const strategy = strategy_map.get(category).?;
-
-//                 if (ast.fullStructInit(&buf, cat_index)) |cat_node| {
-//                     if (isInconsistentCount(strategy, cat_node.ast.fields.len)) return error.InvalidStageCount;
-
-//                     try loadStage(allocator, ast, node_tags, cat_node, category, &stages);
-//                 }
-//             }
-
-//             return try stages.toOwnedSlice();
-//         }
-
-//         fn loadStage(allocator: std.mem.Allocator, ast: std.zig.Ast, tags: []const std.zig.Ast.Node.Tag, node: std.zig.Ast.full.StructInit, category: core.configs.StageCategory, stages: *std.ArrayList(Stage(ArgId))) !void {
-//             for (node.ast.fields) |stage_index| {
-//                 const stage_name = name: {
-//                         const token_index = ast.firstToken(stage_index) - 2;
-//                         const name = ast.tokenSlice(token_index);
-//                         if (name[0] == '@') {
-//                             break:name try std.zig.string_literal.parseAlloc(allocator, name[1..]);
-//                         }
-//                         else {
-//                             break:name try allocator.dupe(u8, name);
-//                         }
-//                 };
-
-//                 var buf: [2]std.zig.Ast.Node.Index = undefined;
-
-//                 if (ast.fullStructInit(&buf, stage_index)) |stage_node| {
-//                     var stage: Stage(ArgId) = .{
-//                         .category = category,
-//                         .location = undefined,
-//                         .extra_args = undefined,
-//                         .managed = true,
-//                     };
-//                     try loadStageInternal(allocator, ast, tags, stage_node, stage_name, &stage);
-//                     try stages.append(stage);
-//                 }
-//             }
-//         }
-
-//         fn loadStageInternal(allocator: std.mem.Allocator, ast: std.zig.Ast, tags: []const std.zig.Ast.Node.Tag, node: std.zig.Ast.full.StructInit, stage_name: Symbol, stage: *Stage(ArgId)) !void {
-//             var status = std.enums.EnumSet(std.meta.FieldEnum(Stage(ArgId))).initFull();
-//             status.remove(.category);
-
-//             for (node.ast.fields) |field_index| {
-//                 const token_index = ast.firstToken(field_index) - 2;
-//                 const field_name = ast.tokenSlice(token_index);
-//                 const field = std.meta.stringToEnum(std.meta.FieldEnum(Stage(ArgId)), field_name) orelse {
-//                     if (! builtin.is_test) {
-//                         log.err("Unexpected field: {s} in configration file", .{field_name});
-//                     }
-//                     return error.InvalidConfigFieldKey;
-//                 };
-//                 if (!status.contains(field)) {}
-//                 defer status.remove(field);
-
-//                 switch (field) {
-//                     .location => {
-//                         stage.location = try resolveStagePath(allocator, ast, tags, field_index, stage_name);
-//                     },
-//                     .extra_args => {
-//                         // var extra_args = std.ArrayList().init(allocator);
-//                         // defer extra_args.deinit();
-//                         stage.extra_args = try resolveExtraArgs(allocator, ast, field_index);
-//                     },
-//                     .managed => {
-//                         stage.managed = try resolveManaged(allocator, ast, field_index);
-//                     },
-//                     else => {
-//                         return error.InvalidConfigFieldKey;
-//                     },
-//                 }
-//             }
-
-//             status.remove(.managed); // has default value
-//             if (status.count() > 0) {
-//                 return error.InvalidConfigFieldCount;
-//             }
-//         }
-
-//         fn resolveStagePath(allocator: std.mem.Allocator, ast: std.zig.Ast, tags: []const std.zig.Ast.Node.Tag, node_index: std.zig.Ast.Node.Index, stage_name: Symbol) !FilePath {
-//             const dir_path = path: {
-//                 if ((tags[node_index] == .struct_init_dot_two) or (tags[node_index] == .struct_init_dot_two_comma)) {
-//                     var buf: [2]std.zig.Ast.Node.Index = undefined;
-//                     if (ast.fullStructInit(&buf, node_index)) |path_node| {
-//                         std.debug.assert(path_node.ast.fields.len == 1);
-
-//                         const path_node_index = path_node.ast.fields[0];
-//                         const path_key_index = ast.firstToken(path_node_index) - 2;
-//                         const path_key_token = ast.tokenSlice(path_key_index);
-//                         _ = std.meta.stringToEnum(enum {path}, path_key_token) orelse return error.InvalidConfigFieldValue;
-
-//                         const path_value_index = ast.firstToken(path_node_index);
-//                         const path_value = ast.tokenSlice(path_value_index);
-
-//                         break:path try std.zig.string_literal.parseAlloc(allocator, path_value);
-//                     }
-//                     else {
-//                         return error.InvalidPathConfig;
-//                     }
-//                 }
-//                 else if (tags[node_index] == .enum_literal) {
-//                     const path_key_index = ast.firstToken(node_index) + 1;
-//                     const path_key_token = ast.tokenSlice(path_key_index);
-//                     _ = std.meta.stringToEnum(enum {default}, path_key_token) orelse return error.InvalidConfigFieldValue;
-
-//                     break:path try std.fs.selfExeDirPathAlloc(allocator);
-//                 }
-//                 else {
-//                     return error.InvalidConfigFieldValue;
-//                 }
-//             };
-//             defer allocator.free(dir_path);
-            
-//             return std.fs.path.join(allocator, &.{dir_path, stage_name});
-//         }
-
-//         fn resolveExtraArgs(allocator: std.mem.Allocator, ast: std.zig.Ast, node_index: std.zig.Ast.Node.Index) !Stage(ArgId).ExtraArgSet {
-//             var buf: [2]std.zig.Ast.Node.Index = undefined;
-//             if (ast.fullStructInit(&buf, node_index)) |args_node| {
-//                 return Defaults(ArgId).loadFromZon(allocator, ast, args_node);
-//             }
-//             else {
-//                 return error.InvalidConfigExtraArgs;
-//             }
-//         }
-
-//         const StringBollMap = std.StaticStringMap(bool).initComptime(.{
-//             .{"false", false},
-//             .{"true", true},
-//         });
-
-//         fn resolveManaged(allocator: std.mem.Allocator, ast: std.zig.Ast, node_index: std.zig.Ast.Node.Index) !bool {
-//             const token_index = ast.firstToken(node_index);
-//             const value = try std.ascii.allocLowerString(allocator, ast.tokenSlice(token_index));
-//             defer allocator.free(value);
-
-//             return StringBollMap.get(value) orelse return error.InvalidConfigFieldValue;
-//         }
-
-//         fn isInconsistentCount(strategy: core.configs.StageStrategy.Value, count: usize) bool {
-//             return switch (strategy) {
-//                 .one => count != 1,
-//                 .many => count == 0,
-//                 .optional => count > 1,
-//             };
-//         }
-//     };
-// }
-
-// const TestStage = Stage(enum {source_dir_set, filter_set, watch});
-// const TestLoader = StageLoader(TestStage.ArgId);
-
 test "load config test" {
     std.testing.refAllDecls(@This());
 }
@@ -446,7 +245,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "category node#1 (invalid)" {
@@ -461,7 +260,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.UnexpectGuestStage, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.UnexpectGuestStage, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "category node#2 (valid)" {
@@ -478,7 +277,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .optional, .extract = .optional, .generate = .optional});
 
-        var stages = try loadGuestConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(0, stages.len);
@@ -502,7 +301,7 @@ pub const tests_guest = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        const stages = try loadGuestConfigSource(allocator, source, strategies);
+        const stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
 
         try std.testing.expectEqual(1, stages.len);
 
@@ -531,7 +330,7 @@ pub const tests_guest = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadGuestConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -560,7 +359,7 @@ pub const tests_guest = struct {
         ;
 
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadGuestConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -585,7 +384,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#1 (one stage#2)" {
@@ -611,7 +410,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#2 (many stage)" {
@@ -627,7 +426,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .many});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#2 (optional stage)" {
@@ -653,7 +452,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid location field name" {
@@ -674,7 +473,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid managed field value#1" {
@@ -695,7 +494,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Invalid location field value#2 (default)" {
@@ -716,7 +515,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
     }
 
     test "Custom extra_args field value" {
@@ -739,7 +538,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .one});
 
-        var stages = try loadGuestConfigSource(allocator, source, strategies);
+        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         const extra_arg_set = stages.get(0).extra_args;

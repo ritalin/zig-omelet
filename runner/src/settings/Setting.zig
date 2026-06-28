@@ -26,8 +26,7 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, args: std.process.
         return .{.help = &ArgHelp.toplevel};
     };
 
-
-    const sub_res = SubcommandSetting.fromArgs(io, allocator, &scanner, &res.builder, res.command);
+    const sub_res = SubcommandSetting.fromArgs(io, allocator, &scanner, &res.builder, res.command, res.builder.scope orelse "default");
 
     const setting_pair = switch (sub_res) {
         .help => |help| return .{.help = help},

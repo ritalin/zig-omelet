@@ -12,6 +12,7 @@ const BaseSetting = @This();
 log_level: core.events.LogLevel,
 log_quiet: bool,
 no_color: bool,
+interactive: bool,
 endpoints: core.types.Endpoints,
 ipc_config: Endpoint.Config,
 scope: core.types.Symbol,
@@ -35,6 +36,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
         log_level,
         log_quiet,
         no_color,
+        interactive,
         use_scope,
         help,
 
@@ -46,6 +48,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
             .{.id = .log_quiet, .names = .{.long = "quiet", .short = 'q'}, .takes_value = .none},
             .{.id = .no_color, .names = .{.long = "no-color"}, .takes_value = .none},
             .{.id = .use_scope, .names = .{.long = "use-scope"}, .takes_value = .one},
+            .{.id = .interactive, .names = .{.long = "watch"}, .takes_value = .none},
             .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
         };
  
@@ -57,36 +60,44 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
 
 const BaseArgId = ArgId(.{});
 
+const PositionalArg = struct {
+    pub const Id = enum { 
+        p0,
+
+        pub const Decls: []const clap.Param(PositionalArg.Id) = &.{
+            .{ .id = .p0, .takes_value = .one },
+        };
+    };
+};
+
+fn resolveSubcommand(arg: clap.streaming.Arg(PositionalArg.Id)) !SubcommandArgId {
+    if (arg.value) |value| {
+        return (clap.parsers.enumeration(SubcommandArgId))(value) catch error.InvalidCommand;
+    }
+
+    return error.InvalidCommand;
+}
+
 const Subcommand = @import("./Subcommand.zig");
 const SubcommandArgId = Subcommand.ArgId(.{});
 
 pub fn Builder(comptime ArgIterator: type) type {
     return struct {
-        allocator: std.mem.Allocator, 
-        log_style: core.Logger.LogStyle,
-        log_level: ?core.events.LogLevel,
-        log_quiet: bool,
-        no_color: bool,
-        req_rep_channel: ?core.types.Symbol,
-        pub_sub_channel: ?core.types.Symbol,
-        push_pull_channel: ?core.types.Symbol,
-        scope: core.types.Symbol,
+        build_log_style: core.Logger.LogStyle,
+        log_level: ?core.events.LogLevel = null,
+        log_quiet: ?bool = null,
+        no_color: ?bool = null,
+        interactive: ?bool = null,
+        req_rep_channel: ?core.types.Symbol = null,
+        pub_sub_channel: ?core.types.Symbol = null,
+        push_pull_channel: ?core.types.Symbol = null,
+        scope: ?core.types.Symbol = null,
 
         pub fn fromArgs(allocator: std.mem.Allocator, scanner: *ArgScanner(ArgIterator), log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgId } {
             var diag: clap.Diagnostic = .{}; 
-            var parsers = ArgParserPair(BaseArgId, SubcommandArgId, ArgIterator).init(scanner, &diag);
+            var parsers = ArgParserPair(BaseArgId, PositionalArg.Id, ArgIterator).init(scanner, &diag);
 
-            var builder: Builder(ArgIterator) = .{
-                .allocator = allocator,
-                .log_style = log_style,
-                .log_level = null,
-                .log_quiet = false,
-                .no_color = false,
-                .req_rep_channel = null,
-                .pub_sub_channel = null,
-                .push_pull_channel = null,
-                .scope = "default",
-            };
+            var builder: Builder(ArgIterator) = .{ .build_log_style = log_style };
             
             while (scanner.scan()) {
                 const next_arg = parsers.next(scanner) catch |err| {
@@ -102,7 +113,8 @@ pub fn Builder(comptime ArgIterator: type) type {
                         try builder.handleArg(allocator, arg);
                     },
                     .extra => |arg| {
-                        return .{ .builder = builder, .command = arg.param.id };
+                        const command = try resolveSubcommand(arg);
+                        return .{ .builder = builder, .command = command };
                     }
                 }
             }
@@ -127,79 +139,90 @@ pub fn Builder(comptime ArgIterator: type) type {
                 },
                 .log_quiet => self.log_quiet = true,
                 .no_color => self.no_color = true,
+                .interactive => self.interactive = true,
                 .use_scope => {
                     if (arg.value) |v| self.scope = v;
                 },
             }
         }
 
-        fn applyDefaults(ptr: *anyopaque, defaults: *Defaults) !void {
+        fn applyDefaults(ptr: *anyopaque, allocator: std.mem.Allocator, defaults: *Defaults) !void {
             var self: *Builder(ArgIterator) = @ptrCast(@alignCast(ptr));
             var iter = defaults.iterator();
 
             while (iter.next()) |entry| {
                 switch (entry.key) {
                     .req_rep_channel => if (entry.value.tag() == .values) {
-                        self.req_rep_channel = entry.value.values[0];
+                        self.req_rep_channel = try allocator.dupe(u8, entry.value.values[0]);
                     },
                     .pub_sub_channel => if (entry.value.tag() == .values) {
-                        self.pub_sub_channel = entry.value.values[0];
+                        self.pub_sub_channel = try allocator.dupe(u8, entry.value.values[0]);
                     },
                     .push_pull_channel => if (entry.value.tag() == .values) {
-                        self.push_pull_channel = entry.value.values[0];
+                        self.push_pull_channel = try allocator.dupe(u8, entry.value.values[0]);
                     },
-                    .log_level => if (entry.value.tag() == .values) {
+                    .log_level => if ((entry.value.tag() == .values)) {
                         self.log_level = std.meta.stringToEnum(core.events.LogLevel, entry.value.values[0]);
                     },
-                    .log_quiet => if (entry.value.tag() == .enabled) {
+                    .log_quiet => if ((entry.value.tag() == .enabled)) {
                         self.log_quiet = entry.value.enabled;
                     },
-                    .no_color => if (entry.value.tag() == .enabled) {
+                    .no_color => if ((entry.value.tag() == .enabled)) {
                         self.no_color = entry.value.enabled;
                     },
-                    .use_scope => if (entry.value.tag() == .values) {
-                        self.scope = entry.value.values[0];
+                    .interactive => if ((entry.value.tag() == .enabled)) {
+                        self.interactive = entry.value.enabled;
+                    },
+                    .use_scope => if ((entry.value.tag() == .values)) {
+                        self.scope = try allocator.dupe(u8, entry.value.values[0]);
                     },
                     .help => {},
                 }
             }
         }
 
-        pub fn build (self: *Builder(ArgIterator), io: std.Io, options: core.configs.supports.FileResolveOptions) !BaseSetting {
-            if (try core.configs.supports.resolveFileCandidate(io, self.allocator, options)) |file| {
+        pub fn build (self: *Builder(ArgIterator), io: std.Io, allocator: std.mem.Allocator, default_scope: core.types.Symbol, options: core.configs.supports.FileResolveOptions) !BaseSetting {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            
+            var builder_default: Builder(ArgIterator) = .{ .build_log_style = self.build_log_style };
+
+            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), options)) |file| {
                 defer file.close(io);
 
-                const callback: Defaults.ApplyDefaultHandler = .{ .ptr = self, .handler = Builder(ArgIterator).applyDefaults };
-                try Defaults.loadFromFile(io, self.allocator, file, self.log_style, callback);
+                const callback: Defaults.ApplyDefaultHandler = .{ .ptr = &builder_default, .handler = Builder(ArgIterator).applyDefaults };
+                try Defaults.loadFromFile(io, arena.allocator(), file, self.build_log_style, callback);
             }
 
             // default IPC path
             try Endpoint.createIpcStorage(io, &Endpoint.Config.default);
 
-            const ipc_config = try Endpoint.renewIpcConfig(io, self.allocator, &Endpoint.Config.default);
+            const ipc_config = try Endpoint.renewIpcConfig(io, allocator, &Endpoint.Config.default);
 
             if ((self.req_rep_channel == null) or (self.pub_sub_channel == null) or (self.push_pull_channel == null)) {
                 try Endpoint.createIpcStorage(io, &ipc_config);
             }
 
-            var ipc_endpoints = try Endpoint.runtimeIpc(self.allocator, ipc_config);
-            defer Endpoint.releaseRuntimeIpc(self.allocator, &ipc_endpoints);
+            var ipc_endpoints = try Endpoint.runtimeIpc(allocator, ipc_config);
+            defer Endpoint.releaseRuntimeIpc(allocator, &ipc_endpoints);
             
-            const req_rep_channel = try self.allocator.dupe(u8, self.req_rep_channel orelse ipc_endpoints.req_rep);
-            const pub_sub_channel = try self.allocator.dupe(u8, self.pub_sub_channel orelse ipc_endpoints.pub_sub);
-            const push_pull_channel = try self.allocator.dupe(u8, self.push_pull_channel orelse ipc_endpoints.push_pull);
+            const req_rep_channel = try allocator.dupe(u8, self.req_rep_channel orelse builder_default.req_rep_channel orelse ipc_endpoints.req_rep);
+            const pub_sub_channel = try allocator.dupe(u8, self.pub_sub_channel orelse builder_default.pub_sub_channel orelse ipc_endpoints.pub_sub);
+            const push_pull_channel = try allocator.dupe(u8, self.push_pull_channel orelse builder_default.push_pull_channel orelse ipc_endpoints.push_pull);
+            const scope = try allocator.dupe(u8, self.scope orelse builder_default.scope orelse default_scope);
 
             return .{
-                .log_level = self.log_level orelse core.Logger.default,
-                .log_quiet = self.log_quiet,
-                .no_color = self.no_color,
+                .log_level = self.log_level orelse builder_default.log_level orelse core.Logger.default,
+                .log_quiet = self.log_quiet orelse builder_default.log_quiet orelse false,
+                .no_color = self.no_color orelse builder_default.no_color orelse false,
+                .interactive = self.interactive orelse builder_default.interactive orelse false,
                 .endpoints = .{
                     .req_rep = req_rep_channel,
                     .pub_sub = pub_sub_channel,
                     .push_pull = push_pull_channel,
                 },
                 .ipc_config = ipc_config,
-                .scope = try self.allocator.dupe(u8, self.scope),
+                .scope = scope,
             };
         }
     };
@@ -232,6 +255,7 @@ pub const tests = struct {
             "--log-level", "trace",
             "--quiet",
             "--no-color", 
+            "--watch",
             "--use-scope", "test",
             "generate"
         });        
@@ -249,7 +273,7 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
 
         try std.testing.expectEqualStrings("inproc://req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("inproc://pub-sub", setting.endpoints.pub_sub);
@@ -257,6 +281,7 @@ pub const tests = struct {
         try std.testing.expectEqual(.trace, setting.log_level);
         try std.testing.expectEqual(true, setting.log_quiet);
         try std.testing.expectEqual(true, setting.no_color);
+        try std.testing.expectEqual(true, setting.interactive);
         try std.testing.expectEqualStrings("test", setting.scope);
     }
 
@@ -277,6 +302,7 @@ pub const tests = struct {
             \\    .log_level = .{ .values = .{"debug"} },
             \\    .log_quiet = .{ .enabled = true },
             \\    .no_color = .{ .enabled = true },
+            \\    .interactive = .{ .enabled = true },
             \\    .use_scope = .{ .values = .{ "demo" } },
             \\}
         ;
@@ -292,7 +318,7 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("ipc:///path/to/pub-sub", setting.endpoints.pub_sub);
@@ -300,6 +326,7 @@ pub const tests = struct {
         try std.testing.expectEqual(.debug, setting.log_level);
         try std.testing.expectEqual(true, setting.log_quiet);
         try std.testing.expectEqual(true, setting.no_color);
+        try std.testing.expectEqual(true, setting.interactive);
         try std.testing.expectEqualStrings("demo", setting.scope);
     }
 
@@ -314,9 +341,7 @@ pub const tests = struct {
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
         try args.appendSlice(allocator, &.{
-            "--reqrep-channel", "inproc://req-rep",
-            "--pubsub-channel", "inproc://pub-sub",
-            "--pushpull-channel", "inproc://push-pull",
+            "--pushpull-channel", "inproc://explicit-push-pull",
             "--log-level", "trace",
             "--use-scope", "test",
             "generate"
@@ -324,12 +349,12 @@ pub const tests = struct {
 
         const defaults_source = 
             \\.{
-            \\    .req_rep_channel = .{ .values = .{ "ipc:///path/to/req-rep" } },
-            \\    .pub_sub_channel = .{ .values = .{ "ipc:///path/to/pub-sub" } },
-            \\    .push_pull_channel = .{ .values = .{ "ipc:///path/to/push-pull" } },
+            \\    .req_rep_channel = .{ .values = .{ "inproc://default-req-rep" } },
+            \\    .pub_sub_channel = .{ .values = .{ "inproc://default-pub-sub" } },
             \\    .log_level = .{ .values = .{"debug"} },
             \\    .log_quiet = .{ .enabled = true },
             \\    .no_color = .{ .enabled = true },
+            \\    .interactive = .{ .enabled = true },
             \\    .use_scope = .{ .values = .{ "demo" } },
             \\}
         ;
@@ -345,14 +370,15 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
 
-        try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
-        try std.testing.expectEqualStrings("ipc:///path/to/pub-sub", setting.endpoints.pub_sub);
-        try std.testing.expectEqualStrings("ipc:///path/to/push-pull", setting.endpoints.push_pull);
-        try std.testing.expectEqual(.debug, setting.log_level);
+        try std.testing.expectEqualStrings("inproc://default-req-rep", setting.endpoints.req_rep);
+        try std.testing.expectEqualStrings("inproc://default-pub-sub", setting.endpoints.pub_sub);
+        try std.testing.expectEqualStrings("inproc://explicit-push-pull", setting.endpoints.push_pull);
+        try std.testing.expectEqual(.trace, setting.log_level);
         try std.testing.expectEqual(true, setting.log_quiet);
         try std.testing.expectEqual(true, setting.no_color);
-        try std.testing.expectEqualStrings("demo", setting.scope);
+        try std.testing.expectEqual(true, setting.interactive);
+        try std.testing.expectEqualStrings("test", setting.scope);
     }
 };

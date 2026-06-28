@@ -17,11 +17,16 @@ const SubcommandArgId = @import("../settings/commands/Subcommand.zig").ArgId(.{}
 
 pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator, command: SubcommandArgId, scope: Symbol) !std.MultiArrayList(config_types.Guest) {
     const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .configs, .root = config_types.path_candidates };
-    return loadGuestInternal(io, allocator, HostGenerateArg.strategies, options);
+    return loadGuestInternal(io, allocator, HostGenerateArg.strategies, .stderr, options);
 }
 
-fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy, options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) {
-    const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return error.CofigLoadFailed;
+fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy, log_style: core.Logger.LogStyle, options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) {
+    const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse {
+        if (log_style == .stderr) {
+            std.log.err("Scope is not found (scope: {s}).", .{options.scope});
+        }
+        return error.CofigLoadFailed;
+    };
     defer file.close(io);
 
     return loadGuestConfigFile(io, allocator, file, strategies);

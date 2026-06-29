@@ -25,16 +25,16 @@ pub fn writeAssetFile(tmp_dir: *const std.testing.TmpDir, options: core.configs.
     const allocator = std.testing.allocator;
 
     const category_name: core.types.Symbol = @tagName(options.category);
-    const dir_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{options.root.current_dir.?, options.scope, category_name})});
+    const dir_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{options.root.current_dir.?, category_name, options.scope})});
     defer allocator.free(dir_path);
 
     const dir = try tmp_dir.dir.createDirPathOpen(io, dir_path, .{});
     defer dir.close(io);
 
-    const fle_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{options.command});
-    defer allocator.free(fle_name);
+    const file_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{options.command});
+    defer allocator.free(file_name);
 
-    const file = try dir.createFile(io, fle_name, .{});
+    const file = try dir.createFile(io, file_name, .{});
     defer file.close(io);
 
     var buffer: [1024]u8 = undefined;

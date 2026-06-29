@@ -45,6 +45,7 @@ pub const help = struct {
 
 pub const test_supports = @import("./supports/test_support.zig");
 pub const log_supports = @import("./supports/log_support.zig");
+pub const file_supports = @import("./supports/file_support.zig");
 
 test "All tests" {
     std.testing.refAllDecls(@This());

@@ -47,7 +47,7 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, comman
 
     path: {
         if (candidates.current_dir) |dir_path| {
-            const path = try std.fs.path.join(allocator, &.{dir_path, scope, category.destPath(), file_name});
+            const path = try std.fs.path.join(allocator, &.{dir_path, category.destPath(), scope, file_name});
             defer allocator.free(path);
 
             return std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
@@ -62,7 +62,7 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, comman
             if (dir_) |*dir| {
                 defer dir.close(io);
 
-                const path = try std.fs.path.join(allocator, &.{dir_path, scope, category.destPath(), file_name});
+                const path = try std.fs.path.join(allocator, &.{dir_path, category.destPath(), scope, file_name});
                 defer allocator.free(path);
 
                 return dir.openFile(io, path, .{}) catch |err| switch (err) {

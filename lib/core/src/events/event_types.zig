@@ -259,7 +259,7 @@ const EventPayload = struct {
         status: GenerateResponse.Status,
         message: Symbol,
 
-        pub const Status = enum { new_file, update_file, generate_failed };
+        pub const Status = enum { noop, new_file, update_file, generate_failed };
     };
 
     pub const SourcePath = struct {

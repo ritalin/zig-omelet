@@ -53,8 +53,8 @@ pub fn FileIterateWorker(comptime GuestStage: type) type {
 
             try stage.log(.debug, "Sending source file/path: `{s}`", .{file_path_abs});
 
-            var hasher = Hasher.init(.{});
-            try makeHash(stage.io, &hasher, base_dir, file_path_abs);
+            var hasher = core.file_supports.Hasher.init(.{});
+            try core.file_supports.makeFileHash(stage.io, &hasher, base_dir, file_path_abs);
 
             const source_path: events.Event.Payload.SourcePath = .{
                 .category = category,
@@ -166,27 +166,3 @@ test "resolve file path with dialect" {
     try std.testing.expectEqualStrings("sqlite", file_name.dialect.?);
 }
 
-const Hasher = std.crypto.hash.sha2.Sha256;
-
-fn makeHash(io: std.Io, hasher: *Hasher, base_dir: std.Io.Dir, file_path: types.FilePath) !void {
-    hasher.update(file_path);
-
-    var read_buf: [8192]u8 = undefined;
-    var hash_block: [8192]u8 = undefined;
-
-    var file = try base_dir.openFile(io, file_path, .{});
-    defer file.close(io);
-
-    var reader = file.readerStreaming(io, &read_buf);
-    var hash = reader.interface.hashed(hasher, &hash_block);
-
-    var size: usize = 0;
-    while (true) {
-        const len = hash.reader.discard(.unlimited) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        if (len == 0) break;
-        size += len;
-    }
-}

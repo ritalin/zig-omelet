@@ -4,9 +4,6 @@
             // Guest name
             // default: Same as parent field name
             .name = .default,
-            // Guest kind
-            // default: .watch
-            .kind = .default,
             // Guest component management.
             // default: true
             .enable_managed = .{.enable = true},
@@ -57,7 +54,6 @@
     .stage_extract = .{
         .@"omelet-duckdb-extract" = .{
             .name = .default,
-            .kind = .default,
             .enable_managed = .{.enable = true},
             .location = .default,
             .extra_args = .{
@@ -75,7 +71,6 @@
     .stage_generate = .{
         .@"omelet-ts-generate" = .{
             .name = .default,
-            .kind = .default,
             .enable_managed = .{.enable = true},
             .location = .default,
             .extra_args = .{

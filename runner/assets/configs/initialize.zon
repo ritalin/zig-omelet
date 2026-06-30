@@ -1,6 +1,12 @@
 .{
-    .stage_generate = .{
+    .stage_init = .{
         .@"omelet-configuration-init" = .{
+            // Guest name
+            // default: Same as parent field name
+            .name = .default,
+            // Guest component management.
+            // default: true
+            .enable_managed = .{.enable = true},
             // default: launch from path same as runner
             // path: launch from specified full/cwd-relative directory path
             .location = .default,
@@ -19,9 +25,14 @@
                 // .output_dir_path = .{.values = .{ "/path/to" } }
                 // ```
                 .output_dir_path = .default,
+                // Initialize scope name
+                // .default: Passed from CLI arg
+                // .values: Accepy single string
+                // ```
+                // .target_scope = .{.values = .{ "test" } }
+                // ```
+                .target_scope = .default,
             },
-            // wheather launch stage automatic
-            .managed = true,
         },
     },
 }

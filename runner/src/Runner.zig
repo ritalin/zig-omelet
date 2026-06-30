@@ -38,9 +38,6 @@ config: *const Config,
 guest_names: std.BufSet,
 reapers: *TaskReaper,
 
-// TODO:
-// const CommandPallet = @import("./CommandPallet.zig");
-// const Connection = core.sockets.Connection.Server(app_context, CommandPallet);
 pub const Connection = core.sockets.Connection.Server(app_context);
 
 pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, config: *const Config, setting: *const Setting) !HostRunner {
@@ -232,45 +229,6 @@ pub fn sendProgressHeartbeat(self: *HostRunner) !void {
 //     if (self.connection.dispatcher.state.level.terminating) {
 //         traceLog.debug("Stopping launch process", .{});
 //         try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
-//     }
-// }
-
-// TODO:
-// fn spawnCommandPallet(self: *HostRnner) !void {
-//     const worker = try CommandPallet.init(self.allocator);
-//     try self.connection.pull_sink_socket.spawn(worker);
-// }
-
-// fn handleWorkerResponse(self: *HostRnner, res: core.Event.Payload.WorkerResponse) !?core.Event {
-//     var reader = core.CborStream.Reader.init(res.content);
-
-//     switch (try reader.readEnum(CommandPallet.Status)) {
-//         .invalid => {
-//             const message = try reader.readString();
-//             std.debug.print("{s}\n", .{message});
-//             try self.spawnCommandPallet();
-//             return null;
-//         },
-//         .accept => {
-//             return try self.handleCommand(try reader.readEnum(CommandPallet.Command));
-//         }
-//     }
-// }
-
-// fn handleCommand(self: *Self, command: CommandPallet.Command) !?core.Event {
-//     switch (command) {
-//         .help => {
-//             try CommandPallet.showCommandhelp(self.allocator);
-//             try self.spawnCommandPallet();
-//             return null;
-//         },
-//         .quit => {
-//             return .quit_all;
-//         },
-//         .run => {
-//             try self.spawnCommandPallet();
-//             return .ready_watch_path;
-//         }
 //     }
 // }
 

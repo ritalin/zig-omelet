@@ -3,14 +3,6 @@ const core = @import("core");
 
 const DescriptionItem = core.settings.types.DescriptionItem;
 
-// TODO:
-const ArgDescriptions = core.settings.types.DescriptionMap.initComptime(.{
-//     .{@tagName(.subcommand), DescriptionItem{.desc = "Subcommand name", .value = "COMMAND", .required = true}},
-//     .{@tagName(.new_scope), DescriptionItem{.desc = "init environment scope (default: default)", .value = "VALUE", .required = false}},
-//     .{@tagName(.from_scope), DescriptionItem{.desc = "source environment scope (optional)", .value = "VALUE", .required = false}},
-//     .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
-});
-
 const BaseSetting = @import("../settings/commands/BaseSetting.zig");
 const BaseSettingDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.req_rep_channel), DescriptionItem{.desc = "Comminicate Req/Rep endpoint for nng", .value = "CHANNEL",}},

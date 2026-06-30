@@ -29,8 +29,6 @@ database: c.DatabaseRef,
 state: State,
 reapers: *core.TaskReaper,
 
-// TODO:
-// const Connection = core.sockets.Connection.Client(app_context, ExtractWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
 pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
@@ -107,7 +105,6 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
         .probe => |phase| {
-            // TODO: stum impl
             if ((phase == .terminating)) {
                 try self.transitPhase(.quitting, .confirmed);
                 return;
@@ -123,7 +120,6 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
             }
             switch (phase) {
                 .terminating => {
-                    // TODO: pending -> confirmed
                     try self.transitPhase(.quitting, .confirmed);
                 },
                 else => {

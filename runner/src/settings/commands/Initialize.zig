@@ -52,25 +52,9 @@ pub fn Builder(comptime ArgIterator: type) type {
     return struct {
         build_log_style: core.Logger.LogStyle,
         category: ConfigCategory,
-//  TODO:
-//     category: core.ConfigCategory,
-//     subcommand: ?Symbol = null,
-//     from_scope_required: bool,
-//     unsupported_set: std.enums.EnumSet(core.SubcommandArgId),
         target_scope: ?Symbol = null,
         from_scope: ?Symbol = null,
         global: ?bool = null,
-
-    //     pub fn init(allocator: std.mem.Allocator, category: core.ConfigCategory, from_scope_required: bool, unsupported: UnsupportedCommands) Builder {
-    //         return .{
-    //             .allocator = allocator,
-    //             .category = category,
-    //             .scope_set = std.ArrayList(Symbol).init(allocator),
-    //             .from_scope_required = from_scope_required,
-    //             .unsupported_set = std.enums.EnumSet(core.SubcommandArgId).init(unsupported),
-    //         };
-    //     }
-
 
         pub fn fromArgs(
             allocator: std.mem.Allocator, 
@@ -104,33 +88,6 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
 
             return builder;
-
-    // TODO:
-    //         var diag: clap.Diagnostic = .{};
-    //         var parser = clap.streaming.Clap(InitArgId(.{}), std.process.ArgIterator){
-    //             .params = InitArgId(.{}).Decls,
-    //             .iter = iter,
-    //             .diagnostic = &diag,
-    //         };
-
-    //         while (true) {
-    //             const arg_ = parser.next() catch |err| {
-    //                 try diag.report(std.io.getStdErr().writer(), err);
-    //                 return error.ShowCommandHelp;
-    //             };
-    //             if (arg_ == null) {
-    //                 return try self.build();
-    //             }
-
-    //             if (arg_) |arg| {
-    //                 switch (arg.param.id) {
-    //                     .subcommand => self.subcommand = arg.value,
-    //                     .global => self.global = true,
-    //                     .new_scope => if (arg.value) |v| try self.scope_set.append(v),
-    //                     .from_scope => self.from_scope = arg.value,
-    //                 }
-    //             }
-    //         }
         }
 
         fn handleArg(self: *Builder(ArgIterator), allocator: std.mem.Allocator, arg: clap.streaming.Arg(IntialzeArgId)) !void {

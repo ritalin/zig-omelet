@@ -23,8 +23,6 @@ connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 state: State,
 
-// TODO:
-// pub const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
 pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
@@ -89,7 +87,6 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
         .probe => |phase| {
-            // TODO: stum impl
             if ((phase == .terminating)) {
                 try self.transitPhase(.quitting, .confirmed);
                 return;
@@ -110,7 +107,6 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     try self.transitPhase(.ready, .pending);
                 },
                 .terminating => {
-                    // TODO: pending -> confirmed
                     try self.transitPhase(.quitting, .confirmed);
                 },
                 else => {
@@ -159,50 +155,6 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     //     },
     //     else => return err,
     // };
-
-    // if (_item) |*item| {
-    //     defer item.deinit();
-
-    //     switch (item.event) {
-    //         .ready_topic_body => {
-    //             try self.logger.log(.debug, "Ready for generating", .{});
-    //             try self.connection.dispatcher.post(.ready_generate);
-    //         },
-    //         .topic_body => |source| {
-    //             try self.connection.dispatcher.approve();
-    //             try self.logger.log(.debug, "Accept source: `{s}`", .{source.header.path});
-
-    //             const path = try source.header.clone(self.allocator);
-    //             try lookup.put(path.path, path);
-
-    //             const worker = try GenerateWorker.init(self.allocator, source, setting.output_dir_path);
-    //             try self.connection.pull_sink_socket.spawn(worker);
-    //             try self.connection.dispatcher.post(.ready_generate);
-    //         },
-    //         .worker_response => |res| {
-    //             try self.processWorkResult(res.content, lookup);
-
-    //             if (self.connection.dispatcher.state.level.terminating) {
-    //                 if (lookup.count() == 0) {
-    //                     try self.connection.dispatcher.post(.ready_generate);
-    //                 }
-    //             }
-    //         },
-    //         .finish_topic_body => {
-    //             try self.connection.dispatcher.approve();
-    //             try self.connection.dispatcher.state.receiveTerminate();
-
-    //             if (lookup.count() == 0) {
-    //                 if (self.connection.dispatcher.state.level.terminating) {
-    //                     try self.connection.dispatcher.post(.finish_generate);
-    //                 }
-    //             }
-    //             else {
-    //                 try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
-    //             }
-    //         },
-    //     }
-    // }
 }
 
 fn processWorkResult(self: *GuestStage, result_content: core.Symbol, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {

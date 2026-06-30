@@ -23,8 +23,6 @@ state: State,
 
 const GuestStage = @This();
 
-// TODO:
-// const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
 pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
@@ -89,7 +87,6 @@ pub fn transitPhase(self: *GuestStage, phase_kind: EventPhase.Kind, phase_agree:
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
         .probe => |phase| {
-            // TODO: stum impl
             if ((phase == .terminating)) {
                 try self.transitPhase(.quitting, .confirmed);
                 return;
@@ -109,7 +106,6 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     try self.transitPhase(.ready, .pending);
                 },
                 .terminating => {
-                    // TODO: pending -> confirmed
                     try self.transitPhase(.quitting, .confirmed);
                 },
                 else => {

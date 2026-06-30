@@ -2,80 +2,64 @@ const std = @import("std");
 const core = @import("core");
 const Runner = @import("./Runner.zig");
 const Setting = @import("./settings/Setting.zig");
-// const Config = @import("./configs/Config.zig");
+const Config = @import("./configs/Config.zig");
+const GuestLaunchTask = @import("./supports/GuestLaunchTask.zig");
 
-// const log = core.Logger.TraceDirect(@import("build_options").app_context);
 const exe_prefix = @import("build_options").exe_prefix;
 
+const renderToStderr = @import("./help/rendering.zig").renderToStderr;
+
 pub const std_options: std.Options = .{
+    .log_scope_levels = &.{
+        core.Logger.AppLevel,
+        core.Logger.TraceLevel,
+        // .{ .scope = .nnng, .level = .debug },
+    },
     .logFn = core.Logger.forwardIntegratedLog,
 };
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-    // TODO:
-    // var setting = switch (try Setting.loadFromArgs(allocator)) {
-    //     .help => |setting| {
-    //         try setting.help(std.io.getStdErr().writer());
-    //         std.process.exit(2);
-    //     },
-    //     .success => |setting| setting,
-    // };
-    // defer setting.deinit();
-    const setting: Setting = .{
-        .general = .{
-            .log_level = .debug,
-            .log_style = .stderr,
-            .no_color = false,
-            .stage_endpoints = .{
-                .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
-                .pub_sub = "ipc:///tmp/omelet/default/pub_sub.sock",
-                .push_pull = "ipc:///tmp/omelet/default/push_pull.sock",
-            },
-            // .boot_limit = .{ .count = 8 },
-            .heartbeat_limit = .unlimited,
+    var env = try init.minimal.environ.createMap(allocator);
+    defer env.deinit();
+
+    var setting: Setting = switch (try Setting.loadFromArgs(init.io, allocator, &env, init.minimal.args)) {
+        .help => |help| {
+            try renderToStderr(help);
+            std.process.exit(2);
+        },
+        .success => |setting| setting,
+    };
+    defer setting.deinit(init.io, allocator);
+
+    core.Logger.filterWith(setting.base.log_level);
+
+    var config: Config = switch (try Config.load(init.io, allocator, &env, &setting)) {
+        .success => |config| config,
+        .help => |help| {
+            try renderToStderr(help);
+            std.process.exit(2);
         },
     };
+    defer config.deinit(allocator);
+    
+    var process_reaper = try GuestLaunchTask.launch(init.io, allocator, &config.guests, &setting);
+    defer process_reaper.deinit(allocator);
 
-    core.Logger.filterWith(setting.general.log_level);
-
-    // TODO:
-    // try core.makeIpcChannelRoot(setting.general.stage_endpoints);
-    // defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
-
-    const guest_names = &.{
-        // "configuration-init",
-        // "duckdb-extract",
-        "watch-files",
-        // "ts-generate",
-    };
-
-    var connection = try Runner.Connection.create(init.io, allocator , guest_names.len, setting.general.stage_endpoints);
+    var connection = try Runner.Connection.create(init.io, allocator , config.guests.len, setting.base.endpoints);
     defer connection.deinit();
-
     connection.enableIntegratedLog();
 
-    var runner = try Runner.create(init.io, allocator, &connection, guest_names, &setting);
-    errdefer runner.deinit();
+    var runner = try Runner.create(init.io, allocator, &connection, &config, &setting);
+    defer runner.deinit();
 
-    // TODO:
-    // var stages = switch (try Config.spawnStages(allocator, setting)) {
-    //     .help => |help_setting| {
-    //         try help_setting.help(std.io.getStdErr().writer());
-    //         std.process.exit(2);
-    //     },
-    //     .success => |stages| stages,
-    // };
-    // defer stages.deinit();
-
-    try runner.transitPhase(.booting);
+    try runner.transitPhase(.launching, .pending);
     try runner.run();
-    runner.deinit();
-    
-    // TODO:
-    // try stages.wait();
-    // try std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(1000), .awake);
+
+    try process_reaper.wait(init.io);
 }
 
 test "main" {
@@ -83,4 +67,7 @@ test "main" {
     // std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("./phases/boot_phase.zig"));
     std.testing.refAllDecls(@import("./phases/terminate_phase.zig"));
+    std.testing.refAllDecls(@import("./configs/config_loader.zig"));
+    std.testing.refAllDecls(@import("./settings/default_args.zig"));
+    std.testing.refAllDecls(@import("./supports/GuestLaunchTask.zig"));
 }

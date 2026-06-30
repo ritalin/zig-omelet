@@ -39,12 +39,7 @@ pub fn run(self: Self, io: std.Io, pipe: nnng.Pipe.Sync) !void {
     const allocator = arena.allocator();
 
     var builder = CodeBuilder.init(allocator);
-    // TODO:
-    // defer builder.deinit();
-
     var walker = CodeBuilder.Parser.beginParse(worker.source.bodies);
-    // TODO:
-    // defer walker.deinit();
 
     builder.apply(allocator, &walker) catch |err| {
         var channel = try core.sockets.SendChannel.init(worker.allocator, pipe.item.id, app_context, pipe.item.sender());

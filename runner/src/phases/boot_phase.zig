@@ -37,8 +37,6 @@ pub fn BootPhaseState(comptime HostRunner: type) type {
                         try stage.log(.debug, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
                         try stage.log(.debug, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
                         try stage.log(.debug, "CLI: Push/Pull Channel = {s}", .{ep.push_pull});
-                        //  TODO:
-                        // stage.dispatcher.log(.debug, app_context, "CLI: Watch mode = {}", .{stage.setting.command.watchModeEnabled()});
                         break :dump_setting;
                     }
 

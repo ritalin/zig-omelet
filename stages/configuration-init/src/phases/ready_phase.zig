@@ -28,37 +28,46 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
                 },
                 .ready_source_path => {
                     validate: {
-                        const out_root_dir = try std.Io.Dir.openDirAbsolute(stage.io, stage.setting.output_dir_path, .{});
-                        defer out_root_dir.close(stage.io);
-
-                        const dir = out_root_dir.openDir(stage.io, stage.setting.scope, .{})
+                     std.debug.print("*** output_dir_path: {s}\n", .{stage.setting.output_dir_path});
+                       const out_root_dir = 
+                            std.Io.Dir.openDirAbsolute(stage.io, stage.setting.output_dir_path, .{})
                             catch |err| switch (err) {
                                 error.FileNotFound => break:validate,
                                 else => return err,
-                            };
+                            }
+                        ;
+                        defer out_root_dir.close(stage.io);
+
+                        const dir = out_root_dir.openDir(stage.io, stage.setting.target_scope, .{})
+                            catch |err| switch (err) {
+                                error.FileNotFound => break:validate,
+                                else => return err,
+                            }
+                        ;
                         defer dir.close(stage.io);
 
                         // Already generated
                         const res: Event.Payload.GenerateResponse = .{
                             .desc = .{
                                 .category = .source,
-                                .name = stage.setting.scope,
+                                .name = stage.setting.target_scope,
                                 .dialect = "",
                                 .offset = 0,
                             },
                             .status = .noop,
-                            .message = "Already generated",
+                            .message = "Already generated, skipping",
                         };
                         try stage.dispatcher.queue.post(.{.finish_generate = res}, try stage.connection.dataChannel());
                         return;
                     }
 
+                    std.debug.print("*** source_dir_path: {s}\n", .{stage.setting.source_dir_path});
                     var hasher = core.file_supports.Hasher.init(.{});
                     try core.file_supports.makeDirHash(stage.io, &hasher, stage.setting.source_dir_path);
 
                     const source: Event.Payload.SourcePath = .{
                         .category = .source,
-                        .name = stage.setting.scope,
+                        .name = stage.setting.target_scope,
                         .path = stage.setting.source_dir_path,
                         .dialect = "",
                         .hash = &hasher.finalResult(),
@@ -73,7 +82,7 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
                             break:generate .{
                                 .desc = .{
                                     .category = payload.category,
-                                    .name = stage.setting.scope,
+                                    .name = stage.setting.target_scope,
                                     .dialect = payload.dialect,
                                     .offset = 0,
                                 },
@@ -85,7 +94,7 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
                             break:generate .{
                                 .desc = .{
                                     .category = payload.category,
-                                    .name = stage.setting.scope,
+                                    .name = stage.setting.target_scope,
                                     .dialect = payload.dialect,
                                     .offset = 0,
                                 },
@@ -108,7 +117,7 @@ fn handleGenerate(io: std.Io, allocator: std.mem.Allocator, source_path: core.ty
     const source_base_dir = try std.Io.Dir.openDirAbsolute(io, source_path, .{});
     defer source_base_dir.close(io);
 
-    const out_root_dir = try std.Io.Dir.openDirAbsolute(io, out_root_path, .{});
+    const out_root_dir = try std.Io.Dir.cwd().createDirPathOpen(io, out_root_path, .{});
     defer out_root_dir.close(io);
     const out_base_dir = try out_root_dir.createDirPathOpen(io, target_scope, .{});
     defer out_base_dir.close(io);

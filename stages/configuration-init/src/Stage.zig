@@ -11,28 +11,27 @@ const ReceiveEntry = core.sockets.ReceiveEntry;
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
 
 const Setting = @import("./Setting.zig");
-// const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
-
 const NewConfigurationState = @import("./phases/ready_phase.zig").NewConfigurationState(GuestStage);
 
 const GuestStage = @This();
 
+io: std.Io,
 allocator: std.mem.Allocator,
 setting: *const Setting,
 connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 state: State,
 
-// TODO:
-// const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
 pub const Connection = core.sockets.Connection.Client(app_context);
 
-pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
+pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
 
     try connection.subscribe(&.{
         .probe,
         .ready_progress,
+        .ready_source_path,
+        .source_path,
     });
     try connection.connect();
 
@@ -43,6 +42,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
     const dispatcher = try connection.configureDispatcher(1, options);
 
     return .{
+        .io = io, 
         .allocator = allocator,
         .setting = setting,
         .connection = connection,
@@ -87,7 +87,6 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
     switch (entry.event) {
         .probe => |phase| {
-            // TODO: stum impl
             if ((phase == .terminating)) {
                 try self.transitPhase(.quitting, .confirmed);
                 return;
@@ -108,7 +107,6 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     try self.transitPhase(.ready, .pending);
                 },
                 .terminating => {
-                    // TODO: pending -> confirmed
                     try self.transitPhase(.quitting, .confirmed);
                 },
                 else => {

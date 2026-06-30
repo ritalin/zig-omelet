@@ -13,9 +13,9 @@ const Initialize = @import("./Initialize.zig");
 const ArgHelp = @import("../../help/ArgHelp.zig");
 const SubcommandSetting = @This().Setting;
 
-const SubcommandArgd = ArgId(.{});
+const SubcommandArgId = ArgId(.{});
 
-pub const Setting = union(SubcommandArgd) {
+pub const Setting = union(SubcommandArgId) {
     generate: Generate,
     @"init-default": Initialize,
     @"init-config": Initialize,
@@ -33,7 +33,7 @@ fn deinitSetting(self: *Setting, allocator: std.mem.Allocator) void {
     }
 }
 
-fn activeTag(self: *const Setting) SubcommandArgd {
+fn activeTag(self: *const Setting) SubcommandArgId {
     return std.meta.activeTag(self.*);
 }
 
@@ -53,12 +53,21 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
         pub const description = arg_view.description;
         pub const value = arg_view.value;
         pub const fromString = enumFromString;
+        pub const configTagName = enumIntoConfigTagName;
     };
 }
 
-fn enumFromString(s: ?core.types.Symbol) ?SubcommandArgd {
+fn enumFromString(s: ?core.types.Symbol) ?SubcommandArgId {
     if (s == null) return null;
-    return std.meta.stringToEnum(SubcommandArgd, s.?);
+    return std.meta.stringToEnum(SubcommandArgId, s.?);
+}
+
+fn enumIntoConfigTagName(self: SubcommandArgId) core.types.Symbol {
+    const tag: core.types.Symbol = switch (self) {
+        .generate => @tagName(self),
+        .@"init-default", .@"init-config" => "initialize",
+    };
+    return tag;
 }
 
 pub fn buildFromArgs(
@@ -66,7 +75,7 @@ pub fn buildFromArgs(
     allocator: std.mem.Allocator,
     scanner: *ArgScanner(std.process.Args.Iterator), 
     base_builder: *BaseSetting.Builder(std.process.Args.Iterator),
-    command: SubcommandArgd,
+    command: SubcommandArgId,
     scope: core.types.Symbol) core.settings.types.LoadResult(struct{base: BaseSetting, command: SubcommandSetting}, *const ArgHelp.Config)
 {
     const command_setting: SubcommandSetting = command: {
@@ -87,11 +96,33 @@ pub fn buildFromArgs(
                 break:command .{ .generate = setting};
             },
             .@"init-default" => {
-                unreachable;
+                var builder = Initialize.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .defaults, .stderr) catch return .{.help = &ArgHelp.init_default};
+
+                const setting = build: {    
+                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates };
+                    break:build builder.build(io, allocator, options) 
+                    catch |err| switch (err) {
+                        error.ShowCommandHelp => return .{.help = &ArgHelp.init_default},
+                        else => return .{.help = &ArgHelp.toplevel},
+                    };
+                };
+
+                break:command .{ .@"init-default" = setting};
             },
             .@"init-config" => {
-                unreachable;
-            },  
+                var builder = Initialize.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .configs, .stderr) catch return .{.help = &ArgHelp.init_config};
+
+                const setting = build: {    
+                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates };
+                    break:build builder.build(io, allocator, options) 
+                    catch |err| switch (err) {
+                        error.ShowCommandHelp => return .{.help = &ArgHelp.init_config},
+                        else => return .{.help = &ArgHelp.toplevel},
+                    };
+                };
+
+                break:command .{ .@"init-config" = setting};
+            },
         }
     };
 

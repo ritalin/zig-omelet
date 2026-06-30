@@ -39,6 +39,12 @@ fn renderTitle(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config) !vo
         .generate => {
             try HelpRenderer.Support.renderTitle(writer, ArgHelp.generate_cmd_desc);
         },
+        .init_config => {
+            try HelpRenderer.Support.renderTitle(writer, ArgHelp.init_config_cmd_desc);
+        },
+        .init_default => {
+            try HelpRenderer.Support.renderTitle(writer, ArgHelp.init_default_cmd_desc);
+        },
         else => unreachable,
     }
 }
@@ -51,6 +57,10 @@ fn renderArgs(writer: *std.Io.Writer, parent_settng: *const ArgHelp.Config, dept
         .generate => {
             try HelpRenderer.Support.renderDescriptor(writer, ArgHelp.command_args_desc, .{ .name_after_colon = true });
             try HelpRenderer.Support.renderArgs(writer, ArgHelp.GenerateCommandArgId, depth);
+        },
+        .init_config, .init_default => {
+            try HelpRenderer.Support.renderDescriptor(writer, ArgHelp.command_args_desc, .{ .name_after_colon = true });
+            try HelpRenderer.Support.renderArgs(writer, ArgHelp.InitializeCommandArgId, depth);
         },
         else => unreachable,
     }

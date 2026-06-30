@@ -12,12 +12,21 @@ const default_args = @import("../settings/default_args.zig");
 const Defaults = default_args.Defaults;
 const DufaultArg = default_args.DufaultArg;
 
-const HostGenerateArg = @import("../settings/commands/Generate.zig");
+const HostGenerate = @import("../settings/commands/Generate.zig");
+const HostInitialize = @import("../settings/commands/Initialize.zig");
 const SubcommandArgId = @import("../settings/commands/Subcommand.zig").ArgId(.{});
 
 pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator, command: SubcommandArgId, scope: Symbol) !std.MultiArrayList(config_types.Guest) {
-    const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .configs, .root = config_types.path_candidates };
-    return loadGuestInternal(io, allocator, HostGenerateArg.strategies, .stderr, options);
+    const options: core.configs.supports.FileResolveOptions = .{ .command = command.configTagName(), .scope = scope, .category = .configs, .root = config_types.path_candidates };
+    
+    switch (command) {
+        .generate => {
+            return loadGuestInternal(io, allocator, HostGenerate.strategies, .stderr, options);
+        },
+        .@"init-default", .@"init-config" => {
+            return loadGuestInternal(io, allocator, HostInitialize.strategies, .stderr, options);
+        },
+    }
 }
 
 fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy, log_style: core.Logger.LogStyle, options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) {
@@ -41,7 +50,12 @@ fn loadGuestConfigFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.Fi
     return loadGuestConfigSource(allocator, source, strategies, .stderr);
 }
 
-fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ, strategies: core.configs.types.StageStrategy, log_style: core.Logger.LogStyle) !std.MultiArrayList(config_types.Guest) {
+fn loadGuestConfigSource(
+    allocator: std.mem.Allocator, 
+    source: core.types.SymbolZ, 
+    strategies: core.configs.types.StageStrategy, 
+    log_style: core.Logger.LogStyle) !std.MultiArrayList(config_types.Guest) 
+{
     var ast = try std.zig.Ast.parse(allocator, source, .zon);
     defer ast.deinit(allocator);
     if (ast.errors.len > 0) {
@@ -72,15 +86,17 @@ fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.Symbol
 
         switch (try core.configs.supports.resolveStageKind(ident_name)) {
             .watch => {
-                try loadGuestStages(allocator, &ast, &ir, field_index, .watch, strategies, core.configs.guests.GuestWatch.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .watch, strategies, core.configs.guests.GuestWatch.ArgId(.{}), &guests);
             },
             .extract => {
-                try loadGuestStages(allocator, &ast, &ir, field_index, .extract, strategies, core.configs.guests.GuestExtract.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .extract, strategies, core.configs.guests.GuestExtract.ArgId(.{}), &guests);
             },
             .generate => {
-                try loadGuestStages(allocator, &ast, &ir, field_index, .generate, strategies, core.configs.guests.GuestGenerate.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .generate, strategies, core.configs.guests.GuestGenerate.ArgId(.{}), &guests);
             },
-            else => return error.UnsupportedGuestStage,
+            .init => {
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .init, strategies, core.configs.guests.GuestInitialze.ArgId(.{}), &guests);
+            },
         }
     }
     return guests;
@@ -88,6 +104,7 @@ fn loadGuestConfigSource(allocator: std.mem.Allocator, source: core.types.Symbol
 
 fn loadGuestStages(
     allocator: std.mem.Allocator, 
+    log_style: core.Logger.LogStyle,
     ast: *const std.zig.Ast, 
     ir: *const std.zig.Zoir, 
     parent_index: std.zig.Zoir.Node.Index, 
@@ -117,13 +134,21 @@ fn loadGuestStages(
         const index = parent_node.struct_literal.vals.at(@intCast(i));
         const stage_name = ident_name.get(ir.*);
 
+        var diag: std.zon.parse.Diagnostics = .{};
+        defer diag.deinit(allocator);
+
         const tmpl: GuestTemplate(GuestArgId) = 
             std.zon.parse.fromZoirNodeAlloc(
                 GuestTemplate(GuestArgId), 
-                allocator, ast.*, ir.*, index, null, 
+                allocator, ast.*, ir.*, index, &diag, 
                 .{}
             )
-            catch return error.InvalidConfigFile
+            catch {
+                if (log_style == .stderr) {
+                    std.log.warn("{f}", .{diag});
+                }
+                return error.InvalidConfigFile;
+            }
         ;
 
         const name = if ((std.meta.activeTag(tmpl.name) == .values) and (tmpl.name.values.len > 0)) tmpl.name.values[0] else stage_name;
@@ -134,7 +159,7 @@ fn loadGuestStages(
             .watch => .{.watch = tmpl.extra_args},
             .extract => .{.extract = tmpl.extra_args},
             .generate => .{.generate = tmpl.extra_args},
-            else => error.UnsupportedGuestStage,
+            .init => .{.init = tmpl.extra_args},
         };
 
         const guest: config_types.Guest = .{

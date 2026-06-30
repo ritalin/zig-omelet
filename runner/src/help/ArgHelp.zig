@@ -35,8 +35,13 @@ const GenerateCommandDescMap: core.settings.types.DescriptionMap = .initComptime
 });
 pub const GenerateCommandArgId = GenerateSetting.ArgId(GenerateCommandDescMap);
 
-// const InitializeSetting = @import("./commands/Initialize.zig");
-// const InitializeCommandArgId = InitializeSetting.InitArgId(ArgDescriptions);
+const InitializeSetting = @import("../settings/commands/Initialize.zig");
+const InitializeCommandDescMap: core.settings.types.DescriptionMap = .initComptime(.{
+    .{@tagName(.target_scope), DescriptionItem{.desc = "init environment scope", .value = "VALUE", .required = true}},
+    .{@tagName(.from_scope), DescriptionItem{.desc = "source environment scope (optional).", .value = "VALUE", .required = false}},
+    .{@tagName(.global), DescriptionItem{.desc = "Enable globally setting/config", .value = "", .required = false}},
+});
+pub const InitializeCommandArgId = InitializeSetting.ArgId(InitializeCommandDescMap);
 
 const PalletHelpDescMap: core.settings.types.DescriptionMap = .initComptime(.{
     .{@tagName(.help), DescriptionItem{.desc = "Show help text.", .value = "",}},  

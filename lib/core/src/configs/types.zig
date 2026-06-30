@@ -20,7 +20,7 @@ pub const ConfigCategory = enum {
 
     pub fn templateDir(self: ConfigCategory) Symbol {
         return switch (self) {
-            .defaults => "default-templates",
+            .defaults => "defaults",
             .configs, .settings => @tagName(self),
         };
     }

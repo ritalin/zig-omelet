@@ -24,7 +24,7 @@ pub const Guest = struct {
         watch: ExtraArg(core.configs.guests.GuestWatch.ArgId(.{})),
         extract: ExtraArg(core.configs.guests.GuestExtract.ArgId(.{})),
         generate: ExtraArg(core.configs.guests.GuestGenerate.ArgId(.{})),
-        init: ExtraArg(core.configs.guests.GuestInitConfig.ArgId(.{})),
+        init: ExtraArg(core.configs.guests.GuestInitialze.ArgId(.{})),
     };
 };
 

@@ -37,7 +37,7 @@ fn loadInternal(io: std.Io, allocator: std.mem.Allocator, setting: *const Settin
         handleError(err);
         return err;
     }; 
-    const guests = loader.loadGuest(io, allocator, setting.command.tag(), setting.base.scope)
+    const guests = loader.loadGuest(io, allocator, setting.command.tag(), setting.base.config_scope)
     catch |err| {
         handleError(err);
         return err;

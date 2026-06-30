@@ -8,6 +8,8 @@ const DufaultArg = @import("../settings/default_args.zig").DufaultArg;
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
 
+const default_init_scope = @import("build_options").default_init_scope;
+
 processes: []?std.process.Child,
 
 const Self = @This();
@@ -130,7 +132,7 @@ fn stitchGuestArgs(
             try writeArgs(allocator, GuestGenerateArgId, &extra_set.generate, &default_args, args);
         },
         .init => {
-            unreachable;
+            // TODO:
         },
     }
 }

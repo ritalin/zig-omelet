@@ -70,7 +70,7 @@ pub const TestStage = struct {
                     .ipc_config = .default,
                     .scope = "default",
                 },
-                .command = .{.@"init-config" = .{} },
+                .command = .{.@"init-config" = .{ .source_dir_path = "", .output_dir_path = "", .target_scope = "" } },
             },
             .heartbeat_limit = limit,
             .connection = connection,

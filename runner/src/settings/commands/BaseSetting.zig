@@ -6,6 +6,7 @@ const Endpoint = core.configs.Endpoint;
 const ArgScanner = core.settings.types.ArgScanner;
 const ArgParserPair = core.settings.types.ArgParserPair;
 
+const default_init_scope = @import("build_options").default_init_scope;
 const Defaults = @import("../default_args.zig").Defaults(std.meta.FieldEnum(BaseArgId));
 const BaseSetting = @This();
 
@@ -16,6 +17,7 @@ interactive: bool,
 endpoints: core.types.Endpoints,
 ipc_config: Endpoint.Config,
 scope: core.types.Symbol,
+config_scope: core.types.Symbol,
 
 pub fn deinit(self: *BaseSetting, io: std.Io, allocator: std.mem.Allocator) void {
     Endpoint.releaseIpcStorage(io, &self.ipc_config);
@@ -223,6 +225,7 @@ pub fn Builder(comptime ArgIterator: type) type {
                 },
                 .ipc_config = ipc_config,
                 .scope = scope,
+                .config_scope = default_init_scope, // TODO: wants to pass from CLI arg
             };
         }
     };

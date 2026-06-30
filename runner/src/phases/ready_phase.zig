@@ -178,6 +178,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
 
 fn toGnetatedMark(status: events.Event.Payload.GenerateResponse.Status) types.Symbol {
     return switch (status) {
+        .noop => "👀",
         .new_file => "✨", 
         .update_file => "✏️", 
         .generate_failed => "❌"

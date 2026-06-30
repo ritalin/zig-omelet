@@ -37,7 +37,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
 
         pub const Decls: []const clap.Param(@This()) = &.{
             .{.id = .source_dir_set, .names = .{.long = "source-dir", .short = 'i'}, .takes_value = .many},
-            .{.id = .schema_dir_set, .names = .{.long = "schema-dir"}, .takes_value = .one},
+            .{.id = .schema_dir_set, .names = .{.long = "schema-dir"}, .takes_value = .many},
             .{.id = .include_filter_set, .names = .{.long = "include-filter"}, .takes_value = .many},
             .{.id = .exclude_filter_set, .names = .{.long = "exclude-filter"}, .takes_value = .many},
             .{.id = .output_dir_path, .names = .{.long = "output-dir", .short = 'o'}, .takes_value = .one},

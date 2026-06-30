@@ -87,7 +87,7 @@ pub const GuestExtract = struct {
     }
 
     pub const DescMap = DescriptionMap.initComptime(.{
-        .{@tagName(.schema_dir_set), DescriptionItem{.desc = "Schema SQL folder", .value = "PATH"}},
+        .{@tagName(.schema_dir_set), DescriptionItem{.desc = "Schema SQL folder path", .value = "PATH"}},
     });
 };
 
@@ -107,17 +107,21 @@ pub const GuestGenerate = struct {
     }
 
     pub const DescMap = DescriptionMap.initComptime(.{
-        .{@tagName(.output_dir_path), DescriptionItem{.desc = "Output folder", .value = "PATH"}},
+        .{@tagName(.output_dir_path), DescriptionItem{.desc = "Output folder path", .value = "PATH"}},
     });
 };
 
-pub const GuestInitConfig = struct {
+pub const GuestInitialze = struct {
     pub fn ArgId(comptime descriptions: DescriptionMap) type {
         return enum {
-
+            source_dir_path,
+            output_dir_path,
+            target_scope,
 
             pub const Decls = &.{
-
+                .{.id = .source_dir_path, .names = .{.long = "source-dir"}, .takes_value = .one},
+                .{.id = .output_dir_path, .names = .{.long = "output-dir"}, .takes_value = .one},
+                .{.id = .target_scope, .names = .{.long = "target-scope"}, .takes_value = .one},
             };
 
             const desc_view = root.settings.types.ArgHelp(@This(), descriptions);
@@ -125,4 +129,10 @@ pub const GuestInitConfig = struct {
             pub const value = desc_view.value;
         };        
     }
+
+    pub const DescMap = DescriptionMap.initComptime(.{
+        .{@tagName(.source_dir_path), DescriptionItem{.desc = "Source folder path", .value = "PATH"}},
+        .{@tagName(.output_dir_path), DescriptionItem{.desc = "Output folder path", .value = "PATH"}},
+        .{@tagName(.target_scope), DescriptionItem{.desc = "Generated scope", .value = "VALUE"}},
+    });
 };

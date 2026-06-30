@@ -24,7 +24,7 @@ pub const Guest = struct {
         watch: ExtraArg(core.configs.guests.GuestWatch.ArgId(.{})),
         extract: ExtraArg(core.configs.guests.GuestExtract.ArgId(.{})),
         generate: ExtraArg(core.configs.guests.GuestGenerate.ArgId(.{})),
-        init: ExtraArg(core.configs.guests.GuestInitialze.ArgId(.{})),
+        init: ExtraArg(core.configs.guests.GuestInitialize.ArgId(.{})),
     };
 };
 
@@ -34,6 +34,6 @@ pub fn ExtraArg(comptime ArgId: type) type {
 
 pub const path_candidates: core.configs.types.ConfigFileCandidates = .{
     .current_dir = ".omelet",
-    .home_dir = ".omelet",
+    .home_dir = "omelet",
     .executable_dir = "",
 };

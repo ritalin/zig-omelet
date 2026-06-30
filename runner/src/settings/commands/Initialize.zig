@@ -105,6 +105,7 @@ pub fn Builder(comptime ArgIterator: type) type {
 
             return builder;
 
+    // TODO:
     //         var diag: clap.Diagnostic = .{};
     //         var parser = clap.streaming.Clap(InitArgId(.{}), std.process.ArgIterator){
     //             .params = InitArgId(.{}).Decls,
@@ -175,13 +176,13 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
         }
 
-        pub fn build(self: Builder(ArgIterator), io: std.Io, allocator: std.mem.Allocator, options: core.configs.supports.FileResolveOptions) !Setting {
+        pub fn build(self: Builder(ArgIterator), io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, options: core.configs.supports.FileResolveOptions) !Setting {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
             
             var builder_default: Builder(ArgIterator) = .{ .build_log_style = self.build_log_style, .category = self.category, };            
             
-            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), options)) |file| {
+            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), env, options)) |file| {
                 defer file.close(io);
 
                 const callback: Defaults.ApplyDefaultHandler = .{ 
@@ -194,7 +195,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             var has_err = false;
 
             const from_scope = self.from_scope orelse builder_default.from_scope orelse default_init_scope;
-            const source_dir_path = try core.configs.supports.resolveConfigDirPath(io, allocator, from_scope, self.category, options.root);
+            const source_dir_path = try core.configs.supports.resolveConfigDirPath(io, allocator, env, from_scope, self.category, options.root);
             if (source_dir_path == null) {
                 has_err = true;
                 if (self.build_log_style == .stderr) {
@@ -203,13 +204,13 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
 
             const output_dir_path = path: {
-                const output_root_path = global_path: {
+                const output_root_candidate = global_path: {
                     if (self.global orelse builder_default.global) |global| {
-                        if (global) break:global_path options.root.home_dir;
+                        if (global) break:global_path core.configs.supports.RootPathCandidate{.home_dir = options.root.home_dir.?};
                     }
                     break:global_path null;
                 };
-                break:path try core.configs.supports.formatConfigRootDirPath(allocator, self.category, output_root_path orelse options.root.current_dir.?);
+                break:path try core.configs.supports.formatConfigRootDirPath(io, allocator, env, self.category, output_root_candidate orelse .{.current_dir = options.root.current_dir.?});
             };
             const target_scope = self.target_scope orelse builder_default.target_scope;
             if (target_scope == null) {
@@ -273,7 +274,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = src_root_path, .home_dir = home_path};
         const options: FileResolveOptions = .{
-            .command = "intalize", .scope = "foo", .category = .configs, .root = file_candidates
+            .command = "intalize", .scope = "foo", .category = .configs, .root = file_candidates, .default_scope = default_init_scope
         };
 
         try writeAssetFile(&tmp_dir, options, defaults_source);
@@ -325,7 +326,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = src_root_path, .home_dir = home_path};
         const options: FileResolveOptions = .{
-            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates
+            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates, .default_scope = default_init_scope
         };
 
         try writeAssetFile(&tmp_dir, options, defaults_source);
@@ -375,7 +376,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = src_root_path, .home_dir = home_path};
         const options: FileResolveOptions = .{
-            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates
+            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates, .default_scope = default_init_scope
         };
         
         try writeAssetFile(&tmp_dir, options, defaults_source);
@@ -432,7 +433,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = src_root_path, .home_dir = home_path};
         const options: FileResolveOptions = .{
-            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates
+            .command = "intalize", .scope = "foo", .category = .defaults, .root = file_candidates, .default_scope = default_init_scope,
         };
         
         try writeAssetFile(&tmp_dir, options, defaults_source);

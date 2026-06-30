@@ -183,13 +183,20 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
         }
 
-        pub fn build (self: *Builder(ArgIterator), io: std.Io, allocator: std.mem.Allocator, default_scope: core.types.Symbol, options: core.configs.supports.FileResolveOptions) !BaseSetting {
+        pub fn build (
+            self: *Builder(ArgIterator), 
+            io: std.Io, 
+            allocator: std.mem.Allocator, 
+            env: *const std.process.Environ.Map, 
+            default_scope: core.types.Symbol, 
+            options: core.configs.supports.FileResolveOptions) !BaseSetting 
+        {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
             
             var builder_default: Builder(ArgIterator) = .{ .build_log_style = self.build_log_style };
 
-            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), options)) |file| {
+            if (try core.configs.supports.resolveFileCandidate(io, arena.allocator(), env, options)) |file| {
                 defer file.close(io);
 
                 const callback: Defaults.ApplyDefaultHandler = .{ .ptr = &builder_default, .handler = Builder(ArgIterator).applyDefaults };
@@ -267,7 +274,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
         const options: FileResolveOptions = .{
-            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates, .default_scope = "default"
         };
 
         try writeAssetFile(&tmp_dir, options, defaults_source);
@@ -312,7 +319,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
         const options: FileResolveOptions = .{
-            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates, .default_scope = "default"
         };
 
         try writeAssetFile(&tmp_dir, options, defaults_source);
@@ -364,7 +371,7 @@ pub const tests = struct {
 
         const file_candidates: ConfigFileCandidates = .{ .current_dir = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator), };
         const options: FileResolveOptions = .{
-            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates
+            .command = "generate", .scope = "default", .category = .defaults, .root = file_candidates, .default_scope = "default"
         };
 
         try writeAssetFile(&tmp_dir, options, defaults_source);

@@ -111,14 +111,14 @@ pub const GuestGenerate = struct {
     });
 };
 
-pub const GuestInitialze = struct {
+pub const GuestInitialize = struct {
     pub fn ArgId(comptime descriptions: DescriptionMap) type {
         return enum {
             source_dir_path,
             output_dir_path,
             target_scope,
 
-            pub const Decls = &.{
+            pub const Decls: []const clap.Param(ArgId(descriptions)) = &.{
                 .{.id = .source_dir_path, .names = .{.long = "source-dir"}, .takes_value = .one},
                 .{.id = .output_dir_path, .names = .{.long = "output-dir"}, .takes_value = .one},
                 .{.id = .target_scope, .names = .{.long = "target-scope"}, .takes_value = .one},

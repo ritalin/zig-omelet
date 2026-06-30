@@ -2,6 +2,8 @@ const std = @import("std");
 const clap = @import("clap");
 const core = @import("core");
 
+const default_init_scope = @import("build_options").default_init_scope;
+
 const ArgScanner = core.settings.types.ArgScanner;
 
 const config_types = @import("../../configs/types.zig");
@@ -72,7 +74,8 @@ fn enumIntoConfigTagName(self: SubcommandArgId) core.types.Symbol {
 
 pub fn buildFromArgs(
     io: std.Io,
-    allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator, 
+    env: *const std.process.Environ.Map,
     scanner: *ArgScanner(std.process.Args.Iterator), 
     base_builder: *BaseSetting.Builder(std.process.Args.Iterator),
     command: SubcommandArgId,
@@ -81,12 +84,25 @@ pub fn buildFromArgs(
     const command_setting: SubcommandSetting = command: {
         switch (command) {
             .generate => {
-                var builder = Generate.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .stderr) catch return .{.help = &ArgHelp.generate};
+                var builder = 
+                    Generate.Builder(std.process.Args.Iterator).fromArgs(
+                        allocator, 
+                        scanner, 
+                        base_builder, 
+                        .stderr) 
+                    catch return .{.help = &ArgHelp.generate}
+                ;
                 defer builder.deinit(allocator);
 
                 const setting = build: {
-                    const options: core.configs.supports.FileResolveOptions = .{ .command = @tagName(command), .scope = scope, .category = .defaults, .root = config_types.path_candidates };
-                    break:build builder.build(io, allocator, options) 
+                    const options: core.configs.supports.FileResolveOptions = .{ 
+                        .command = @tagName(command), 
+                        .scope = scope, 
+                        .category = .defaults, 
+                        .root = config_types.path_candidates,
+                        .default_scope = default_init_scope,
+                    };
+                    break:build builder.build(io, allocator, env, options) 
                     catch |err| switch (err) {
                         error.ShowCommandHelp => return .{.help = &ArgHelp.generate},
                         else => return .{.help = &ArgHelp.toplevel},
@@ -99,8 +115,8 @@ pub fn buildFromArgs(
                 var builder = Initialize.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .defaults, .stderr) catch return .{.help = &ArgHelp.init_default};
 
                 const setting = build: {    
-                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates };
-                    break:build builder.build(io, allocator, options) 
+                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates, .default_scope = default_init_scope };
+                    break:build builder.build(io, allocator, env, options) 
                     catch |err| switch (err) {
                         error.ShowCommandHelp => return .{.help = &ArgHelp.init_default},
                         else => return .{.help = &ArgHelp.toplevel},
@@ -113,8 +129,8 @@ pub fn buildFromArgs(
                 var builder = Initialize.Builder(std.process.Args.Iterator).fromArgs(allocator, scanner, base_builder, .configs, .stderr) catch return .{.help = &ArgHelp.init_config};
 
                 const setting = build: {    
-                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates };
-                    break:build builder.build(io, allocator, options) 
+                    const options: core.configs.supports.FileResolveOptions = .{ .command = "initalize", .scope = scope, .category = .defaults, .root = config_types.path_candidates, .default_scope = default_init_scope };
+                    break:build builder.build(io, allocator, env, options) 
                     catch |err| switch (err) {
                         error.ShowCommandHelp => return .{.help = &ArgHelp.init_config},
                         else => return .{.help = &ArgHelp.toplevel},
@@ -127,8 +143,8 @@ pub fn buildFromArgs(
     };
 
     const base_setting = build: {
-        const options: core.configs.supports.FileResolveOptions = .{ .command = "base", .scope = scope, .category = .defaults, .root = config_types.path_candidates };
-        break:build base_builder.build(io, allocator, scope, options) catch return .{ .help = &ArgHelp.toplevel };
+        const options: core.configs.supports.FileResolveOptions = .{ .command = "base", .scope = scope, .category = .defaults, .root = config_types.path_candidates, .default_scope = default_init_scope };
+        break:build base_builder.build(io, allocator, env, scope, options) catch return .{ .help = &ArgHelp.toplevel };
     };
 
     return .{ .success = .{.base = base_setting, .command = command_setting} };

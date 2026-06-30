@@ -69,6 +69,7 @@ pub const TestStage = struct {
                     .endpoints = ep,
                     .ipc_config = .default,
                     .scope = "default",
+                    .config_scope = "default",
                 },
                 .command = .{.@"init-config" = .{ .source_dir_path = "", .output_dir_path = "", .target_scope = "" } },
             },

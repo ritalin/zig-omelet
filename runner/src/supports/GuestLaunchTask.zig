@@ -7,6 +7,7 @@ const ExtraArg = @import("../configs/types.zig").ExtraArg;
 const DufaultArg = @import("../settings/default_args.zig").DufaultArg;
 
 const GenerateSetting = @import("../settings/commands/Generate.zig");
+const InitialzeSetting = @import("../settings/commands/Initialize.zig");
 
 const default_init_scope = @import("build_options").default_init_scope;
 
@@ -99,6 +100,7 @@ const GuestBaseArgId = core.configs.guests.GuestBaseConfig.ArgId(.{});
 const GuestWatchArgId = core.configs.guests.GuestWatch.ArgId(.{});
 const GuestExtractArgId = core.configs.guests.GuestExtract.ArgId(.{});
 const GuestGenerateArgId = core.configs.guests.GuestGenerate.ArgId(.{});
+const GuestInitializeArgId = core.configs.guests.GuestInitialize.ArgId(.{});
 
 fn stitchGuestArgs(
     allocator: std.mem.Allocator,
@@ -132,7 +134,17 @@ fn stitchGuestArgs(
             try writeArgs(allocator, GuestGenerateArgId, &extra_set.generate, &default_args, args);
         },
         .init => {
-            // TODO:
+            const setting: InitialzeSetting = switch (command_setting.*) {
+                .@"init-default" => |setting| setting,
+                .@"init-config" => |setting| setting,
+                else => unreachable,
+            };
+            const default_args: ExtraArg(GuestInitializeArgId) = .{
+                .source_dir_path = .{.values = &.{setting.source_dir_path}},
+                .output_dir_path = .{.values = &.{setting.output_dir_path}},
+                .target_scope = .{.values = &.{setting.target_scope}},
+            };
+            try writeArgs(allocator, GuestInitializeArgId, &extra_set.init, &default_args, args);
         },
     }
 }
@@ -204,6 +216,7 @@ pub const tests = struct {
                 .push_pull = "ipc:///path/to/push-pull",
             },
             .ipc_config = .default,
+            .config_scope = "default",
         };
 
         var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
@@ -252,7 +265,7 @@ pub const tests = struct {
         try std.testing.expectEqualStrings("--watch", args.items[8]);
     }
 
-    test "write guest-watch setting#1 (all explicit extra)" {
+    test "write guest-watch setting#2 (all explicit extra)" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -306,7 +319,7 @@ pub const tests = struct {
         try std.testing.expectEqualStrings("--schema-dir=/path/to/setting-schema", args.items[0]);
     }
 
-    test "write guest-extract setting#1 (all explicit extra)" {
+    test "write guest-extract setting#2 (all explicit extra)" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -354,7 +367,7 @@ pub const tests = struct {
         try std.testing.expectEqualStrings("--output-dir=/path/to/setting-out", args.items[0]);
     }
 
-    test "write guest-generate setting#1 (all explicit extra)" {
+    test "write guest-generate setting#2 (all explicit extra)" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -378,5 +391,56 @@ pub const tests = struct {
 
         try std.testing.expectEqual(1, args.items.len);
         try std.testing.expectEqualStrings("--output-dir=/path/to/explicit-out", args.items[0]);
+    }
+
+    test "write guest-initialize setting#1 (all default extra)" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const setting: InitialzeSetting = .{
+            .source_dir_path = "/path/to/setting-source" ,
+            .output_dir_path = "/path/to/setting-out",
+            .target_scope = "test",
+        };
+        const extra_args: ExtraArg(GuestInitializeArgId) = .{};
+
+        var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
+        defer args.deinit(allocator);
+
+        try stitchGuestArgs(allocator, .init, false, &.{.init = extra_args}, &.{.@"init-default" = setting}, &args);
+
+        try std.testing.expectEqual(3, args.items.len);
+        try std.testing.expectEqualStrings("--source-dir=/path/to/setting-source", args.items[0]);
+        try std.testing.expectEqualStrings("--output-dir=/path/to/setting-out", args.items[1]);
+        try std.testing.expectEqualStrings("--target-scope=test", args.items[2]);
+    }
+
+    test "write guest-initialize setting#2 (all explicit extra)" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        const setting: InitialzeSetting = .{
+            .source_dir_path = "/path/to/setting-source",
+            .output_dir_path = "/path/to/setting-out",
+            .target_scope = "test",
+        };
+
+        const extra_args: ExtraArg(GuestInitializeArgId) = .{
+            .source_dir_path = .{.values = &[_]core.types.FilePath{ "/path/to/explicit-source" }},
+            .output_dir_path = .{.values = &[_]core.types.FilePath{ "/path/to/explicit-out" }},
+            .target_scope = .{.values = &[_]core.types.FilePath{ "baz" }},
+        };
+
+        var args: std.ArrayListUnmanaged(core.types.Symbol) = .empty;
+        defer args.deinit(allocator);
+
+        try stitchGuestArgs(allocator, .init, false, &.{.init = extra_args}, &.{.@"init-default" = setting}, &args);
+
+        try std.testing.expectEqual(3, args.items.len);
+        try std.testing.expectEqualStrings("--source-dir=/path/to/explicit-source", args.items[0]);
+        try std.testing.expectEqualStrings("--output-dir=/path/to/explicit-out", args.items[1]);
+        try std.testing.expectEqualStrings("--target-scope=baz", args.items[2]);
     }
 };

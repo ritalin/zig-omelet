@@ -32,20 +32,19 @@ pub const FileResolveOptions = struct {
     scope: Symbol, 
     category: ConfigCategory,
     root: ConfigFileCandidates,
+    default_scope: Symbol,
 };
 
-pub fn resolveFileCandidate(io: std.Io, allocator: std.mem.Allocator, options: FileResolveOptions) !?std.Io.File {
-    return try resolveFileCandidateInternal(io, allocator, options.command, options.root, options.scope, options.category) orelse {
-        return try resolveFileCandidateInternal(io, allocator, options.command, options.root, "default", options.category);
+pub fn resolveFileCandidate(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, options: FileResolveOptions) !?std.Io.File {
+    return try resolveFileCandidateInternal(io, allocator, env, options.command, options.root, options.scope, options.category) orelse {
+        if (std.mem.eql(u8, options.scope, options.default_scope)) return null;
+        return try resolveFileCandidateInternal(io, allocator, env, options.command, options.root, options.default_scope, options.category);
     };
 }
 
-fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, command: Symbol, candidates: ConfigFileCandidates, scope: Symbol, category: ConfigCategory) !?std.Io.File {
+fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, command: Symbol, candidates: ConfigFileCandidates, scope: Symbol, category: ConfigCategory) !?std.Io.File {
     const file_name = try std.fmt.allocPrint(allocator, "{s}.zon", .{command});
     defer allocator.free(file_name);
-
-    var env: std.process.Environ.Map = .init(allocator);
-    defer env.deinit();
 
     path: {
         if (candidates.current_dir) |dir_path| {
@@ -60,7 +59,7 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, comman
     }
     path: {
         if (candidates.home_dir) |dir_path| {
-            var dir_ = try known_folders.open(io, allocator, &env, .home, .{});
+            var dir_ = try known_folders.open(io, allocator, env, .local_configuration, .{});
             if (dir_) |*dir| {
                 defer dir.close(io);
 
@@ -75,14 +74,12 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, comman
         }
     }
 
-    if (! std.mem.eql(u8, scope, "default")) return null;
-
     path: {
         if (candidates.executable_dir) |dir_path| {
             const exe_dir_path = try std.process.executableDirPathAlloc(io, allocator);
             defer allocator.free(exe_dir_path);
 
-            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, "..", dir_path, category.templateDir(), file_name});
+            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, ".", dir_path, category.templateDir(), file_name});
             defer allocator.free(path_abs);
 
             return std.Io.Dir.openFileAbsolute(io, path_abs, .{})
@@ -96,40 +93,33 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, comman
     return null;
 }
 
-pub fn resolveConfigDirPath(io: std.Io, allocator: std.mem.Allocator, scope: Symbol, category: ConfigCategory, candidates: ConfigFileCandidates) !?FilePath {
+pub fn resolveConfigDirPath(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, scope: Symbol, category: ConfigCategory, candidates: ConfigFileCandidates) !?FilePath {
     path: {
         if (candidates.current_dir) |dir_path| {
             const path = try std.fs.path.join(allocator, &.{dir_path, category.destPath(), scope});
-            errdefer allocator.free(path);
+            defer allocator.free(path);
 
-            const config_dir = std.Io.Dir.cwd().openDir(io, path, .{}) 
+            return std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) 
             catch |err| switch (err) {
                 error.FileNotFound => break:path,
                 else => return err,
             };
-            defer config_dir.close(io);
-            return path;
         }
     }
     path: {
         if (candidates.home_dir) |dir_path| {
-            var env: std.process.Environ.Map = .init(allocator);
-            errdefer env.deinit();
-
-            const dir_ = try known_folders.open(io, allocator, &env, .home, .{});
+            const dir_ = try known_folders.open(io, allocator, env, .local_configuration, .{});
             if (dir_) |dir| {
                 defer dir.close(io);
 
                 const path = try std.fs.path.join(allocator, &.{dir_path, category.destPath(), scope});
                 defer allocator.free(path);
 
-                const config_dir = dir.openDir(io, path, .{}) 
+                return dir.realPathFileAlloc(io, path, allocator) 
                 catch |err| switch (err) {
                     error.FileNotFound => break:path,
                     else => return err,
                 };
-                defer config_dir.close(io);
-                return path;
             }
         }
     }
@@ -138,8 +128,8 @@ pub fn resolveConfigDirPath(io: std.Io, allocator: std.mem.Allocator, scope: Sym
             const exe_dir_path = try std.process.executableDirPathAlloc(io, allocator);
             defer allocator.free(exe_dir_path);
 
-            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, "..", dir_path, category.templateDir()});
-            defer allocator.free(path_abs);
+            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, dir_path, category.templateDir()});
+            errdefer allocator.free(path_abs);
 
             const config_dir = std.Io.Dir.openDirAbsolute(io, path_abs, .{})
             catch |err| switch (err) {
@@ -154,7 +144,32 @@ pub fn resolveConfigDirPath(io: std.Io, allocator: std.mem.Allocator, scope: Sym
     return null;
 }
 
-pub fn formatConfigRootDirPath(allocator: std.mem.Allocator, category: ConfigCategory, root_path: FilePath) !FilePath {
-    const path_alt = std.fs.path.fmtJoin(&.{root_path, category.destPath()});
-    return std.fmt.allocPrint(allocator, "{f}", .{path_alt});
+pub const RootPathCandidate = union(enum) {
+    current_dir: FilePath, 
+    home_dir: FilePath, 
+    executable_dir: FilePath,
+};
+
+pub fn formatConfigRootDirPath(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, category: ConfigCategory, candidates: RootPathCandidate) !FilePath {
+    switch (candidates) {
+        .current_dir => |dir_path| {
+            const root_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+            defer allocator.free(root_path);
+            return std.fs.path.join(allocator, &.{root_path, dir_path, category.destPath()});
+        },
+        .home_dir => |dir_path| {
+            const root_path = 
+                try known_folders.getPath(io, allocator, env, .local_configuration)
+                orelse return formatConfigRootDirPath(io, allocator, env, category, .{.current_dir = dir_path})
+            ;
+            defer allocator.free(root_path);
+            return std.fs.path.join(allocator, &.{root_path, dir_path, category.destPath()});
+        },
+        .executable_dir => |dir_path| {
+            const root_path = try std.process.executableDirPathAlloc(io, allocator);
+            defer allocator.free(root_path);
+            return std.fs.path.join(allocator, &.{root_path, dir_path, category.destPath()});
+        },
+    }
+
 }

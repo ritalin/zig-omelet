@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("core");
+const default_init_scope = @import("build_options").default_init_scope;
 
 const Symbol = core.types.Symbol;
 const FilePath = core.types.FilePath;
@@ -16,21 +17,40 @@ const HostGenerate = @import("../settings/commands/Generate.zig");
 const HostInitialize = @import("../settings/commands/Initialize.zig");
 const SubcommandArgId = @import("../settings/commands/Subcommand.zig").ArgId(.{});
 
-pub fn loadGuest(io: std.Io, allocator: std.mem.Allocator, command: SubcommandArgId, scope: Symbol) !std.MultiArrayList(config_types.Guest) {
-    const options: core.configs.supports.FileResolveOptions = .{ .command = command.configTagName(), .scope = scope, .category = .configs, .root = config_types.path_candidates };
+pub fn loadGuest(
+    io: std.Io, 
+    allocator: std.mem.Allocator, 
+    env: *const std.process.Environ.Map, 
+    command: SubcommandArgId, 
+    scope: Symbol) !std.MultiArrayList(config_types.Guest) 
+{
+    const options: core.configs.supports.FileResolveOptions = .{ 
+        .command = command.configTagName(), 
+        .scope = scope, 
+        .category = .configs, 
+        .root = config_types.path_candidates,
+        .default_scope = default_init_scope,
+    };
     
     switch (command) {
         .generate => {
-            return loadGuestInternal(io, allocator, HostGenerate.strategies, .stderr, options);
+            return loadGuestInternal(io, allocator, env, HostGenerate.strategies, .stderr, options);
         },
         .@"init-default", .@"init-config" => {
-            return loadGuestInternal(io, allocator, HostInitialize.strategies, .stderr, options);
+            return loadGuestInternal(io, allocator, env, HostInitialize.strategies, .stderr, options);
         },
     }
 }
 
-fn loadGuestInternal(io: std.Io, allocator: std.mem.Allocator, strategies: core.configs.types.StageStrategy, log_style: core.Logger.LogStyle, options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) {
-    const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse {
+fn loadGuestInternal(
+    io: std.Io, 
+    allocator: std.mem.Allocator, 
+    env: *const std.process.Environ.Map, 
+    strategies: core.configs.types.StageStrategy, 
+    log_style: core.Logger.LogStyle, 
+    options: core.configs.supports.FileResolveOptions) !std.MultiArrayList(config_types.Guest) 
+{
+    const file = try core.configs.supports.resolveFileCandidate(io, allocator, env, options) orelse {
         if (log_style == .stderr) {
             std.log.err("Scope is not found (scope: {s}).", .{options.scope});
         }
@@ -95,7 +115,7 @@ fn loadGuestConfigSource(
                 try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .generate, strategies, core.configs.guests.GuestGenerate.ArgId(.{}), &guests);
             },
             .init => {
-                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .init, strategies, core.configs.guests.GuestInitialze.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .init, strategies, core.configs.guests.GuestInitialize.ArgId(.{}), &guests);
             },
         }
     }
@@ -134,8 +154,9 @@ fn loadGuestStages(
         const index = parent_node.struct_literal.vals.at(@intCast(i));
         const stage_name = ident_name.get(ir.*);
 
+        // CAUTION: DO NOT call Diagnostics.deinit().
+        // This is also release AST and ZOIR.
         var diag: std.zon.parse.Diagnostics = .{};
-        defer diag.deinit(allocator);
 
         const tmpl: GuestTemplate(GuestArgId) = 
             std.zon.parse.fromZoirNodeAlloc(
@@ -182,9 +203,15 @@ fn GuestTemplate(comptime ArgId: type) type {
     };
 }
 
-pub fn loadHost(io: std.Io, allocator: std.mem.Allocator, scope: Symbol) !config_types.Host {
-    const options: core.configs.supports.FileResolveOptions = .{ .command = "runner", .scope = scope, .category = .configs, .root = config_types.path_candidates };
-    const file = try core.configs.supports.resolveFileCandidate(io, allocator, options) orelse return hostConfigFromTemplate(.{});
+pub fn loadHost(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, scope: Symbol) !config_types.Host {
+    const options: core.configs.supports.FileResolveOptions = .{ 
+        .command = "runner", 
+        .scope = scope, 
+        .category = .configs, 
+        .root = config_types.path_candidates,
+        .default_scope = default_init_scope,
+    };
+    const file = try core.configs.supports.resolveFileCandidate(io, allocator, env, options) orelse return hostConfigFromTemplate(.{});
     defer file.close(io);
 
     var buffer: [1024]u8 = undefined;

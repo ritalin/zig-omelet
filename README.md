@@ -202,3 +202,9 @@ Source/Schema file encoding is supported UTF8 only.
 
 * When arguments for Table function contain correlective column, select list will be nullable.
 * Currently, an alias of `RETURNING` clause is not supported.
+
+## Credits
+
+- DuckDB: https://duckdb.org/
+- magic_enum: https://github.com/Neargye/magic_enum
+

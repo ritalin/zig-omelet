@@ -11,7 +11,13 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  prepare:
+    uses: ./.github/workflows/prepare.yml
+         
   build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+
     runs-on: ubuntu-latest
 
     permissions:

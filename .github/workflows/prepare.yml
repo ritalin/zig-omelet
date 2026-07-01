@@ -1,0 +1,36 @@
+on:
+  workflow_call:
+    outputs:
+      skip:
+        value: ${{ jobs.prepare.outputs.skip }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether tests can be skipped
+        id: check
+        shell: bash
+        run: |
+          SKIP=false
+          if [[ "${{ github.event_name }}" == "pull_request" ]] &&
+            [[ "${{ github.head_ref }}" == release/* ]]; then
+
+            files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+            if [[ "$files" == "build.zig.zon" ]]; then
+              SKIP=true
+            fi
+          fi
+
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP"

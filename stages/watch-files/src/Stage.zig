@@ -171,7 +171,7 @@ test "test stage" {
 }
 
 pub const tests = struct {
-    const test_support = core.test_support;
+    const test_support = core.test_supports;
     const Connecion = core.sockets.Connection.Client("test");
     const Dispatcher = core.sockets.EventDispatcher.Sized(8);
 
@@ -202,8 +202,9 @@ pub const tests = struct {
         const file_path = try tmp_dir.dir.realPathFileAlloc(io, "foo.sql", allocator);
         defer allocator.free(file_path);
 
-        const ep = try test_support.createEndpoint(tmp_dir.dir);
-        defer test_support.releaseEndpoint(ep);
+        var ep_config = try test_support.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try core.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer test_support.releaseEndpoint(io, &ep, &ep_config);
 
         var filter_builder: PathMatcher.Builder = .init;
         var filter = try filter_builder.build(allocator);
@@ -281,8 +282,9 @@ pub const tests = struct {
         const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
         defer allocator.free(file2_path);
 
-        const ep = try test_support.createEndpoint(tmp_dir.dir);
-        defer test_support.releaseEndpoint(ep);
+        var ep_config = try test_support.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try core.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer test_support.releaseEndpoint(io, &ep, &ep_config);
 
         var filter_builder: PathMatcher.Builder = .init;
         var filter = try filter_builder.build(allocator);
@@ -320,7 +322,6 @@ pub const tests = struct {
                 .path = file1_path,
                 .dialect = setting.default_dialect,
                 .hash = "dummy",
-                .item_count = 1,
             },
             .{
                 .category = .source,
@@ -328,7 +329,6 @@ pub const tests = struct {
                 .path = file2_path,
                 .dialect = setting.default_dialect,
                 .hash = "dummy",
-                .item_count = 1,
             },
         };
 
@@ -397,8 +397,9 @@ pub const tests = struct {
         const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
         defer allocator.free(file2_path);
 
-        const ep = try test_support.createEndpoint(tmp_dir.dir);
-        defer test_support.releaseEndpoint(ep);
+        var ep_config = try test_support.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try core.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer test_support.releaseEndpoint(io, &ep, &ep_config);
 
         var filter_builder: PathMatcher.Builder = .init;
         defer filter_builder.deinit(allocator);
@@ -435,12 +436,11 @@ pub const tests = struct {
         try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
 
         const expect: events.Event.Payload.SourcePath = .{
-                .category = .source,
+            .category = .source,
             .name = "y/z/foo-bar",
             .path = file2_path,
             .dialect = setting.default_dialect,
             .hash = "dummy",
-            .item_count = 1,
         };
 
         channel: {
@@ -490,8 +490,9 @@ pub const tests = struct {
         const file2_path = try base_dir.realPathFileAlloc(io, "foo-bar.sql", allocator);
         defer allocator.free(file2_path);
 
-        const ep = try test_support.createEndpoint(tmp_dir.dir);
-        defer test_support.releaseEndpoint(ep);
+        var ep_config = try test_support.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try core.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer test_support.releaseEndpoint(io, &ep, &ep_config);
 
         var filter_builder: PathMatcher.Builder = .init;
         defer filter_builder.deinit(allocator);
@@ -528,12 +529,11 @@ pub const tests = struct {
         try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
 
         const expect: events.Event.Payload.SourcePath = .{
-                .category = .source,
+            .category = .source,
             .name = "y/z/foo",
             .path = file1_path,
             .dialect = setting.default_dialect,
             .hash = "dummy",
-            .item_count = 1,
         };
 
         channel: {
@@ -581,8 +581,9 @@ pub const tests = struct {
         const file_path = try tmp_dir.dir.realPathFileAlloc(io, "foo.sqlite.sql", allocator);
         defer allocator.free(file_path);
 
-        const ep = try test_support.createEndpoint(tmp_dir.dir);
-        defer test_support.releaseEndpoint(ep);
+        var ep_config = try test_support.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try core.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer test_support.releaseEndpoint(io, &ep, &ep_config);
 
         var filter_builder: PathMatcher.Builder = .init;
         var filter = try filter_builder.build(allocator);
@@ -614,12 +615,11 @@ pub const tests = struct {
         try std.testing.expectEqual(2, stage.dispatcher.queue.send_queue.len);
 
         const expect: events.Event.Payload.SourcePath = .{
-                .category = .source,
+            .category = .source,
             .name = "foo",
             .path = file_path,
             .dialect = "sqlite",
             .hash = "dummy",
-            .item_count = 1,
         };
         
         channel: {

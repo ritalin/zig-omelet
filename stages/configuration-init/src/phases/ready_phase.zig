@@ -200,7 +200,7 @@ test "configuration-init test" {
 }
 
 pub const tests = struct {
-    const source_asset_dir_path = @import("test_optons").source_asset_dir;
+    const source_asset_dir_path = @import("test_options").source_asset_dir;
 
     fn collectPathSetInternal(io: std.Io, allocator: std.mem.Allocator, dir: std.Io.Dir, sub_path: []const u8, visited: *std.BufSet, path_set: *std.BufSet) !void {
         const sub_path_abs = try dir.realPathFileAlloc(io, sub_path, allocator);

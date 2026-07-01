@@ -4,7 +4,7 @@ const core = @import("core");
 const Setting = @import("./Setting.zig");
 const Stage = @import("./Stage.zig");
 
-
+const app_context = @import("build_options").app_context;
 const renderHelp = @import("./help/rendering.zig").render;
 
 pub const std_options: std.Options = .{
@@ -34,5 +34,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "test main" {
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
     std.testing.refAllDecls(@This());
 }

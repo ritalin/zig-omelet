@@ -3,6 +3,7 @@ const core = @import("core");
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
+const app_context = @import("build_options").app_context;
 const renderHelp = @import("./help/rendering.zig").render;
 
 pub const std_options: std.Options = .{
@@ -12,7 +13,6 @@ pub const std_options: std.Options = .{
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    // TODO:
     var setting = switch (Setting.loadFromArgs(allocator, init.minimal.args)) {
         .help => |help| {
             try renderHelp(help);
@@ -21,23 +21,6 @@ pub fn main(init: std.process.Init) !void {
         .success => |setting| setting,
     };
     defer setting.deinit(allocator);
-
-    // TODO:
-    // const setting: Setting = .{
-    //     .log_level = .debug,
-    //     // .log_style = .{.integrated = .batch},
-    //     .log_style = .stderr,
-    //     .no_color = false,
-    //     .endpoints = .{
-    //         .req_rep = "ipc:///tmp/omelet/default/req_rep.sock",
-    //         .pub_sub = "ipc:///tmp/omelet/default/pub_sub.sock",
-    //         .push_pull = "ipc:///tmp/omelet/default/push_pull.sock",
-    //     },
-    //     .scope = "default",
-    //     .source_dir_path = "/Users/tamurakazuhiko/work/test/ziglang/_showcase/zig-omelet/runner/.omelet/configs/default",
-    //     .output_dir_path = "/Users/tamurakazuhiko/work/test/ziglang/_showcase/zig-omelet/runner/.omelet/configs",
-    //     .target_scope = "dummy",
-    // };
 
     core.Logger.filterWith(setting.log_level);
     
@@ -50,5 +33,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "All test" {
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
     std.testing.refAllDecls(@This());
 }

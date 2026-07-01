@@ -5,7 +5,7 @@ const Setting = @import("./settings/Setting.zig");
 const Config = @import("./configs/Config.zig");
 const GuestLaunchTask = @import("./supports/GuestLaunchTask.zig");
 
-const exe_prefix = @import("build_options").exe_prefix;
+const app_context = @import("build_options").app_context;
 
 const renderToStderr = @import("./help/rendering.zig").renderToStderr;
 
@@ -63,11 +63,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "main" {
-    // TODO:
-    // std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(@import("./phases/boot_phase.zig"));
-    std.testing.refAllDecls(@import("./phases/terminate_phase.zig"));
-    std.testing.refAllDecls(@import("./configs/config_loader.zig"));
-    std.testing.refAllDecls(@import("./settings/default_args.zig"));
-    std.testing.refAllDecls(@import("./supports/GuestLaunchTask.zig"));
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
+    std.testing.refAllDecls(@This());
 }

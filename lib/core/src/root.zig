@@ -48,6 +48,11 @@ pub const log_supports = @import("./supports/log_support.zig");
 pub const file_supports = @import("./supports/file_support.zig");
 
 test "All tests" {
+    if (@import("test_options").run_as_workspace) {
+        const mod_context_name = @import("test_options").mod_context_name;
+        std.debug.print(" in `Test/{s}` ", .{mod_context_name});
+    }
+
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(sockets);
     std.testing.refAllDecls(settings);

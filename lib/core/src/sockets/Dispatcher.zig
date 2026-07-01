@@ -331,11 +331,15 @@ pub const tests = struct {
     }
 
     test "pull event by PULL" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
@@ -367,11 +371,15 @@ pub const tests = struct {
     }
 
     test "pull event by client worker PULL" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var conn = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer conn.deinit();
@@ -413,11 +421,15 @@ pub const tests = struct {
     }
 
     test "receive event by REP" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();
@@ -449,11 +461,15 @@ pub const tests = struct {
     }
 
     test "receive event by SUB" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer host.deinit();
@@ -490,11 +506,15 @@ pub const tests = struct {
     }
 
     test "Host/Guest communication" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, 4, ep);
         // var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
@@ -535,11 +555,15 @@ pub const tests = struct {
     }
 
     test "single iteration" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
         var conn = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer conn.deinit();

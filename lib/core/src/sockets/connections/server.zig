@@ -169,13 +169,17 @@ pub const tests = struct {
     const supports = @import("../../supports/test_support.zig");
 
     test "start connection" {
+        const io = std.testing.io;
+        const allocator = std.testing.allocator;
+
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
 
-        const ep = try supports.createEndpoint(tmp_dir, .{});
-        defer supports.releaseEndpoint(ep);
+        var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
+        var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
+        defer supports.releaseEndpoint(io, &ep, &ep_config);
 
-        var conn = try Server("runner").create(std.testing.io, std.testing.allocator, 1, ep);
+        var conn = try Server("runner").create(io, allocator, 1, ep);
         defer conn.deinit();
 
         try conn.bind();

@@ -92,15 +92,18 @@ pub const tests = struct {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
-        const tmpDIr: std.testing.TmpDir = try test_support.createTmpDir();
-        const host_ep: types.Endpoints = try test_support.createEndpoint(tmpDIr, .{});
-        defer test_support.releaseEndpoint(host_ep);
+        const tmpDir: std.testing.TmpDir = try test_support.createTmpDir();
+        var host_ep_config: core.configs.Endpoint.Config = try test_support.testEndpointConfig(io, &tmpDir, .{});
+        var host_ep = try core.configs.Endpoint.runtimeIpc(allocator, host_ep_config);
+        defer test_support.releaseEndpoint(io, &host_ep, &host_ep_config);
 
-        const guest_ep1: types.Endpoints = try test_support.createEndpoint(tmpDIr, .{.worker_endpoint =  "inproc://guest-worker1"});
-        defer test_support.releaseEndpoint(guest_ep1);
+        var guest_ep_config1: core.configs.Endpoint.Config = try test_support.testEndpointConfig(io, &tmpDir, .{.worker_endpoint = "inproc://guest-worker1"});
+        var guest_ep1 = try core.configs.Endpoint.runtimeIpc(allocator, guest_ep_config1);
+        defer test_support.releaseEndpoint(io, &guest_ep1, &guest_ep_config1);
 
-        const guest_ep2: types.Endpoints = try test_support.createEndpoint(tmpDIr, .{.worker_endpoint =  "inproc://guest-worker2"});
-        defer test_support.releaseEndpoint(guest_ep2);
+        var guest_ep_config2: core.configs.Endpoint.Config = try test_support.testEndpointConfig(io, &tmpDir, .{.worker_endpoint = "inproc://guest-worker2"});
+        var guest_ep2 = try core.configs.Endpoint.runtimeIpc(allocator, guest_ep_config2);
+        defer test_support.releaseEndpoint(io, &guest_ep2, &guest_ep_config2);
 
         defer test_support.cleanup();
 

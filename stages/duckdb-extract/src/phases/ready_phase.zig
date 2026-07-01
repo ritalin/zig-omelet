@@ -84,13 +84,15 @@ pub const tests = struct {
         connection: *GuestStage.Connection,
         stage: GuestStage,
         src_dir: std.testing.TmpDir,
+        ep_config: core.configs.Endpoint.Config,
 
         pub fn init(io: std.Io, allocator: std.mem.Allocator) !WorkerTestBed {
-            const src_dir: std.testing.TmpDir = try core.test_support.createTmpDir();
+            const src_dir: std.testing.TmpDir = try core.test_supports.createTmpDir();
+            const ep_config = try core.test_supports.testEndpointConfig(io, &src_dir, .{});
 
             const setting = try allocator.create(Setting);
             setting.* = .{
-                .endpoints = try core.test_support.createEndpoint(src_dir, .{}),
+                .endpoints = try core.configs.Endpoint.runtimeIpc(allocator, ep_config),
                 .log_level = .info,
                 .log_style = .discard,
                 .no_color = false,
@@ -109,15 +111,16 @@ pub const tests = struct {
                 .connection = connection,
                 .stage = stage,
                 .src_dir = src_dir,
+                .ep_config = ep_config,
             };
         }
 
-        pub fn deinit(self: *WorkerTestBed, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *WorkerTestBed, io: std.Io, allocator: std.mem.Allocator) void {
             self.stage.deinit();
             self.connection.deinit();
             allocator.destroy(self.connection);
 
-            core.test_support.releaseEndpoint(self.setting.endpoints);
+            core.test_supports.releaseEndpoint(io, &self.setting.endpoints, &self.ep_config);
             allocator.destroy(self.setting);
             self.src_dir.cleanup();
 
@@ -144,7 +147,6 @@ pub const tests = struct {
                 .dialect = desc.dialect,
                 .path = path_abs,
                 .hash = "deadbeaf",
-                .item_count = 1,
             };
             
             return .{
@@ -251,7 +253,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
         var entry = try test_bed.postTestEvent(
@@ -281,7 +283,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -312,7 +314,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc_0: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
         const desc_1: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 1};
@@ -363,7 +365,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc_0: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
         const desc_1: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 1};
@@ -404,7 +406,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -428,7 +430,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -452,7 +454,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -479,7 +481,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .source, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -516,7 +518,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -546,7 +548,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -577,7 +579,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
         const desc_1: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 1};
@@ -616,7 +618,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
         const desc_1: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 1};
@@ -656,7 +658,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -680,7 +682,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
 
@@ -704,7 +706,7 @@ pub const tests = struct {
         const allocator = std.testing.allocator;
 
         var test_bed = try WorkerTestBed.init(io, allocator);
-        defer test_bed.deinit(allocator);
+        defer test_bed.deinit(io, allocator);
 
         const desc: Event.Payload.SourceDescriptor = .{.category = .schema, .name = "test", .dialect = "duckdb", .offset = 0};
 

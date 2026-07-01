@@ -14,7 +14,7 @@ const TaskReaper = core.TaskReaper;
 const task_support = @import("./task_support.zig");
 
 pub const createTmpDir = core.test_supports.createTmpDir;
-pub const createEndpoint = core.test_supports.createEndpoint;
+pub const testEndpointConfig = core.test_supports.testEndpointConfig;
 pub const releaseEndpoint = core.test_supports.releaseEndpoint;
 
 pub const POLLER_SIZE = 4;

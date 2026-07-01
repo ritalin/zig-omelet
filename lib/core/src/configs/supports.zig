@@ -153,11 +153,15 @@ pub const RootPathCandidate = union(enum) {
 pub fn formatConfigRootDirPath(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, category: ConfigCategory, candidates: RootPathCandidate) !FilePath {
     switch (candidates) {
         .current_dir => |dir_path| {
+            if (std.fs.path.isAbsolute(dir_path)) return std.fs.path.join(allocator, &.{dir_path, category.destPath()});
+
             const root_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
             defer allocator.free(root_path);
             return std.fs.path.join(allocator, &.{root_path, dir_path, category.destPath()});
         },
         .home_dir => |dir_path| {
+            if (std.fs.path.isAbsolute(dir_path)) return std.fs.path.join(allocator, &.{dir_path, category.destPath()});
+
             const root_path = 
                 try known_folders.getPath(io, allocator, env, .local_configuration)
                 orelse return formatConfigRootDirPath(io, allocator, env, category, .{.current_dir = dir_path})

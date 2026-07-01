@@ -289,6 +289,9 @@ pub const tests = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
+
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
         const tmp_dir_path_abs = try tmp_dir.dir.realPathFileAlloc(io, ".", allocator);
@@ -346,7 +349,7 @@ pub const tests = struct {
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
         defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{e1_path, e2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{e3_path, e4_path}, setting.schema_dir_set);
@@ -360,6 +363,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -414,7 +420,7 @@ pub const tests = struct {
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .discard);
         defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);
@@ -428,6 +434,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -496,7 +505,7 @@ pub const tests = struct {
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .stderr);
         defer builder.deinit(allocator);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualDeep(&[_][]const u8{d1_path, d2_path}, setting.source_dir_set);
         try std.testing.expectEqualDeep(&[_][]const u8{d3_path, d4_path}, setting.schema_dir_set);

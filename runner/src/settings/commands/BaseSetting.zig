@@ -254,6 +254,9 @@ pub const tests = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
+
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
 
@@ -283,7 +286,7 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, &env, "default", options);
 
         try std.testing.expectEqualStrings("inproc://req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("inproc://pub-sub", setting.endpoints.pub_sub);
@@ -300,6 +303,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -328,7 +334,7 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, &env, "default", options);
 
         try std.testing.expectEqualStrings("ipc:///path/to/req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("ipc:///path/to/pub-sub", setting.endpoints.pub_sub);
@@ -345,6 +351,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -380,7 +389,7 @@ pub const tests = struct {
         var scanner = ArgScanner(TetsArgsIterator).init(&iter);
 
         var res = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
-        const setting: BaseSetting = try res.builder.build(io, allocator, "default", options);
+        const setting: BaseSetting = try res.builder.build(io, allocator, &env, "default", options);
 
         try std.testing.expectEqualStrings("inproc://default-req-rep", setting.endpoints.req_rep);
         try std.testing.expectEqualStrings("inproc://default-pub-sub", setting.endpoints.pub_sub);

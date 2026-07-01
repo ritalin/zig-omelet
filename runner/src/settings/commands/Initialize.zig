@@ -206,6 +206,9 @@ pub const tests = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
+
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
 
@@ -245,7 +248,7 @@ pub const tests = struct {
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .configs, .discard);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualStrings(expect_source_dir_path, setting.source_dir_path);
         try std.testing.expectEqualStrings(expect_output_dir_path, setting.output_dir_path);
@@ -257,6 +260,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -297,7 +303,7 @@ pub const tests = struct {
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .defaults, .discard);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualStrings(expect_source_dir_path, setting.source_dir_path);
         try std.testing.expectEqualStrings(expect_output_dir_path, setting.output_dir_path);
@@ -309,6 +315,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -347,7 +356,7 @@ pub const tests = struct {
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .defaults, .discard);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualStrings(expect_source_dir_path, setting.source_dir_path);
         try std.testing.expectEqualStrings(expect_output_dir_path, setting.output_dir_path);
@@ -359,6 +368,9 @@ pub const tests = struct {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
+
+        var env = try std.testing.environ.createMap(allocator);
+        defer env.deinit();
 
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -404,7 +416,7 @@ pub const tests = struct {
         var base_bulder_res = try BaseSetting.Builder(TetsArgsIterator).fromArgs(allocator, &scanner, .discard);
         var builder = try Builder(TetsArgsIterator).fromArgs(allocator, &scanner, &base_bulder_res.builder, .defaults, .discard);
 
-        const setting: Setting = try builder.build(io, allocator, options);
+        const setting: Setting = try builder.build(io, allocator, &env, options);
 
         try std.testing.expectEqualStrings(expect_source_dir_path, setting.source_dir_path);
         try std.testing.expectEqualStrings(expect_output_dir_path, setting.output_dir_path);

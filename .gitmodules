@@ -1,13 +1,4 @@
 [submodule "vendor/magic-enum"]
 	path = vendor/magic-enum
 	url = https://github.com/Neargye/magic_enum.git
-[submodule "vendor/cbor"]
-	path = vendor/cbor
-	url = https://github.com/libmcu/cbor.git
-[submodule "vendor/zig-clap"]
-	path = vendor/zig-clap
-	url = https://github.com/Hejsil/zig-clap.git
-[submodule "vendor/known-folders"]
-	path = vendor/known-folders
-	url = https://github.com/ziglibs/known-folders.git
 

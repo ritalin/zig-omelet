@@ -340,9 +340,8 @@ fn createWorkerModule(
             mod.linkSystemLibrary("icu_extension", .{});
             mod.linkSystemLibrary("parquet_extension", .{});
             mod.linkSystemLibrary("json_extension", .{});
-            mod.linkSystemLibrary("jemalloc_extension", .{});
+            // mod.linkSystemLibrary("jemalloc_extension", .{});
             mod.linkSystemLibrary("duckdb_zstd", .{});
-            mod.linkSystemLibrary("core_functions_extension", .{});
         }
         break:duckdb_native_config;
     }

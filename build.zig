@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -18,6 +19,13 @@ pub fn build(b: *std.Build) void {
         orelse b.graph.environ_map.get("DUCKDB_PREFIX").?
     ;
 
+    const output_dir: std.Build.InstallDir = .{
+        .custom = b.pathJoin(&.{target.result.linuxTriple(b.allocator) catch @panic("OOM"), "bin"}),
+    };
+    const output_config_dir: std.Build.InstallDir = .{
+        .custom = target.result.linuxTriple(b.allocator) catch @panic("OOM"),
+    };
+
     stage: {
         const dep = b.dependency("stage_watch_files", .{
             .target = target,
@@ -27,7 +35,10 @@ pub fn build(b: *std.Build) void {
             .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "watch-files"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
@@ -42,7 +53,10 @@ pub fn build(b: *std.Build) void {
             .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
@@ -54,7 +68,10 @@ pub fn build(b: *std.Build) void {
             .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
@@ -66,7 +83,10 @@ pub fn build(b: *std.Build) void {
             .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "configuration-init"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     const stage_runner = stage: {
@@ -79,14 +99,17 @@ pub fn build(b: *std.Build) void {
             .workspace = true,
         });
         const exe_stage = dep.artifact(exe_prefix);
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage exe_stage;
     };
     install_configs: {
         b.installDirectory(.{
             .source_dir = b.path("./runner/assets/configs"),
-            .install_dir = .prefix,
-            .install_subdir = "configs/default",
+            .install_dir = output_config_dir,
+            .install_subdir = "configs",
             .include_extensions = &.{".zon"},
         });
         break:install_configs;
@@ -94,8 +117,8 @@ pub fn build(b: *std.Build) void {
     install_defaults: {
         b.installDirectory(.{
             .source_dir = b.path("./runner/assets/defaults"),
-            .install_dir = .prefix,
-            .install_subdir = "defaults/default",
+            .install_dir = output_config_dir,
+            .install_subdir = "defaults",
             .include_extensions = &.{".zon"},
         });
         break:install_defaults;

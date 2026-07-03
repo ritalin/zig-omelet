@@ -9,6 +9,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  DUCKDB_VERSION: 1.5.4
+  ZIG_VERSION: 0.16.0
 
 jobs:
   prepare:
@@ -18,39 +20,62 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     permissions:
       contents: read
       packages: write
 
-    container:
-      image: ktzalias/omelet-actions-container:latest
-      env:
-        PKG_PREFIX: "/home/node"
-        LD_LIBRARY_PATH: "/home/node/libsodium/lib:$LD_LIBRARY_PATH"
-
     steps:
-      - name: Install git
-        run: |
-          apt-get update
-          apt-get install -y git xz-utils
-          echo "${{ steps.install-git.outputs.path }}" >> $GITHUB_PATH
-      - name: Check git version
-        run: |
-          git --version
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install zig latest
-        uses: mlugg/setup-zig@v1
+      - name: Install system packages
+        run: |
+          dpkg -l \
+            libc6-dev \
+            libstdc++-15-dev \
+            libgcc-15-dev
+
+          sudo apt-get update && sudo apt-get install -y \
+            libnng-dev \
+            libcatch2-dev \
+      - name: Setup libnng & libcatch2
+        run: |
+          sudo mkdir -p /opt/deps/nng /opt/deps/catch2 && \
+          sudo ln -sfn /usr/include /opt/deps/nng/include && \
+          sudo ln -sfn /usr/lib/x86_64-linux-gnu /opt/deps/nng/lib && \
+          sudo ln -sfn /usr/include /opt/deps/catch2/include && \
+          sudo ln -sfn /usr/lib /opt/deps/catch2/lib
+      - name: Install duckDB
+        run: |
+          curl -L https://install.duckdb.org/v${DUCKDB_VERSION}/libduckdb-linux-amd64.zip \
+            -o /tmp/libduckdb.zip && \
+            unzip /tmp/libduckdb.zip -d /tmp/libduckdb && \
+            sudo mkdir -p /opt/deps/duckdb/lib && \
+            sudo cp -R /tmp/libduckdb/*.a /opt/deps/duckdb/lib
+      - name: Install DuckDB headers
+        run: |
+          rm -rf /tmp/duckdb-src
+
+          git clone --depth=1 --branch v${DUCKDB_VERSION} https://github.com/duckdb/duckdb /tmp/duckdb-src && \
+          sudo cp -R /tmp/duckdb-src/src/include /opt/deps/duckdb/include
+      - name: Setup pkg prefix
+        run: |
+          echo "DUCKDB_PREFIX=/opt/deps/duckdb" >> $GITHUB_ENV
+          echo "NNG_PREFIX=/opt/deps/nng" >> $GITHUB_ENV
+          echo "CATCH2_PREFIX=/opt/deps/catch2" >> $GITHUB_ENV
+
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        uses: mlugg/setup-zig@v2
         with:
-          version: master
+          version: ${{ env.ZIG_VERSION }}
           use-cache: false
+      - name: Show zig version
+        run: zig version
           
       - name: Run test
         run: |
-          zig build test -D"duckdb_prefix=$PKG_PREFIX/duckdb" -D"zmq_prefix=$PKG_PREFIX/zeromq" -D"catch2_prefix=$PKG_PREFIX/catch2" --verbose
+          zig build test-all --verbose

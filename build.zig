@@ -25,6 +25,16 @@ pub fn build(b: *std.Build) void {
     const output_config_dir: std.Build.InstallDir = .{
         .custom = target.result.linuxTriple(b.allocator) catch @panic("OOM"),
     };
+        
+    const is_test_separated = b.option(bool, "SEP_TEST", "Separate tests for zig and C++") orelse false;
+    const except_deps = option: {
+        const names = b.option([]const []const u8, "SKIP_BUILDS", "Skip guest build") orelse &.{};
+        var excepts = std.BufSet.init(b.allocator);
+        for (names) |name| {
+            excepts.insert(name) catch @panic("OOM");
+        }
+        break:option excepts;
+    };
 
     stage: {
         const dep = b.dependency("stage_watch_files", .{
@@ -42,7 +52,11 @@ pub fn build(b: *std.Build) void {
         break :stage;
     }
     stage: {
-        std.log.info("> duckdb_extract", .{});
+        if (except_deps.contains("duckdb-extract")) {
+            std.log.warn("Buiild skipped: {s}", .{"duckdb-extract"});    
+            break:stage;
+        }
+
         const dep = b.dependency("stage_duckdb_extract", .{
             .target = target,
             .optimize = optimize,
@@ -50,6 +64,7 @@ pub fn build(b: *std.Build) void {
             .NNG_PREFIX = nng_prefix,
             .DUCKDB_PREFIX = duckdb_prefix,
             .CATCH2_PREFIX = catch2_prefix,
+            .SEP_TEST = is_test_separated,
             .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract"}));

@@ -62,7 +62,9 @@ pub fn build(b: *std.Build) void {
         mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
 
+        const test_prefix = "test";
         const mod_test = b.addTest(.{
+            .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
             .root_module = b.createModule(app_module_config),
         });
         mod_test.root_module.addImport("test_options", mod_test_options.createModule());

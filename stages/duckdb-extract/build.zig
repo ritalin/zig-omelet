@@ -121,6 +121,7 @@ pub fn build(b: *std.Build) void {
     }
     test_module: {
         const is_test_separated = b.option(bool, "SEP_TEST", "Separate tests for zig and C++") orelse false;
+
         const build_options = b.addOptions();
         build_options.addOption([]const u8, "app_context", exe_name);
         build_options.addOption([]const u8, "exe_name", exe_name);

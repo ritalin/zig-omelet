@@ -110,7 +110,7 @@ pub fn build(b: *std.Build) void {
         break :run_cmd;
     }
     test_fright_cmd: {
-        const run_step = b.step("test-run", "Run the app as test frighting");
+        const run_step = b.step("test-all", "Run the app as test frighting");
         addTestAll(b, run_step);
         break :test_fright_cmd;
     }

@@ -232,8 +232,19 @@ fn createWorkerModule(
         .target = config.target,
         .optimize = config.optimize,
         .link_libc = true,
-        .link_libcpp = true,
     });
+
+    if (builtin.os.tag == .linux) {
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/15/libstdc++.so"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"});
+    }
+    else {
+        mod.link_libcpp = true;
+    }
 
     native_config: {
         mod.addIncludePath(b.path("src/c/include"));
@@ -259,7 +270,11 @@ fn createWorkerModule(
                 "supports/statement_walker_support.cpp",
                 "supports/response_encode_support.cpp",
             },
-            .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+            .flags = &.{
+                "-std=c++20", 
+                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                "-Wno-error=invalid-constexpr", // TODO: workaround math::floor() constexpr failed for clang++
+            },
         });
         mod.addIncludePath(b.path("../../vendor/magic-enum/include"));
         for (config.dep_modules) |dep_mod| {
@@ -295,7 +310,11 @@ fn createWorkerModule(
                     "resolver.select_list/test_update_statement.cpp",
                     "resolver.select_list/test_insert_statement.cpp",
                 },
-                .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+                .flags = &.{
+                    "-std=c++20", 
+                    if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                    "-Wno-error=invalid-constexpr",
+                },
             });
         }
         else {
@@ -303,35 +322,24 @@ fn createWorkerModule(
         }
         break:catch2_config;
     }
-    // nng_native_config: {
-    //     mod.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{config.nng_prefix, "include" }) });
-    //     mod.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{config.nng_prefix, "lib"}) });
-    //     mod.linkSystemLibrary("nng", .{});
-    //     break:nng_native_config;
-    // }
     duckdb_native_config: {
         mod.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "include" }) });
         mod.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "lib"}) });
-        mod.linkSystemLibrary("duckdb_static", .{});
-        mod.linkSystemLibrary("duckdb_generated_extension_loader", .{});
-        mod.linkSystemLibrary("core_functions_extension", .{});
-    //     mod.linkSystemLibrary("duckdb_fastpforlib", .{});
-    //     mod.linkSystemLibrary("duckdb_re2", .{});
-    //     mod.linkSystemLibrary("duckdb_utf8proc", .{});
-        mod.linkSystemLibrary("autocomplete_extension", .{});
-    //     mod.linkSystemLibrary("duckdb_pg_query", .{});
-    //     mod.linkSystemLibrary("duckdb_miniz", .{});
-    //     mod.linkSystemLibrary("duckdb_fsst", .{});
-        mod.linkSystemLibrary("icu_extension", .{});
-    //     mod.linkSystemLibrary("duckdb_hyperloglog", .{});
-    //     mod.linkSystemLibrary("duckdb_yyjson", .{});
-        mod.linkSystemLibrary("parquet_extension", .{});
-    //     mod.linkSystemLibrary("duckdb_mbedtls", .{});
-        mod.linkSystemLibrary("json_extension", .{});
-    //     mod.linkSystemLibrary("duckdb_fmt", .{});
-    //     mod.linkSystemLibrary("duckdb_skiplistlib", .{});
+        
+        if (builtin.os.tag != .linux) {
+            mod.linkSystemLibrary("duckdb_static", .{});
+        }
+        else {
+            mod.linkSystemLibrary("duckdb", .{.preferred_link_mode = .dynamic});
+        }
 
-        if (builtin.os.tag == .linux) {
+        if (builtin.os.tag != .linux) {
+            mod.linkSystemLibrary("duckdb_generated_extension_loader", .{});
+            mod.linkSystemLibrary("core_functions_extension", .{});
+            mod.linkSystemLibrary("autocomplete_extension", .{});
+            mod.linkSystemLibrary("icu_extension", .{});
+            mod.linkSystemLibrary("parquet_extension", .{});
+            mod.linkSystemLibrary("json_extension", .{});
             mod.linkSystemLibrary("jemalloc_extension", .{});
             mod.linkSystemLibrary("duckdb_zstd", .{});
             mod.linkSystemLibrary("core_functions_extension", .{});

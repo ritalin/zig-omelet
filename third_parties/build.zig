@@ -12,36 +12,36 @@ pub fn build(b: *std.Build) void {
         intoWorkspaceModule(b, "clap", dep.module("clap"));
     }
     
-    const dep_known_folders = b.lazyDependency("known_folders", .{
+    const dep_known_folders = b.dependency("known_folders", .{
         .target = target,
         .optimize = optimize,    
 
     });
-    if (dep_known_folders) |dep| {
-        intoWorkspaceModule(b, "known-folders", dep.module("known-folders"));
+    {
+        intoWorkspaceModule(b, "known-folders", dep_known_folders.module("known-folders"));
     }
 
-    const dep_cbor = b.lazyDependency("cbor_stream", .{
+    const dep_cbor = b.dependency("cbor_stream", .{
         .target = target,
-        .optimize = optimize,    
+        .optimize = optimize,
     });
-    if (dep_cbor) |dep| {
-        intoWorkspaceModule(b, "cbor", dep.module("cbor-stream"));
-        intoWorkspaceModule(b, "cbor-core", dep.module("cbor-core"));
+    {
+        intoWorkspaceModule(b, "cbor", dep_cbor.module("cbor-stream"));
+        intoWorkspaceModule(b, "cbor-core", dep_cbor.module("cbor-core"));
     }
 
     const nng_prefix =
         b.option([]const u8, "NNG_PREFIX", "NNG path prefix")
         orelse b.graph.environ_map.get("NNG_PREFIX").?
     ;
-    const dep_nnng = b.lazyDependency("nnng", .{ 
+    const dep_nnng = b.dependency("nnng", .{ 
         .NNG_PREFIX = nng_prefix,  
         .target = target,
         .optimize = optimize,
     });
-    if (dep_nnng) |dep| {
-        intoWorkspaceModule(b, "nnng", dep.module("nnng"));
-        intoWorkspaceModule(b, "nng-core", dep.module("nng-core"));
+    {
+        intoWorkspaceModule(b, "nnng", dep_nnng.module("nnng"));
+        intoWorkspaceModule(b, "nng-core", dep_nnng.module("nng-core"));
     }
 
     const dep_efsw = b.lazyDependency("efsw", .{

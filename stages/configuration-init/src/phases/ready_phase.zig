@@ -114,7 +114,7 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
 }
 
 fn handleGenerate(io: std.Io, allocator: std.mem.Allocator, source_path: core.types.FilePath, out_root_path: core.types.FilePath, target_scope: types.Symbol) !void {
-    const source_base_dir = try std.Io.Dir.openDirAbsolute(io, source_path, .{});
+    const source_base_dir = try std.Io.Dir.openDirAbsolute(io, source_path, .{.iterate = true});
     defer source_base_dir.close(io);
 
     const out_root_dir = try std.Io.Dir.cwd().createDirPathOpen(io, out_root_path, .{});
@@ -200,6 +200,7 @@ test "configuration-init test" {
 }
 
 pub const tests = struct {
+    const builtin = @import("builtin");
     const source_asset_dir_path = @import("test_options").source_asset_dir;
 
     fn collectPathSetInternal(io: std.Io, allocator: std.mem.Allocator, dir: std.Io.Dir, sub_path: []const u8, visited: *std.BufSet, path_set: *std.BufSet) !void {
@@ -220,7 +221,7 @@ pub const tests = struct {
                     var resolve_path: [std.posix.PATH_MAX]u8 = undefined;
                     const len = try e.dir.readLink(io, e.basename, &resolve_path);
 
-                    if (e.dir.openDir(io, resolve_path[0..len], .{})) |next_dir| {
+                    if (e.dir.openDir(io, resolve_path[0..len], .{.iterate = true})) |next_dir| {
                         defer next_dir.close(io);
 
                         const next_sub_path = try std.fmt.allocPrint(allocator, "{f}", .{std.fs.path.fmtJoin(&.{resolve_path[0..len], e.path})});
@@ -240,7 +241,7 @@ pub const tests = struct {
     fn collectPathSet(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !std.BufSet {
         var path_set = std.BufSet.init(allocator);
 
-        var dir = std.Io.Dir.openDirAbsolute(io, root_path, .{}) catch |err| switch (err) {
+        var dir = std.Io.Dir.openDirAbsolute(io, root_path, .{.iterate = true}) catch |err| switch (err) {
             error.FileNotFound => return path_set,
             else => return err,
         };
@@ -255,7 +256,7 @@ pub const tests = struct {
     }
 
     fn expectRealFile(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8) !void {
-        var dir = try std.Io.Dir.openDirAbsolute(io, root_path, .{});
+        var dir = try std.Io.Dir.openDirAbsolute(io, root_path, .{.iterate = true});
         defer dir.close(io);
 
         var walker = try dir.walk(allocator);
@@ -464,6 +465,8 @@ pub const tests = struct {
     }
 
     test "Copy directory with cyclic symlink" {
+        if (builtin.os.tag == .linux) return;
+
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 

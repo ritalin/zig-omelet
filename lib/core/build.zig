@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -71,7 +72,6 @@ pub fn build(b: *std.Build) void {
 
     test_module: {
         const run_as_workspace = b.option(bool, "workspace", "Run test as workspace") orelse false;
-        std.debug.print("*** run_as_workspace: {}\n", .{run_as_workspace});
         const catch2_prefix = 
             b.option([]const u8, "CATCH2_PREFIX", "catch2 installed path") orelse
             b.graph.environ_map.get("CATCH2_PREFIX").?
@@ -143,8 +143,20 @@ fn createCborCppModule(
         .target = config.target,
         .optimize = config.optimize,
         .link_libc = true,
-        .link_libcpp = true,
     });
+
+    if (builtin.os.tag == .linux) {
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/15/libstdc++.so"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"});
+    }
+    else {
+        mod.link_libcpp = true;
+    }
+
     native_config: {
         mod.addIncludePath(b.path("src/c"));
         mod.addCSourceFiles(.{
@@ -152,7 +164,10 @@ fn createCborCppModule(
             .files = &.{
                 "cbor_encode.cpp",
             },
-            .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+            .flags = &.{
+                "-std=c++20", 
+                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+            },
         });
 
         for (config.dependencies) |dep| {

@@ -23,7 +23,7 @@ pub fn FileIterateWorker(comptime GuestStage: type) type {
                     try postFile(stage, src.category, cwd, src.dir_path, file_name.name, &filter, file_name.dialect orelse default_dialect);
                 }
                 else if (file_stat.kind == .directory) {
-                    const base_dir = try cwd.openDir(stage.io, src.dir_path, .{});
+                    const base_dir = try cwd.openDir(stage.io, src.dir_path, .{.iterate = true});
                     try postFileOfDir(stage, src.category, base_dir, src.dir_path, base_dir, &filter, default_dialect);
                 }
             }

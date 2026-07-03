@@ -19,6 +19,17 @@ auto ColumnNameVisitor::VisitReplace(duckdb::BoundConstantExpression &expr, duck
     return nullptr;
 }
 
+auto ColumnNameVisitor::VisitReplace(duckdb::BoundColumnRefExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    this->column_name = expr.alias;
+    return nullptr;
+}
+
+auto ColumnNameVisitor::VisitReplace(duckdb::BoundCastExpression &expr, duckdb::unique_ptr<duckdb::Expression> *expr_ptr) -> duckdb::unique_ptr<duckdb::Expression> {
+    this->VisitExpression(&expr.child);
+    return nullptr;
+}
+
+
 auto ColumnNameVisitor::Resolve(duckdb::unique_ptr<duckdb::Expression>& expr) -> std::string {
     if (expr->alias != "") {
         return expr->alias;
@@ -71,7 +82,7 @@ static auto evalColumnType(
     return std::make_pair(std::move(UserTypeKind::Primitive), std::move(ty.ToString()));
 }
 
-auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ColumnNullableLookup& join_lookup, ZmqChannel& channel) -> ColumnResolveResult {
+auto resolveColumnTypeInternal(duckdb::unique_ptr<duckdb::LogicalOperator>& op, const ColumnNullableLookup& join_lookup, NngChannel& channel) -> ColumnResolveResult {
     std::vector<ColumnEntry> columns;
     columns.reserve(op->expressions.size());
 
@@ -148,7 +159,7 @@ const std::unordered_set<StatementType> supprted_stmts{
     StatementType::Insert,
 };
 
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult {
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, NngChannel& channel) -> ColumnResolveResult {
     if (!supprted_stmts.contains(stmt_type)) return {};
 
     auto [join_types, _] = resolveSelectListNullability(op, conn, channel);
@@ -229,11 +240,11 @@ auto runBindStatement(
     try {
         conn.BeginTransaction();
 
-        auto channel = ZmqChannel::unitTestChannel();
+        auto channel = NngChannel::unitTestChannel();
         
         auto stmts = conn.ExtractStatements(sql);
         auto stmt_type = evalStatementType(stmts[0]);
-        auto walk_result = walkSQLStatement(stmts[0], ZmqChannel::unitTestChannel());
+        auto walk_result = walkSQLStatement(stmts[0], channel);
         auto bound_result = bindTypeToStatement(*conn.context, std::move(stmts[0]->Copy()), walk_result.data.names, {});
         column_result = resolveColumnType(bound_result.stmt.plan, stmt_type, conn, channel);
         conn.Commit();

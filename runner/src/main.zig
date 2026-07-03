@@ -3,58 +3,68 @@ const core = @import("core");
 const Runner = @import("./Runner.zig");
 const Setting = @import("./settings/Setting.zig");
 const Config = @import("./configs/Config.zig");
+const GuestLaunchTask = @import("./supports/GuestLaunchTask.zig");
 
-const log = core.Logger.TraceDirect(@import("build_options").app_context);
-const exe_prefix = @import("build_options").exe_prefix;
+const app_context = @import("build_options").app_context;
 
-const default_log_level = .debug;
-const std_options = .{
-    .scope_levels = &.{
-        .{.scope = .default, .level = default_log_level}, 
-        .{.scope = .trace, .level = default_log_level},
+const renderToStderr = @import("./help/rendering.zig").renderToStderr;
+
+pub const std_options: std.Options = .{
+    .log_scope_levels = &.{
+        core.Logger.AppLevel,
+        core.Logger.TraceLevel,
+        // .{ .scope = .nnng, .level = .debug },
     },
+    .logFn = core.Logger.forwardIntegratedLog,
 };
 
-pub fn main() !void {
-    var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
-    defer {
-        log.debug("Leak? {}", .{gpa.deinit()});
-    }
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    var arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-    var setting = switch (try Setting.loadFromArgs(allocator)) {
-        .help => |setting| {
-            try setting.help(std.io.getStdErr().writer());
+    var env = try init.minimal.environ.createMap(allocator);
+    defer env.deinit();
+
+    var setting: Setting = switch (try Setting.loadFromArgs(init.io, allocator, &env, init.minimal.args)) {
+        .help => |help| {
+            try renderToStderr(help);
             std.process.exit(2);
         },
         .success => |setting| setting,
     };
-    defer setting.deinit();
+    defer setting.deinit(init.io, allocator);
 
-    core.Logger.filterWith(setting.general.log_level);
+    core.Logger.filterWith(setting.base.log_level);
 
-    try core.makeIpcChannelRoot(setting.general.stage_endpoints);
-    defer core.cleanupIpcChannelRoot(setting.general.stage_endpoints);
-
-    var runner = try Runner.init(allocator, setting);
-    errdefer runner.deinit();
-
-    var stages = switch (try Config.spawnStages(allocator, setting)) {
-        .help => |help_setting| {
-            try help_setting.help(std.io.getStdErr().writer());
+    var config: Config = switch (try Config.load(init.io, allocator, &env, &setting)) {
+        .success => |config| config,
+        .help => |help| {
+            try renderToStderr(help);
             std.process.exit(2);
         },
-        .success => |stages| stages,
     };
-    defer stages.deinit();
-
-    try runner.run(stages.stage_count, setting);
-    runner.deinit();
+    defer config.deinit(allocator);
     
-    try stages.wait();
+    var process_reaper = try GuestLaunchTask.launch(init.io, allocator, &config.guests, &setting);
+    defer process_reaper.deinit(allocator);
+
+    var connection = try Runner.Connection.create(init.io, allocator , config.guests.len, setting.base.endpoints);
+    defer connection.deinit();
+    connection.enableIntegratedLog();
+
+    var runner = try Runner.create(init.io, allocator, &connection, &config, &setting);
+    defer runner.deinit();
+
+    try runner.transitPhase(.launching, .pending);
+    try runner.run();
+
+    try process_reaper.wait(init.io);
 }
 
 test "main" {
-    core.Logger.disable();
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
     std.testing.refAllDecls(@This());
 }

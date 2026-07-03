@@ -34,11 +34,4 @@
     // .output_dir_path = .{.values = .{ "/path/to" } }
     // ```
     .output_dir_path = .default,
-    // Enable(true)/Disable(false) watch mode
-    // .default: Passed from CLI arg
-    // .enabled: false or true
-    // ```
-    // .watch = .{.enabled = true}
-    // ```
-    .watch = .default, 
 }

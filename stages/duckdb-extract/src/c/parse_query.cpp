@@ -22,7 +22,7 @@
 #include "duckdb_params_collector.hpp"
 
 #include "duckdb_binder_support.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "response_encode_support.hpp"
 
@@ -31,23 +31,26 @@ namespace worker {
 class DescribeWorker {
 public:
     duckdb::Connection conn;
+    std::vector<nng_msg*> results;
 public:
-    DescribeWorker(worker::Database *db, std::string&& id, std::string&& name, std::optional<void *>&& socket) 
-        : conn(std::move(db->connect())), id(id), name(name), socket(socket) 
+    DescribeWorker(worker::Database *db, Slice&& from_stage, SourceDescriptor&& desc): 
+        conn(std::move(db->connect())), 
+        from_stage({from_stage.ptr, from_stage.len}),
+        desc(desc)
     {
     }
 public:
     auto execute(std::string query) -> WorkerResultCode;
-    auto messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel;
-    auto rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
+    auto messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel;
+    auto name() const -> std::string_view;
+    auto rename(std::string_view base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
 private:
-    std::string id;
-    std::string name;
-    std::optional<void *> socket;
+    std::string_view from_stage;
+    SourceDescriptor desc;
 };
 
-auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ResolveResult<ParamCollectionResult> {
-    ParameterCollector collector(evalParameterType(stmt), std::forward<ZmqChannel>(channel));
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, NngChannel& channel) -> ResolveResult<ParamCollectionResult> {
+    ParameterCollector collector(evalParameterType(stmt), channel);
 
     switch (stmt->type) {
     case duckdb::StatementType::SELECT_STATEMENT: 
@@ -68,7 +71,7 @@ auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel
         }
     default: 
         {
-            collector.channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
+            channel.warn(std::format("Unsupported statement: {}", magic_enum::enum_name(stmt->type)));
             return {.data = {.type = StatementType::Invalid, .names{}}, .handled = ResolveStatus::Unhandled};
         }
     }
@@ -104,7 +107,7 @@ auto bindTypeToStatement(
     auto binder = duckdb::Binder::CreateBinder(context);
 
     binder->SetCanContainNulls(true);
-    binder->parameters = &parameters;
+    binder->SetParameters(parameters);
     
     return {
         .stmt = binder->Bind(*stmt),
@@ -112,8 +115,8 @@ auto bindTypeToStatement(
     };
 }
 
-static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(entries.size());
 
@@ -130,11 +133,13 @@ static auto encodePlaceholder(std::vector<ParamEntry>& entries) -> std::vector<c
         }
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-static auto encodePlaceholderOrder(std::vector<ParamEntry>& entries) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodePlaceholderOrder(std::vector<ParamEntry>& entries) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(entries.size());
 
@@ -142,11 +147,13 @@ static auto encodePlaceholderOrder(std::vector<ParamEntry>& entries) -> std::vec
         encoder.addString(entry.name);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(entries.size());
 
@@ -158,15 +165,17 @@ static auto encodeSelectList(std::vector<ColumnEntry>&& entries) -> std::vector<
         encoder.addBool(entry.nullable);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-static auto encodeBoundUserType(std::vector<std::string>&& param_user_types, std::vector<std::string>&& sel_list_user_types) -> std::vector<char> {
+static auto encodeBoundUserType(std::vector<std::string>&& param_user_types, std::vector<std::string>&& sel_list_user_types) -> CborEncoder<VectorBackend> {
     std::unordered_set<std::string> user_types;
     std::ranges::move(param_user_types.begin(), param_user_types.end(), std::inserter(user_types, user_types.end()));
     std::ranges::move(sel_list_user_types.begin(), sel_list_user_types.end(), std::inserter(user_types, user_types.end()));
 
-    CborEncoder encoder;
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(user_types.size());
 
@@ -174,11 +183,21 @@ static auto encodeBoundUserType(std::vector<std::string>&& param_user_types, std
         encoder.addString(name);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_types, std::vector<UserTypeEntry>&& sel_list_anon_types) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodeQuery(const std::string& query) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
+    encoder.addString(query);
+    encoder.flush();
+
+    return std::move(encoder);
+}
+
+static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_types, std::vector<UserTypeEntry>&& sel_list_anon_types) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(param_anon_types.size() + sel_list_anon_types.size());
 
@@ -189,31 +208,39 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& param_anon_type
         encodeUserType(encoder, entry);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel {
-    return ZmqChannel(this->socket, offset, this->id, from);
+auto DescribeWorker::messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel {
+    return NngChannel(this->desc, offset, this->from_stage, phase);
 }
 
-auto DescribeWorker::rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string> {
+auto DescribeWorker::name() const -> std::string_view {
+    return std::string_view(this->desc.name.ptr, this->desc.name.len);
+}
+
+auto DescribeWorker::rename(std::string_view base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string> {
     return stmt_count > 1 ? std::make_optional(std::format("{}_{}", base_name, stmt_index+1)) : std::nullopt;
 }
 
-
-static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
+static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {
     std::string message;
 
     try {
         auto stmts = conn.ExtractStatements(query);
         if (stmts.size() == 0) {
             channel.warn("Cannot handle an empty query");
-            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+            channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+                encodeStatementOffset(encoder, stage, desc, 0);
+            });
             return {};
         }
     
-
-        channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
+        channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto) {
+            encodeStatementCount(encoder, stage, desc, stmts.size());
+        });
 
         return std::move(stmts);
     }
@@ -222,17 +249,21 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&&
     }
 
     channel.err(message);
-    channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+        encodeStatementOffset(encoder, stage, desc, 0);
+    });
 
     return {};
 }
 
-static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& stmt_name, ZmqChannel&& channel) -> void {
+static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& stmt_name, NngChannel& channel) -> void {
     std::string message;
     try {
-        auto walk_result = walkSQLStatement(stmt, channel.clone());
+        auto walk_result = walkSQLStatement(stmt, channel);
         if (walk_result.handled == ResolveStatus::Unhandled) {
-            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(stmt_offset));
+            channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+                encodeStatementOffset(encoder, stage, desc, offset);
+            });
             return;
         }
 
@@ -245,7 +276,6 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
 
             auto bound_result = bindTypeToStatement(*conn.context, stmt->Copy(), walk_result.data.names, walk_result.data.examples);
 
-            auto channel_extract = channel.clone();
             param_type_result = resolveParamType(bound_result.stmt.plan, std::move(walk_result.data.names), std::move(bound_result.type_hints), std::move(walk_result.data.examples), channel);
             column_type_result = resolveColumnType(bound_result.stmt.plan, walk_result.data.type, conn, channel);
 
@@ -258,18 +288,18 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
 
         std::ranges::sort(param_type_result.params, {}, &ParamEntry::sort_order);
 
-        std::unordered_map<std::string, std::vector<char>> topic_bodies({
-            {topic_query, std::vector<char>(q.cbegin(), q.cend())},
-            {topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types))},
-            {topic_placeholder, encodePlaceholder(param_type_result.params)},
-            {topic_placeholder_order, encodePlaceholderOrder(param_type_result.params)},
-            {topic_select_list, encodeSelectList(std::move(column_type_result.columns))},
-            {topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names))},
+        std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies;
+        {
+            topic_bodies.emplace(topic_query, encodeQuery(q));
+            topic_bodies.emplace(topic_anon_user_type, encodeAnonymousUserType(std::move(param_type_result.anon_types), std::move(column_type_result.anon_types)));
+            topic_bodies.emplace(topic_placeholder, encodePlaceholder(param_type_result.params));
+            topic_bodies.emplace(topic_placeholder_order, encodePlaceholderOrder(param_type_result.params));
+            topic_bodies.emplace(topic_select_list, encodeSelectList(std::move(column_type_result.columns)));
+            topic_bodies.emplace(topic_bound_user_type, encodeBoundUserType(std::move(param_type_result.user_type_names), std::move(column_type_result.user_type_names)));
+        }
+        channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto offset){
+            encodeTopicBody(encoder, stage, desc, offset, stmt_name, topic_bodies);
         });
-        channel.clone().sendWorkerResponse(
-            ::worker_result, 
-            encodeTopicBody(stmt_offset, stmt_name, topic_bodies)
-        );
 
         return;
     }
@@ -281,29 +311,35 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
     }
     
     channel.err(message);
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+        encodeStatementOffset(encoder, stage, desc, offset);
+    });
 }
 
 auto DescribeWorker::execute(std::string query) -> WorkerResultCode {
-    auto stmts = parseQuery(this->conn, query, this->messageChannel(std::nullopt, "worker.phase.parse"));
+    auto parse_channel = this->messageChannel(std::nullopt, "parse");
+    auto stmts = parseQuery(this->conn, query, parse_channel);
+    parse_channel.collectInto(this->results);
 
     for (size_t stmt_offset = 0; auto& stmt: stmts) {
+        auto channel = this->messageChannel(stmt_offset, "extract");
         executeInternal(
-            this->conn, stmt_offset, stmt, 
-            this->rename(std::string(this->name), stmt_offset, stmts.size()),
-            this->messageChannel(stmt_offset, "worker.phase.extract")
+            this->conn, stmt, 
+            this->rename(std::string(this->name()), stmt_offset, stmts.size()),
+            channel
         );
+        channel.collectInto(this->results);
         ++stmt_offset;
     }
-
-    this->messageChannel(std::nullopt, "worker.phase.done").sendWorkerResponse(::worker_finished, {});
+    this->messageChannel(std::nullopt, "teardown").trace("Finish worker process");
 
     return no_error;
 }
 
 extern "C" {
-    auto initSourceCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle) -> int32_t {
+    auto initSourceCollector(DatabaseRef db_ref, Slice stage, SourceDescriptor desc, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
-        auto collector = new DescribeWorker(db, std::string(id, id_len), std::string(name, name_len), socket ? std::make_optional(socket) : std::nullopt);
+        auto collector = new DescribeWorker(db, std::move(stage), std::move(desc));
 
         *handle = reinterpret_cast<CollectorRef>(collector);
         return 0;
@@ -313,10 +349,22 @@ extern "C" {
         delete reinterpret_cast<DescribeWorker *>(handle);
     }
 
-    auto executeDescribe(CollectorRef handle, const char *query, size_t query_len) -> WorkerResultCode {
+    auto executeDescribe(CollectorRef handle, Slice query) -> WorkerResultCode {
         auto collector = reinterpret_cast<DescribeWorker *>(handle);
 
-        return collector->execute(std::string(query, query_len));
+        return collector->execute(std::string(query.ptr, query.len));
+    }
+
+    auto getDescribeResultCount(CollectorRef handle) -> size_t {
+        auto collector = reinterpret_cast<DescribeWorker *>(handle);
+
+        return collector->results.size();
+    }
+    
+    auto getDescribeResult(CollectorRef handle, size_t index) -> nng_msg* {
+        auto collector = reinterpret_cast<DescribeWorker *>(handle);
+
+        return collector->results[index];
     }
 }
 

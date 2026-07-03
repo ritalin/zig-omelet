@@ -1,0 +1,4 @@
+.{
+    .heartbeat_interval = .{.ms = 20},
+    .ready_progress_interval = .{.us = 10},
+}

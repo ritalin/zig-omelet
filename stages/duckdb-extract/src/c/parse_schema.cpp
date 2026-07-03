@@ -6,7 +6,7 @@
 
 #include "duckdb_worker.h"
 #include "duckdb_database.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "cbor_encode.hpp"
 #include "duckdb_binder_support.hpp"
 #include "response_encode_support.hpp"
@@ -15,30 +15,35 @@ namespace worker {
 
 class UserTypeWorker {
 public:
-    UserTypeWorker(worker::Database *db, std::string&& id, std::string&& name, std::optional<void*>&& socket)
-        : conn(db->connect()), id(id), name(name), socket(socket) 
+    std::vector<nng_msg*> results;
+public:
+    UserTypeWorker(worker::Database *db, Slice&& from_stage, SourceDescriptor&& desc): 
+        conn(db->connect()), 
+        from_stage({from_stage.ptr, from_stage.len}),
+        desc(desc),
+        results({})
     {
     }
 public:
     auto execute(std::string&& query) -> WorkerResultCode;
-    auto messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel;
+    auto messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel;
     auto rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string>;
 private:
     duckdb::Connection conn;
-    std::string id;
-    std::string name;
-    std::optional<void*> socket;
+    std::string_view from_stage;
+    SourceDescriptor desc;
 };
 
-static auto encodeUserType(const UserTypeEntry& entry) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodeUserType(const UserTypeEntry& entry) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
     encodeUserType(encoder, entry);
+    encoder.flush();
 
-    return std::move(encoder.rawBuffer());
+    return std::move(encoder);
 }
 
-static auto encodeBoundUserType(std::vector<std::string>&& user_types) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodeBoundUserType(std::vector<std::string>&& user_types) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(user_types.size());
 
@@ -46,11 +51,13 @@ static auto encodeBoundUserType(std::vector<std::string>&& user_types) -> std::v
         encoder.addString(name);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
-static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> std::vector<char> {
-    CborEncoder encoder;
+static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> CborEncoder<VectorBackend> {
+    auto encoder = CborEncoder(VectorBackend());
 
     encoder.addArrayHeader(anon_types.size());
 
@@ -58,7 +65,9 @@ static auto encodeAnonymousUserType(std::vector<UserTypeEntry>&& anon_types) -> 
         encodeUserType(encoder, entry);
     }
 
-    return std::move(encoder.rawBuffer());
+    encoder.flush();
+
+    return std::move(encoder);
 }
 
 static auto pickUserTypeName(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> std::string {
@@ -82,18 +91,22 @@ static auto pickUserTypeName(const duckdb::unique_ptr<duckdb::SQLStatement>& stm
     return std::format("_unsupported_{}", magic_enum::enum_name(stmt->type));
 }
 
-static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {    
+static auto parseQuery(duckdb::Connection& conn, std::string query, NngChannel& channel) -> std::vector<duckdb::unique_ptr<duckdb::SQLStatement>> {    
     std::string message;
 
     try {
         auto stmts = conn.ExtractStatements(query);
         if (stmts.size() == 0) {
             channel.warn("Cannot handle an empty schema");
-            channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(0));
+            channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+                encodeStatementOffset(encoder, stage, desc, 0);
+            });
             return {};
         }
 
-        channel.sendWorkerResponse(::worker_progress, encodeStatementCount(stmts.size()));
+        channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto) {
+            encodeStatementCount(encoder, stage, desc, stmts.size());
+        });
 
         return std::move(stmts);
     }
@@ -102,12 +115,14 @@ static auto parseQuery(duckdb::Connection& conn, std::string query, ZmqChannel&&
     }
 
     channel.err(message);
-    channel.sendWorkerResponse(::worker_skipped, encodeStatementCount(0));
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto) {
+        encodeStatementOffset(encoder, stage, desc, 0);
+    });
 
     return {};
 }
 
-static auto isSupportedStatements(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel& channel) -> bool {
+static auto isSupportedStatements(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, NngChannel& channel) -> bool {
     if (stmt->type != duckdb::StatementType::CREATE_STATEMENT) {
         channel.warn(std::format("Unsupported schema statement: {}", magic_enum::enum_name(stmt->type)));
         return false;
@@ -126,9 +141,11 @@ static auto isSupportedStatements(duckdb::unique_ptr<duckdb::SQLStatement>& stmt
     }
 }
 
-static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& name_alt, ZmqChannel&& channel) -> void {
+static auto executeInternal(duckdb::Connection& conn, duckdb::unique_ptr<duckdb::SQLStatement>& stmt, std::optional<std::string>&& name_alt, NngChannel& channel) -> void {
     if (! isSupportedStatements(stmt, channel)) {
-        channel.sendWorkerResponse(::worker_skipped, encodeStatementOffset(stmt_offset));
+        channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+            encodeStatementOffset(encoder, stage, desc, offset);
+        });
         return;
     }
     
@@ -152,13 +169,16 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
         send: {
             if (result) {
                 send_user_type: {
-                    std::unordered_map<std::string, std::vector<char>> topic_bodies({
-                        {topic_user_type, encodeUserType(result.value().entry)},
-                        {topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types))},
-                        {topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names))}
-                    });
+                    std::unordered_map<std::string_view, CborEncoder<VectorBackend>> topic_bodies;
+                    {
+                        topic_bodies.emplace(topic_user_type, encodeUserType(result.value().entry));
+                        topic_bodies.emplace(topic_anon_user_type, encodeAnonymousUserType(std::move(result.value().anon_types)));
+                        topic_bodies.emplace(topic_bound_user_type, encodeBoundUserType(std::move(result.value().user_type_names)));
+                    };
 
-                    channel.sendWorkerResponse(::worker_result, encodeTopicBody(stmt_offset, name_alt, topic_bodies));
+                    channel.makeWorkerResponse([&](auto& encoder, auto& stage, auto& desc, auto offset) {
+                        encodeTopicBody(encoder, stage, desc, offset, name_alt, topic_bodies);
+                    });
                 }
             }
         }
@@ -170,10 +190,13 @@ static auto executeInternal(duckdb::Connection& conn, const size_t stmt_offset, 
     }
     
     channel.err(message);
+    channel.makeWorkerResponse([](auto& encoder, auto& stage, auto& desc, auto offset) {
+        encodeStatementOffset(encoder, stage, desc, offset);
+    });
 }
 
-auto UserTypeWorker::messageChannel(const std::optional<size_t>& offset, const std::string& from) -> ZmqChannel {
-    return ZmqChannel(this->socket, offset, this->id, from);
+auto UserTypeWorker::messageChannel(const std::optional<size_t>& offset, std::string&& phase) -> NngChannel {
+    return NngChannel(this->desc, offset, this->from_stage, phase);
 }
 
 auto UserTypeWorker::rename(std::string&& base_name, const size_t stmt_index, const size_t stmt_count) -> std::optional<std::string> {
@@ -181,18 +204,20 @@ auto UserTypeWorker::rename(std::string&& base_name, const size_t stmt_index, co
 }
 
 auto UserTypeWorker::execute(std::string&& query) -> WorkerResultCode {
-    auto stmts = parseQuery(this->conn, query, this->messageChannel(std::nullopt, "worker.phase.parse"));
+    auto parse_channel = this->messageChannel(std::nullopt, "parse");
+    auto stmts = parseQuery(this->conn, query, parse_channel);
+    parse_channel.collectInto(this->results);
 
     for (size_t stmt_offset = 0; auto& stmt: stmts) {
+        auto channel = this->messageChannel(stmt_offset, "user_type");
         executeInternal(
-            this->conn, stmt_offset, stmt, 
+            this->conn, stmt, 
             this->rename(pickUserTypeName(stmt), stmt_offset, stmts.size()),
-            this->messageChannel(stmt_offset, "worker.phase.user_type")
+            channel
         );
+        channel.collectInto(this->results);
         ++stmt_offset;
     }
-
-    this->messageChannel(std::nullopt, "worker.phase.done").sendWorkerResponse(::worker_finished, {});
 
     return no_error;
 }
@@ -200,9 +225,9 @@ auto UserTypeWorker::execute(std::string&& query) -> WorkerResultCode {
 }
 
 extern "C" {
-    auto initUserTypeCollector(DatabaseRef db_ref, const char *id, size_t id_len, const char *name, size_t name_len, void *socket, CollectorRef *handle) -> int32_t {
+    auto initUserTypeCollector(DatabaseRef db_ref, Slice stage, SourceDescriptor desc, CollectorRef *handle) -> int32_t {
         auto db = reinterpret_cast<worker::Database *>(db_ref);
-        auto worker = new worker::UserTypeWorker(db, std::string(id, id_len), std::string(name, name_len), socket ? std::make_optional(socket) : std::nullopt);
+        auto worker = new worker::UserTypeWorker(db, std::move(stage), std::move(desc));
         *handle = reinterpret_cast<CollectorRef>(worker);
         return 0;
     }
@@ -211,8 +236,18 @@ extern "C" {
         delete reinterpret_cast<worker::UserTypeWorker*>(handle);
     }
 
-    auto describeUserType(CollectorRef handle, const char *query, size_t query_len) -> WorkerResultCode {
+    auto describeUserType(CollectorRef handle, Slice query) -> WorkerResultCode {
         auto worker = reinterpret_cast<worker::UserTypeWorker *>(handle);
-        return worker->execute(std::string(query, query_len));
+        return worker->execute(std::string(query.ptr, query.len));
+    }
+
+    auto getUserTypeResultCount(CollectorRef handle) -> size_t {
+        auto worker = reinterpret_cast<worker::UserTypeWorker *>(handle);
+        return worker->results.size();
+    }
+    
+    auto getUserTypeResult(CollectorRef handle, size_t index) -> nng_msg* {
+        auto worker = reinterpret_cast<worker::UserTypeWorker *>(handle);
+        return worker->results[index];
     }
 }

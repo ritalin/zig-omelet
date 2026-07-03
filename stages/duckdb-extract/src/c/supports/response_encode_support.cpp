@@ -3,62 +3,121 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "cbor_encode.hpp"
+#include "duckdb_worker.h"
 #include "response_encode_support.hpp"
 
 namespace worker {
 
-auto encodeStatementCount(size_t count) -> std::vector<char> {
-    CborEncoder payload_encoder;
-
-    payload_encoder.addUInt(count);
-
-    return payload_encoder.rawBuffer();
+static auto encodeResponseHeader(CborEncoder<NngBackend>& encoder, uint8_t tag, const std::string_view& worker_phase) -> void {
+    encoder.addUInt(tag);
+    encoder.addString(worker_phase);
 }
 
-auto encodeStatementOffset(size_t offset) -> std::vector<char> {
-    CborEncoder payload_encoder;
-
-    payload_encoder.addUInt(offset);
-
-    return payload_encoder.rawBuffer();
-}
-
-auto encodeTopicBody(const size_t offset, std::optional<std::string> name_alt, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char> {
-    CborEncoder payload_encoder;
-
-    stmt_offset: {
-        payload_encoder.addUInt(offset);
+static auto encodeSourceDescriptor(CborEncoder<NngBackend>& encoder, const SourceDescriptor& desc, size_t offset) -> void {
+    encoder.addArrayHeader(4);
+    category: {
+        encoder.addUInt(desc.topic_category);
     }
+    name: {
+        encoder.addString(std::string{ desc.name.ptr, desc.name.len });
+    }
+    dialect: {
+        encoder.addString(std::string{ desc.dialect.ptr, desc.dialect.len });
+    }
+    offset: {
+        encoder.addUInt(offset);
+    }
+    hash: {
+        encoder.addString(std::string{ desc.hash.ptr, desc.hash.len });
+    }
+}
+
+auto encodeStatementCount(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t count) -> void
+{
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
+    encodeSourceDescriptor(encoder, desc, 0);
+    
+    stmt_name_alt: {
+        encoder.addNull();
+    }
+    response: {
+        encoder.addUInt(::worker_progress);
+        encoder.addUInt(count);
+    }
+    encoder.flush();
+}
+
+auto encodeStatementOffset(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t offset) -> void 
+{
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
+    encodeSourceDescriptor(encoder, desc, offset);
+    
+    stmt_name_alt: {
+        encoder.addNull();
+    }
+    response: {
+        encoder.addUInt(::worker_skipped);
+    }
+    encoder.flush();
+}
+
+auto encodeTopicBody(
+    CborEncoder<NngBackend>& encoder,
+    const std::string_view& stage,
+    const SourceDescriptor& desc,
+    const size_t offset, 
+    std::optional<std::string> name_alt, 
+    const std::unordered_map<std::string_view, CborEncoder<VectorBackend>>& topic_bodies) -> void 
+{
+    encodeResponseHeader(encoder, desc.response_event_tag, stage);
+    encodeSourceDescriptor(encoder, desc, offset);
+
     stmt_name_alt: {
         if (name_alt) {
-            payload_encoder.addString(name_alt.value());
+            encoder.addString(name_alt.value());
         }
         else {
-            payload_encoder.addNull();
+            encoder.addNull();
         }
     }
-    topic_body: {
-        payload_encoder.addArrayHeader(topic_bodies.size());
+    response: {
+        encoder.addUInt(::worker_result);
+        encoder.addArrayHeader(topic_bodies.size());
 
-        for (auto [topic, payload]: topic_bodies) {
-            payload_encoder.addBinaryPair(topic, payload);
+        for (auto& [topic, payload]: topic_bodies) {
+            encoder.addBinaryPair(std::string(topic), payload.rawBuffer());
         }
     }
-
-    return payload_encoder.rawBuffer();
+    encoder.flush();
 }
 
-auto encodeWorkerLog(LogLevel log_level, const std::string& id, const size_t offset, const std::string message) -> std::vector<char> {
-    CborEncoder payload_encoder;
+auto encodeWorkerLog(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage,
+    const std::string_view& worker_phase, 
+    const SourceDescriptor& desc,
+    const size_t offset, 
+    LogLevel log_level, 
+    const std::string& message) -> void 
+{
+    encodeResponseHeader(encoder, desc.log_event_tag, stage);
 
     log_level: {
-        payload_encoder.addString(magic_enum::enum_name(log_level));
+        encoder.addUInt(static_cast<uint64_t>(log_level));
     }
     message: {
-        payload_encoder.addString(std::format("message: {}, offset: {}, id: {}", message, offset, id));
+        encoder.addString(std::format("message: {}, name: {}, offset: {}, phase: {}", message, std::string_view{desc.name.ptr, desc.name.len}, offset, worker_phase));
     }
 
-    return payload_encoder.rawBuffer();
+    encoder.flush();
 }
 
 }

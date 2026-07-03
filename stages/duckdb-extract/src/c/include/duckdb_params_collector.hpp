@@ -3,9 +3,10 @@
 #include <ranges>
 
 #include <duckdb.hpp>
+#include <duckdb/parser/statement/list.hpp>
 
 #include "duckdb_binder_support.hpp"
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 
 namespace worker {
 
@@ -13,10 +14,10 @@ class ParameterCollector {
 public:
     using Result = ParamCollectionResult;
 public:
-    ZmqChannel channel;
+    NngChannel& channel;
 public:
-    ParameterCollector(StatementParameterStyle param_type, ZmqChannel&& channel): 
-        param_type(param_type), gen_position(std::ranges::begin(std::ranges::iota_view<size_t>{0})), channel(channel) 
+    ParameterCollector(StatementParameterStyle param_type, NngChannel& channel): 
+        channel(channel), param_type(param_type), gen_position(std::ranges::begin(std::ranges::iota_view<size_t>{0}))
     {
     }
 public:

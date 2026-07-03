@@ -1,47 +1,77 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
-pub fn build(b: *std.Build) !void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_prefix: []const u8 = "omelet";
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
-    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt/duckdb";
-    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
-    
+    const nng_prefix =
+        b.option([]const u8, "NNG_PREFIX", "NNG path prefix")
+        orelse b.graph.environ_map.get("NNG_PREFIX").?
+    ;
+    const catch2_prefix = 
+        b.option([]const u8, "CATCH2_PREFIX", "catch2 installed path") 
+        orelse b.graph.environ_map.get("CATCH2_PREFIX").?
+    ;
+    const duckdb_prefix = 
+        b.option([]const u8, "DUCKDB_PREFIX", "duckdb installed path") 
+        orelse b.graph.environ_map.get("DUCKDB_PREFIX").?
+    ;
+
+    const output_dir: std.Build.InstallDir = .{
+        .custom = b.pathJoin(&.{target.result.linuxTriple(b.allocator) catch @panic("OOM"), "bin"}),
+    };
+    const output_config_dir: std.Build.InstallDir = .{
+        .custom = target.result.linuxTriple(b.allocator) catch @panic("OOM"),
+    };
+        
+    const is_test_separated = b.option(bool, "SEP_TEST", "Separate tests for zig and C++") orelse false;
+    const except_deps = option: {
+        const names = b.option([]const []const u8, "SKIP_BUILDS", "Skip guest build") orelse &.{};
+        var excepts = std.BufSet.init(b.allocator);
+        for (names) |name| {
+            excepts.insert(name) catch @panic("OOM");
+        }
+        break:option excepts;
+    };
+
     stage: {
         const dep = b.dependency("stage_watch_files", .{
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
+            .NNG_PREFIX = nng_prefix,
+            .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "watch-files"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
+        if (except_deps.contains("duckdb-extract")) {
+            std.log.warn("Buiild skipped: {s}", .{"duckdb-extract"});    
+            break:stage;
+        }
+
         const dep = b.dependency("stage_duckdb_extract", .{
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
-            .duckdb_prefix = duckdb_prefix,
-            .catch2_prefix = catch2_prefix,
+            .NNG_PREFIX = nng_prefix,
+            .DUCKDB_PREFIX = duckdb_prefix,
+            .CATCH2_PREFIX = catch2_prefix,
+            .SEP_TEST = is_test_separated,
+            .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "duckdb-extract"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
@@ -49,21 +79,29 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
+            .NNG_PREFIX = nng_prefix,
+            .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "ts-generate"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     stage: {
-        const dep = b.dependency("stage_init_config", .{
+        const dep = b.dependency("stage_initialize", .{
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
+            .NNG_PREFIX = nng_prefix,
+            .workspace = true,
         });
         const exe_stage = dep.artifact(b.fmt("{s}-{s}", .{exe_prefix, "configuration-init"}));
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage;
     }
     const stage_runner = stage: {
@@ -71,16 +109,21 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .exe_prefix = exe_prefix,
-            .zmq_prefix = zmq_prefix,
+            .NNG_PREFIX = nng_prefix,
+            .INI_SCOPE = "default",
+            .workspace = true,
         });
         const exe_stage = dep.artifact(exe_prefix);
-        b.installArtifact(exe_stage);
+        const artifact = b.addInstallArtifact(exe_stage, .{
+            .dest_dir = .{ .override = output_dir }
+        });
+        b.getInstallStep().dependOn(&artifact.step);
         break :stage exe_stage;
     };
     install_configs: {
         b.installDirectory(.{
             .source_dir = b.path("./runner/assets/configs"),
-            .install_dir = .prefix,
+            .install_dir = output_config_dir,
             .install_subdir = "configs",
             .include_extensions = &.{".zon"},
         });
@@ -89,8 +132,8 @@ pub fn build(b: *std.Build) !void {
     install_defaults: {
         b.installDirectory(.{
             .source_dir = b.path("./runner/assets/defaults"),
-            .install_dir = .prefix,
-            .install_subdir = "default-templates",
+            .install_dir = output_config_dir,
+            .install_subdir = "defaults",
             .include_extensions = &.{".zon"},
         });
         break:install_defaults;
@@ -105,28 +148,19 @@ pub fn build(b: *std.Build) !void {
         break :run_cmd;
     }
     test_fright_cmd: {
-        const cmd = b.addRunArtifact(stage_runner);
-        cmd.step.dependOn(b.getInstallStep());
-        
-        @import("stage_runner").applyRunnerChannel(cmd);
-
-        if (b.args) |args| {
-            for (args) |arg| {
-                cmd.addArg(arg);
-            }
-        }
-
-        const run_step = b.step("test-run", "Run the app as test frighting");
-        run_step.dependOn(&cmd.step);
-
+        const run_step = b.step("test-all", "Run the app as test frighting");
+        addTestAll(b, run_step);
         break :test_fright_cmd;
     }
-
-    addTestAll(b);
 }
 
-fn addTestAll(b: *std.Build) void {
-    const run_step = b.step("test", "Run all unit tests");
+fn addTestAll(b: *std.Build, parent_step: *std.Build.Step) void {
+    std.log.info("Collect unit test", .{});
+
+    var visited = std.BufSet.init(b.allocator);
+    defer visited.deinit();
+
+    const prefx = b.pathFromRoot(".");
     var deps_iter = b.graph.dependency_cache.valueIterator();
 
     while (deps_iter.next()) |dep| {
@@ -141,8 +175,15 @@ fn addTestAll(b: *std.Build) void {
                 const inst: *std.Build.Step.InstallArtifact = dep_step.cast(std.Build.Step.InstallArtifact) orelse continue;
 
                 if (inst.artifact.kind == .@"test") {
+                    const pkg_prefix = inst.step.owner.pathFromRoot(".");
+                    if (! std.mem.startsWith(u8, pkg_prefix, prefx)) continue;
+                    if (std.mem.containsAtLeast(u8, pkg_prefix, 1, "zig-pkg")) continue;
+                    if (visited.contains(pkg_prefix)) continue;
+
+                    visited.insert(pkg_prefix) catch @panic("OOM");
+
                     const path = b.pathResolve(&.{"test/", inst.artifact.name});
-                    std.debug.print("Test found: {s}\n", .{path});
+                    std.log.info("Test found: {s} (path: {s})", .{path, pkg_prefix});
                     // install test artifact
                     const install_step = b.addInstallArtifact(
                         inst.artifact, 
@@ -154,7 +195,7 @@ fn addTestAll(b: *std.Build) void {
                     // invoke test
                     const invoke_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
                     invoke_step.step.dependOn(&install_step.step);
-                    run_step.dependOn(&invoke_step.step);
+                    parent_step.dependOn(&invoke_step.step);
                 }
             }
         }

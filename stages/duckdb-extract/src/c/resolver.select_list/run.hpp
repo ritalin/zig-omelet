@@ -4,7 +4,6 @@
 #include "duckdb_catch2_fmt.hpp"
 
 using LogicalOperatorRef = duckdb::unique_ptr<duckdb::LogicalOperator>;
-using BoundTableRef = duckdb::unique_ptr<duckdb::BoundTableRef>;
 
 auto runBindStatement(
     const std::string sql, const std::vector<std::string>& schemas, 

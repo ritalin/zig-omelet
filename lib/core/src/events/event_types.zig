@@ -3,9 +3,13 @@ const std = @import("std");
 const core_types = @import("../types.zig");
 const LogScope = core_types.LogScope;
 const Symbol = core_types.Symbol;
+const BinaryData = core_types.BinaryData;
 const FilePath = core_types.FilePath;
 
-const c = @import("../omelet_c/interop.zig");
+const c = @import("omelet_c");
+
+pub const StructView = @import("./event_impl.zig").StructView;
+pub const EventPacket = @import("./event_impl.zig").EventPacket;
 
 pub const LogLevel = enum(u8) {
     err = c.log_level_err,
@@ -13,6 +17,16 @@ pub const LogLevel = enum(u8) {
     info = c.log_level_info,
     debug = c.log_level_debug,
     trace = c.log_level_trace,
+
+    pub fn asText(self: LogLevel) Symbol {
+        return switch (self) {
+            .err => "ERROR",
+            .warn => "WARN",
+            .info => "INFO",
+            .debug => "DEBUG",
+            .trace => "TRACE",
+        };
+    }
 
     pub fn toStdLevel(self: LogLevel) std.log.Level {
         return switch (self) {
@@ -24,22 +38,20 @@ pub const LogLevel = enum(u8) {
         };
     }
 
-    pub fn ofScope(self: LogLevel) LogScope {
-        return switch (self) {
-            .trace => .trace,
-            else => .default,
-        };
+    pub fn resolveLogLevel(s: ?Symbol) ?LogLevel {
+        if (s == null) return null;
+        return std.meta.stringToEnum(LogLevel, s.?);
     }
 };
 pub const LogLevelSet = std.enums.EnumSet(LogLevel);
 
 pub const UserTypeKind = enum(u8) {
-    @"enum" = c.Enum, 
-    @"struct" = c.Struct, 
-    array = c.Array, 
-    primitive = c.Primitive, 
+    @"enum" = c.Enum,
+    @"struct" = c.Struct,
+    array = c.Array,
+    primitive = c.Primitive,
     user = c.User,
-    alias = c.Alias, 
+    alias = c.Alias,
 };
 
 /// ChannelType
@@ -49,285 +61,273 @@ pub const ChannelType = enum {
     channel_generate,
 };
 
+pub const EventPhase = struct {
+    kind: EventPhase.Kind,
+    agreement: EventPhase.Agreement,
+
+    pub const Kind = enum { launching, request, ready, terminating, quitting };
+    pub const Agreement = enum { pending, confirmed };
+};
+
 /// Event types
 pub const EventType = enum (u8) {
     // Response events
     ack = 1,
     nack,
-    // Boot events
+    // periodically heartbeat
+    heartbeat,
+    probe,
+    // Boot phase event
+    launching,
     launched,
     failed_launching,
-    request_topic,
+    // Topic request phase event
     topic,
-    // watch event
-    ready_watch_path,
-    finish_watch_path,
+    finish_topic,
+    // Ready phase event
+    ready,
+    ready_progress,
     // Source path event
     ready_source_path,
     source_path,
-    pending_finish_source_path,
     finish_source_path,
     // Topic body event
     ready_topic_body,
     topic_body,
-    skip_topic_body,
-    pending_finish_topic_body,
-    finish_topic_body,
     // Generate event
-    ready_generate,
     finish_generate,
-    // Worker event
-    worker_response,
     // Other event
-    quit_all,
     quit,
-    quit_accept,
     log,
     report_fatal,
     pending_fatal_quit,
+    worker_response,
 };
+
+pub const EventHeader = @import("./event_impl.zig").EventHeader;
+
 /// Event type options
 pub const EventTypes = std.enums.EnumFieldStruct(EventType, bool, false);
 pub const EventTypeSet = std.enums.EnumSet(EventType);
 
-const ExceptStructView = std.StaticStringMap(void).initComptime(.{
-    .{@typeName(std.mem.Allocator)},
-    .{@typeName(*std.heap.ArenaAllocator)},
-});
+pub const TopicCategory = enum(u8) {
+    source = c.category_source,
+    schema = c.category_schema,
+};
 
-pub fn StructView(comptime T: type) type {
-    comptime std.debug.assert(@typeInfo(T) == .@"struct");
-
-    const fields = std.meta.fields(T);
-    comptime var i: usize = 0;
-    comptime var types: [fields.len]type = undefined;
-    inline for (fields) |field| {
-        if (comptime (!ExceptStructView.has(@typeName(field.type)))) {
-            defer i += 1;
-            types[i] = field.type;
-        }
-    }
-
-    return std.meta.Tuple(types[0..i]);
-}
-
-pub const TopicCategory = enum {
-    source, 
-    schema,
+pub const ResponseTag = enum(u8) {
+    progress = c.worker_progress,
+    success = c.worker_result,
+    skipped = c.worker_skipped,
 };
 
 const EventPayload = struct {
-    pub const Topic = struct {
-        arena: *std.heap.ArenaAllocator,
-        category: TopicCategory,
-        names: []const Symbol,
-        has_more: bool,
+    pub const Heartbeat = struct {
+        event_type: EventType,
+        count: u64,
 
-        pub fn init(allocator: std.mem.Allocator, category: TopicCategory, names: []const Symbol, has_more: bool) !@This() {
-            const arena = try allocator.create(std.heap.ArenaAllocator);
-            arena.* = std.heap.ArenaAllocator.init(allocator);
-            const a = arena.allocator();
-            
-            const new_names = try a.alloc(Symbol, names.len);
-            for (names, 0..) |name, i| {
-                new_names[i] = try a.dupe(u8, name);
-            }
-
+        pub fn init(view: StructView(Heartbeat)) Heartbeat {
             return .{
-                .arena = arena,
-                .category = category,
-                .names = new_names,
-                .has_more = has_more,
+                .event_type = view[0],
+                .count = view[1],
             };
         }
-        pub fn deinit(self: @This()) void {
-            self.arena.deinit();
-            self.arena.child_allocator.destroy(self.arena);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.category, self.values(), self.has_more);
-        }
-        pub fn values(self: @This()) []const Symbol {
-            return self.names;
+        pub fn deinit(_: *Heartbeat, _: std.mem.Allocator) void {}
+        pub fn values(self: *const Heartbeat) StructView(Heartbeat) {
+            return .{ self.event_type, self.count };
         }
     };
 
-    pub const TopicBody = struct {
-        allocator: std.mem.Allocator,
-        header: SourcePath, 
-        index: usize,
-        bodies: []const Item,
+    pub const Topic = struct {
+        category: TopicCategory,
+        names: []const Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, header: StructView(SourcePath), items: []const StructView(Item)) !@This() {
-            const new_bodies = try allocator.alloc(Item, items.len);
-            for (items, 0..) |item, i| {
-                new_bodies[i] = try Item.init(allocator, item);
-            }
-        
+        pub fn init(view: StructView(Topic))Topic {
             return .{
-                .allocator = allocator,
-                .header = try SourcePath.init(allocator, header),
-                .index = 0,
-                .bodies = new_bodies,
+                .category = view[0],
+                .names = view[1],
             };
         }
-        pub fn withNewIndex(self: *@This(), new_index: usize, new_count: usize) @This() {
-            self.index = new_index;
-            self.header.item_count = new_count;
+        pub fn deinit(self: *Topic, allocator: std.mem.Allocator) void {
+            allocator.free(self.names);
+        }
+        pub fn values(self: *const Topic) StructView(Topic) {
+            return .{ self.category, self.names };
+        }
+    };
 
-            return self.*;
-        }
-        pub fn deinit(self: @This()) void {
-            self.header.deinit();
-            deinitBodies(self.bodies, self.allocator);
-        }
-        fn deinitBodies(bodies: []const Item, allocator: std.mem.Allocator) void {
-            for (bodies) |item| {
-                item.deinit(allocator);
-            }
-            allocator.free(bodies);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            const new_bodies = try allocator.alloc(Item, self.bodies.len);
-            for (self.bodies, 0..) |item, i| {
-                new_bodies[i] = try Item.init(allocator, item.values());
-            }
-        
-            return .{
-                .allocator = allocator,
-                .header = try SourcePath.init(allocator, self.header.values()),
-                .index = self.index,
-                .bodies = new_bodies,
-            };
-        }
-        pub fn values(self: @This()) struct{StructView(SourcePath), usize, []const Item} {
-            return .{ self.header.values(), self.index, self.bodies };
+    pub const TopicBodyResponse = struct {
+        desc: SourceDescriptor,
+        hash: Symbol,
+        name_alt: ?Symbol,
+        response: Result,
+
+        pub fn deinit(self: *TopicBodyResponse, allocator: std.mem.Allocator) void {
+            self.response.deinit(allocator);
         }
 
-        pub const Item = struct {
-            topic: Symbol, 
-            content: Symbol,
+        pub const Result = union(ResponseTag) {
+            progress: usize,
+            success: []const TopicBody.Encoded,
+            skipped: void,
 
-            pub fn init(allocator: std.mem.Allocator, item: StructView(Item)) !@This() {
-                return .{
-                    .topic = try allocator.dupe(u8, item.@"0"),
-                    .content = try allocator.dupe(u8, item.@"1"),
-                };
-            }
-            pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
-                allocator.free(self.topic);
-                allocator.free(self.content);
-            }
-            pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-                return Item.init(allocator, self.asTuple());
-            }
-            pub fn values(self: Item) StructView(@This()) {
-                return .{self.topic, self.content};
+            pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+                switch (self.*) {
+                    .success => |slice| allocator.free(slice),
+                    .progress, .skipped => {},
+                }
             }
         };
     };
 
-    pub const SkipTopicBody = struct {
-        header: SourcePath, 
-        index: usize,
+    pub const TopicBody = struct {
+        desc: SourceDescriptor,
+        name_alt: ?Symbol,
+        bodies: []const TopicBody.Encoded,
 
-        pub fn init(allocator: std.mem.Allocator, header: StructView(SourcePath), index: usize) !@This() {
-            return .{
-                .header = try SourcePath.init(allocator, header),
-                .index = index,
-            };
+        pub fn deinit(self: *TopicBody, allocator: std.mem.Allocator) void {
+            allocator.free(self.bodies);
         }
-        pub fn deinit(self: @This()) void {
-            self.header.deinit();
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.header.values(), self.index);
-        }
-        pub fn values(self: @This()) struct{StructView(SourcePath), usize} {
-            return .{ self.header.values(), self.index };
-        }
+
+        pub const Encoded = struct {
+            topic: Symbol,
+            data: BinaryData,
+
+            pub fn init(view: StructView(TopicBody.Encoded)) TopicBody.Encoded {
+                return .{
+                    .topic = view[0],
+                    .data = view[1],
+                };
+            }
+
+            pub fn values(self: *const Encoded) StructView(TopicBody.Encoded) {
+                return .{ self.topic, self.data };
+            }
+
+            pub fn fromValuesSet(allocator: std.mem.Allocator, view: []const StructView(TopicBody.Encoded)) ![]const TopicBody.Encoded {
+                const bodies = try allocator.alloc(TopicBody.Encoded, view.len);
+
+                for (view, 0..) |v, i| {
+                    bodies[i] = .init(v);
+                }
+
+                return bodies;
+            }
+        };
+
+        pub const Support = struct {
+            pub fn clone(allocator: std.mem.Allocator, self: *const TopicBody) !TopicBody {
+                const desc: SourceDescriptor = .{
+                    .category = self.desc.category,
+                    .name = try allocator.dupe(u8, self.desc.name),
+                    .dialect = try allocator.dupe(u8, self.desc.dialect),
+                    .offset = self.desc.offset,
+                }; 
+
+                const bodies = try allocator.alloc(TopicBody.Encoded, self.bodies.len);
+                for (self.bodies, 0..) |body, i| {
+                    bodies[i] = .{
+                        .topic = try allocator.dupe(u8, body.topic),
+                        .data = try allocator.dupe(u8, body.data),
+                    };
+                }
+
+                return .{
+                    .desc = desc,
+                    .name_alt = if (self.name_alt) |name| try allocator.dupe(u8, name) else null,
+                    .bodies = bodies,
+                };
+            }
+
+            pub fn release(allocator: std.mem.Allocator, self: * TopicBody) void {
+                allocator.free(self.desc.name);
+                allocator.free(self.desc.dialect);
+                
+                if (self.name_alt) |name| allocator.free(name);
+                
+                for (self.bodies) |body| {
+                    allocator.free(body.topic);
+                    allocator.free(body.data);
+                }
+                allocator.free(self.bodies);
+            }
+        };
+    };
+
+    pub const GenerateResponse = struct {
+        desc: SourceDescriptor,
+        status: GenerateResponse.Status,
+        message: Symbol,
+
+        pub const Status = enum { noop, new_file, update_file, generate_failed };
     };
 
     pub const SourcePath = struct {
-        allocator: std.mem.Allocator,
         category: TopicCategory,
-        name: Symbol, 
-        path: FilePath, 
+        name: Symbol,
+        path: FilePath,
+        dialect: Symbol,
         hash: Symbol,
-        item_count: usize,
 
-        pub fn init(allocator: std.mem.Allocator, view: StructView(SourcePath)) !@This() {
+        pub fn init(view: StructView(SourcePath)) SourcePath {
             return .{
-                .allocator = allocator,
                 .category = view[0],
-                .name = try allocator.dupe(u8, view[1]),
-                .path = try allocator.dupe(u8, view[2]),
-                .hash = try allocator.dupe(u8, view[3]),
-                .item_count = view[4],
+                .name = view[1],
+                .path = view[2],
+                .dialect = view[3],
+                .hash = view[4],
             };
         }
-        pub fn deinit(self: @This()) void {
-            self.allocator.free(self.name);
-            self.allocator.free(self.path);
-            self.allocator.free(self.hash);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.values());
-        }
-        pub fn values(self: @This()) StructView(@This()) {
-            return .{ self.category, self.name, self.path, self.hash, self.item_count };
+        pub fn deinit(_: *SourcePath, _: std.mem.Allocator) void {}
+
+        pub fn values(self: *const SourcePath) StructView(SourcePath) {
+            return .{ self.category, self.name, self.path, self.dialect, self.hash };
         }
     };
 
-    pub const WorkerResponse = struct {
-        allocator: std.mem.Allocator,
-        content: Symbol,
+    pub const SourceDescriptor = struct {
+        category: TopicCategory,
+        name: Symbol,
+        dialect: Symbol,
+        offset: usize,
 
-        pub fn init(allocator: std.mem.Allocator, view: StructView(WorkerResponse)) !@This() {
+        pub fn init(view: StructView(SourceDescriptor)) SourceDescriptor {
             return .{
-                .allocator = allocator,
-                .content = try allocator.dupe(u8, view[0]),
+                .category = view[0],
+                .name = view[1],
+                .dialect = view[2],
+                .offset = view[3],
             };
         }
-        pub fn deinit(self: @This()) void {
-            self.allocator.free(self.content);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, .{self.content});
-        }
-        pub fn values(self: @This()) StructView(@This()) {
-            return .{ self.content };
+
+        pub fn deinit(_: *SourceDescriptor) void {}
+
+        pub fn values(self: *const SourceDescriptor) StructView(SourceDescriptor) {
+            return .{ self.category, self.name, self.dialect, self.offset };
         }
     };
 
     pub const Log = struct {
-        allocator: std.mem.Allocator,
         level: LogLevel,
         content: Symbol,
 
-        pub fn init(allocator: std.mem.Allocator, view: StructView(Log)) !@This() {
+        pub fn init(view: StructView(Log)) Log {
             return .{
-                .allocator = allocator,
                 .level = view[0],
-                .content = try allocator.dupe(u8, view[1]),
+                .content = view[1],
             };
         }
-        pub fn deinit(self: @This()) void {
-            self.allocator.free(self.content);
-        }
-        pub fn clone(self: @This(), allocator: std.mem.Allocator) !@This() {
-            return init(allocator, self.values());
-        }
-        pub fn values(self: @This()) StructView(@This()) {
+        pub fn deinit(_: *Log) void {}
+        pub fn values(self: *const Log) StructView(Log) {
             return .{ self.level, self.content };
         }
     };
 };
 
-/// Event operation 
+/// Event operation
 pub const EventOperation = struct {
     pub const deinit = deinitEvent;
-    pub const clone = cloneEvent;
+    // pub const clone = cloneEvent;
     pub fn tag(event: Event) std.meta.Tag(Event) {
         return std.meta.activeTag(event);
     }
@@ -338,178 +338,76 @@ pub const Event = union(EventType) {
     // Response
     ack: void,
     nack: void,
-    // Boot events
+    // periodically heartbeat
+    heartbeat: Payload.Heartbeat,
+    probe: EventPhase.Kind,
+    // Boot phase event
+    launching: void,
     launched: void,
     failed_launching: void,
-    request_topic: void,
+    // Topic request phase event
     topic: Payload.Topic,
-    // Watch event
-    ready_watch_path: void,
-    finish_watch_path: void,
+    finish_topic: void,
+    // Ready phase event
+    ready: void,
+    ready_progress: void,
     // Source path event
     ready_source_path: void,
     source_path: Payload.SourcePath,
-    pending_finish_source_path: void,
     finish_source_path: void,
     // Topic body events
-    ready_topic_body: void,
+    ready_topic_body: Payload.TopicBodyResponse,
     topic_body: Payload.TopicBody,
-    skip_topic_body: Payload.SkipTopicBody,
-    pending_finish_topic_body: void,
-    finish_topic_body: void,
     // Generate events
-    ready_generate: void,
-    finish_generate: void,
-    // Worker event
-    worker_response: Payload.WorkerResponse,
+    finish_generate: Payload.GenerateResponse,
     // Other event
-    quit_all: void,
     quit: void,
-    quit_accept: void,
     log: Payload.Log,
     report_fatal: Payload.Log,
     pending_fatal_quit: void,
+    worker_response: Symbol,
 
     pub const Payload = EventPayload;
-    pub usingnamespace EventOperation;
+    pub const deinit = deinitEvent;
+    pub const tag = eventTag;
 };
 
-fn deinitEvent(event: Event) void {
-    switch (event) {
+fn deinitEvent(event: *Event, allocator: std.mem.Allocator) void {
+    switch (event.*) {
         // Response events
         .ack => {},
         .nack => {},
-        // Boot events
+        // periodically heartbeat
+        .heartbeat => {},
+        .probe => {},
+        // Boot phase event
+        .launching => {},
         .launched => {},
         .failed_launching => {},
-        .request_topic => {},
-        .topic => |data| data.deinit(),
-        // Watch event
-        .ready_watch_path => {},
-        .finish_watch_path => {},
+        // Topic request phase event
+        .topic => |*data| data.deinit(allocator),
+        .finish_topic => {},
+        // Ready phase event
+        .ready => {},
+        .ready_progress => {},
         // Source path event
         .ready_source_path => {},
-        .source_path => |data| data.deinit(),
-        .pending_finish_source_path => {},
+        .source_path => |*data| data.deinit(allocator),
         .finish_source_path => {},
         // Topic body events
-        .ready_topic_body => {},
-        .topic_body => |data| data.deinit(),
-        .skip_topic_body => |data| data.deinit(),
-        .pending_finish_topic_body => {},
-        .finish_topic_body => {},
+        .ready_topic_body => |*data| data.deinit(allocator),
+        .topic_body => |*data| data.deinit(allocator),
         // Generate events
-        .ready_generate => {},
         .finish_generate => {},
-        // Worker event
-        .worker_response => |data| data.deinit(),
         // Other events
-        .quit_all => {},
         .quit => {},
-        .quit_accept => {},
-        .log => |data| data.deinit(),
-        .report_fatal => |data| data.deinit(),
+        .log => |*data| data.deinit(),
+        .report_fatal => |*data| data.deinit(),
         .pending_fatal_quit => {},
+        .worker_response => {},
     }
 }
-pub fn cloneEvent(event: Event, allocator: std.mem.Allocator) !Event {
-    const cloned_event: Event = switch (event) {
-        // Response events
-        .ack => .ack,
-        .nack => .nack,
-        // Boot events
-        .launched => .launched,
-        .failed_launching => .failed_launching,
-        .request_topic => .request_topic,
-        .topic => |payload| .{.topic = try payload.clone(allocator)},
-        // Watch events
-        .ready_watch_path => .ready_watch_path,
-        .finish_watch_path => .finish_watch_path,
-        // Source path events
-        .ready_source_path => .ready_source_path,
-        .source_path => |payload| .{.source_path = try payload.clone(allocator)},
-        .pending_finish_source_path => .pending_finish_source_path,
-        .finish_source_path => .finish_source_path,
-        // Topic body events
-        .ready_topic_body => .ready_topic_body,
-        .topic_body => |payload| .{.topic_body = try payload.clone(allocator)},
-        .skip_topic_body => |payload| .{.skip_topic_body = try payload.clone(allocator)},
-        .pending_finish_topic_body => .pending_finish_topic_body,
-        .finish_topic_body => .finish_topic_body,
-        // Generate events
-        .ready_generate => .ready_generate,
-        .finish_generate => .finish_generate,
-        // Worker event
-        .worker_response => |payload| .{.worker_response = try payload.clone(allocator)}, 
-        // Other events
-        .quit => .quit,
-        .quit_all => .quit_all,
-        .quit_accept => .quit_accept,
-        .log => |payload| .{.log = try payload.clone(allocator)},
-        .report_fatal => |payload| .{.log = try payload.clone(allocator)},
-        .pending_fatal_quit => .pending_fatal_quit,
-    };
 
-    std.debug.assert(event.tag() == cloned_event.tag());
-
-    return cloned_event; 
+pub fn eventTag(event: *const Event) EventType {
+    return std.meta.activeTag(event.*);
 }
-
-test "Clone events" {
-    const allocator = std.testing.allocator;
-
-    topic: {
-        const expect_event: Event = .{ .topic = try Event.Payload.Topic.init(allocator, .schema, &.{"foo", "bar", "baz"}, false) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.topic.values(), event.topic.values());
-        break:topic;
-    }
-    source_path: {
-        const expect_event: Event = .{ .source_path = try Event.Payload.SourcePath.init(allocator, .{.schema, "name", "/path/to", "hash", 1}) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.source_path.values(), event.source_path.values());
-        break:source_path;
-    }
-    topic_body: {
-        const expect_event: Event = .{ .topic_body = try Event.Payload.TopicBody.init(allocator, 
-            .{.schema, "header/name", "header/path", "header/hash", 2}, 
-            &.{ .{"topic_1", "value_1"}, .{"topic_2", "value_3"}, .{"topic_99", "value_99"},  }
-        ) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.topic_body.values(), event.topic_body.values());
-        break:topic_body;
-    }
-    skip_topic_body: {
-        const expect_event: Event = .{ .skip_topic_body = try Event.Payload.SkipTopicBody.init(allocator, 
-            .{.schema, "header/name_i", "header/path_i", "header/hash_i", 3},
-            0,
-        ) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.skip_topic_body.values(), event.skip_topic_body.values());
-        break:skip_topic_body;
-    }
-    worker_response: {
-        const expect_event: Event = .{ .worker_response = try Event.Payload.WorkerResponse.init(allocator, .{"some-worker-text"}) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.worker_response.values(), event.worker_response.values());
-        break:worker_response;
-    }
-    log: {
-        const expect_event: Event = .{ .log = try Event.Payload.Log.init(allocator, .{.info, "log message"}) };
-        defer expect_event.deinit();
-        const event = try expect_event.clone(std.heap.page_allocator);
-        defer event.deinit();
-        try std.testing.expectEqualDeep(expect_event.log.values(), event.log.values());
-        break:log;
-    }
-} 

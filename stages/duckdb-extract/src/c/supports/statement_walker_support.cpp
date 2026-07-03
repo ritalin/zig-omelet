@@ -24,11 +24,9 @@ static auto keepColumnName(duckdb::unique_ptr<duckdb::ParsedExpression>& expr) -
 static auto walkOrderBysNodeInternal(ParameterCollector& collector, duckdb::OrderModifier& order_bys, uint32_t depth) -> void;
 
 static auto pickUserTypeName(const duckdb::CastExpression& expr) -> std::optional<std::string> {
-    auto *ext_info = expr.cast_type.AuxInfo();
-    if (ext_info && (ext_info->type == duckdb::ExtraTypeInfoType::USER_TYPE_INFO)) {
-        auto& user_info = ext_info->Cast<duckdb::UserTypeInfo>();
-        
-        return std::make_optional(user_info.user_type_name);
+    auto ext_info = expr.cast_type.AuxInfo();
+    if (ext_info && (! ext_info->alias.empty())) {
+        return std::make_optional(ext_info->alias);
     }
 
     return std::nullopt;
@@ -391,9 +389,10 @@ static auto walkQueryNode(ParameterCollector& collector, duckdb::unique_ptr<duck
         break;
     case duckdb::QueryNodeType::SET_OPERATION_NODE:
         {
-            auto& combin_node = node->Cast<duckdb::SetOperationNode>();
-            walkQueryNode(collector, combin_node.left, 0);
-            walkQueryNode(collector, combin_node.right, 0);
+            auto& setop_node = node->Cast<duckdb::SetOperationNode>();
+            for (auto& node: setop_node.children) {
+                walkQueryNode(collector, node, 0);
+            }
         }
         break;
     case duckdb::QueryNodeType::CTE_NODE: 

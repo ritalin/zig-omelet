@@ -1,158 +1,170 @@
 const std = @import("std");
-const zmq = @import("zmq");
 const core = @import("core");
-
-const Setting = @import("./Setting.zig");
-const CodeBuilder = @import("./CodeBuilder.zig");
 const app_context = @import("build_options").app_context;
 
-const Connection = core.sockets.Connection.Client(app_context, GenerateWorker);
+const events = core.events;
+
+const EventDispatcher = core.sockets.EventDispatcher;
 const Logger = core.Logger.withAppContext(app_context);
+const ReceiveEntry = core.sockets.ReceiveEntry;
+
+const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ReadyPhaseState = @import("./phases/ready_phase.zig").ReadyPhaseState(GuestStage);
 
 const GenerateWorker = @import("./GenerateWorker.zig");
+const Setting = @import("./Setting.zig");
+const CodeBuilder = @import("./CodeBuilder.zig");
 
-const Self = @This();
+const GuestStage = @This();
 
 allocator: std.mem.Allocator,
-context: *zmq.ZContext,
-connection: *Connection,
-logger: Logger,
+setting: *const Setting,
+connection: *GuestStage.Connection,
+dispatcher: EventDispatcher.Sized(1),
+state: State,
 
+pub const Connection = core.sockets.Connection.Client(app_context);
 
-pub fn init(allocator: std.mem.Allocator, setting: Setting) !Self {
-    const context = try allocator.create(zmq.ZContext);
-    context.* = try zmq.ZContext.init(allocator);
-    errdefer allocator.destroy(context);
-    errdefer context.deinit();
-
-    var connection = try Connection.init(allocator, context);
+pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
-    try connection.subscribe_socket.addFilters(.{
-        .ready_topic_body = true,
-        .topic_body = true,
-        .finish_topic_body = true,
-        .quit_all = true,
-        .quit = true,
+
+    try connection.subscribe(&.{
+        .probe,
+        .ready_progress,
+        .topic_body,
     });
-    try connection.connect(setting.endpoints);
+    try connection.connect();
+
+    const options: EventDispatcher.Options = .{ 
+        .log_style = setting.log_style,
+        .no_color = setting.no_color, 
+    };
+    const dispatcher = try connection.configureDispatcher(1, options);
 
     return .{
         .allocator = allocator,
-        .context = context,
+        .setting = setting,
         .connection = connection,
-        .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
+        .dispatcher = dispatcher,
+        .state = .{ .launching = BootPhaseState.init },
+        // .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
     };
 }
 
-pub fn deinit(self: *Self) void {
-    self.connection.deinit();
-    self.context.deinit();
-    self.allocator.destroy(self.context);
+pub fn deinit(self: *GuestStage) void {
+    self.state.deinit(self.allocator);
+    self.dispatcher.deinit();
 }
 
-pub fn run(self: *Self, setting: Setting) !void {
-    try self.logger.log(.debug, "Beginning...", .{});
-    try self.logger.log(.debug, "Subscriber filters: {}", .{self.connection.subscribe_socket.listFilters()});
-
-    dump_setting: {
-        try self.logger.log(.debug, "CLI: Req/Rep Channel = {s}", .{setting.endpoints.req_rep});
-        try self.logger.log(.debug, "CLI: Pub/Sub Channel = {s}", .{setting.endpoints.pub_sub});
-        break :dump_setting;
-    }
-    launch: {
-        try self.connection.dispatcher.post(.launched);
-        break :launch;
-    }
-
-    var lookup = std.StringHashMap(core.Event.Payload.SourcePath).init(self.allocator);
-    defer lookup.deinit();
-
-    try self.connection.dispatcher.state.ready();
-
-    while (self.connection.dispatcher.isReady()) {
-        self.waitNextDispatch(setting, &lookup) catch {
-            try self.connection.dispatcher.postFatal(@errorReturnTrace());
-        };
-    }
+pub fn run(self: *GuestStage) !void {
+    self.dispatcher.run(app_context, GuestStage.onDispatch) catch |err| {
+        // TODO: fatal error log
+        // try self.connection.dispatcher.postFatal(@errorReturnTrace());
+        return err;
+    };
 }
 
-fn waitNextDispatch(self: *Self, setting: Setting, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
-    const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
-        error.InvalidResponse => {
-            try self.logger.log(.warn, "Unexpected data received", .{});
-            return;
+pub fn log(self: *GuestStage, comptime level: events.LogLevel, comptime fmt: []const u8, args: anytype) !void {
+    if (! comptime std.log.logEnabled(level.toStdLevel(), .default)) return;
+    try self.dispatcher.log(level, app_context, fmt, args);
+}
+
+pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase_agree: events.EventPhase.Agreement) !void {
+    const phase: events.EventPhase = .{ .kind = phase_kind, .agreement = phase_agree};
+    if (std.meta.eql(self.dispatcher.phase, phase)) return;
+
+    if (phase_agree == .pending) {
+        switch (phase_kind) {
+            .request => {},
+            .ready => try self.doReadyPhase(),
+            .quitting => self.doQuitPhase(),
+            else => unreachable,
+        }
+    }
+    self.dispatcher.phase = phase;
+}
+
+pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
+    switch (entry.event) {
+        .probe => |phase| {
+            if ((phase == .terminating)) {
+                try self.transitPhase(.quitting, .confirmed);
+                return;
+            }
+
+            if (self.dispatcher.phase.kind != phase) {
+                try self.log(.debug, "Phase unmatched/phase: {s}, current: {s}", .{@tagName(phase), @tagName(self.dispatcher.phase.kind)});
+                return;
+            }
+            if (self.dispatcher.phase.agreement == .confirmed) {
+                try self.log(.debug, "Discard probe/phase: {s}", .{@tagName(phase)});
+                return;
+            }
+            switch (phase) {
+                .request => {
+                    var channel = try self.connection.requestChannel();
+                    try channel.submit(self.connection.context.io, .finish_topic, .{});
+                    try self.transitPhase(.ready, .pending);
+                },
+                .terminating => {
+                    try self.transitPhase(.quitting, .confirmed);
+                },
+                else => {
+                    dirty.* = .unhandled;
+                }
+            }
         },
-        else => return err,
-    };
-
-    if (_item) |*item| {
-        defer item.deinit();
-
-        switch (item.event) {
-            .ready_topic_body => {
-                try self.logger.log(.debug, "Ready for generating", .{});
-                try self.connection.dispatcher.post(.ready_generate);
-            },
-            .topic_body => |source| {
-                try self.connection.dispatcher.approve();
-                try self.logger.log(.debug, "Accept source: `{s}`", .{source.header.path});
-
-                const path = try source.header.clone(self.allocator);
-                try lookup.put(path.path, path);
-
-                const worker = try GenerateWorker.init(self.allocator, source, setting.output_dir_path);
-                try self.connection.pull_sink_socket.spawn(worker);
-                try self.connection.dispatcher.post(.ready_generate);
-            },
-            .worker_response => |res| {
-                try self.processWorkResult(res.content, lookup);
-
-                if (self.connection.dispatcher.state.level.terminating) {
-                    if (lookup.count() == 0) {
-                        try self.connection.dispatcher.post(.ready_generate);
-                    }
-                }
-            },
-            .finish_topic_body => {
-                try self.connection.dispatcher.approve();
-                try self.connection.dispatcher.state.receiveTerminate();
-
-                if (lookup.count() == 0) {
-                    if (self.connection.dispatcher.state.level.terminating) {
-                        try self.connection.dispatcher.post(.finish_generate);
-                    }
-                }
-                else {
-                    try self.logger.log(.debug, "Cannot finish yet (left: {})", .{lookup.count()});
-                }
-            },
-            .quit => {
-                if (lookup.count() == 0) {
-                    try self.connection.dispatcher.quitAccept();
-                }
-            },
-            .quit_all => {
-                try self.connection.dispatcher.quitAccept();
-                try self.connection.pull_sink_socket.stop();
-            },
-            .log => |log| {
-                try self.logger.log(log.level, "{s}", .{log.content});
-            },
-            else => {
-                try self.logger.log(.warn, "Discard command: {}", .{std.meta.activeTag(item.event)});
-            },
+        .ready_progress => {
+            // discard
+            try self.log(.trace, "Discard ready progress", .{});
+        },
+        else => {
+            dirty.* = .unhandled;
         }
     }
 }
 
-fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
+fn doReadyPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .ready = try ReadyPhaseState.create(self.allocator) };
+}
+
+fn doQuitPhase(self: *GuestStage) void {
+    self.state.deinit(self.allocator);
+}
+
+fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
+    const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
+
+    switch (self.state) {
+        .launching => |state| {
+            try state.handle(self, entry, dirty);
+        },
+        .ready => |*state| {
+            try state.handle(self, entry, dirty);
+        },
+        else => {
+            unreachable;
+        }
+    }
+    // TODO:
+    // const _item = self.connection.dispatcher.dispatch() catch |err| switch (err) {
+    //     error.InvalidResponse => {
+    //         try self.logger.log(.warn, "Unexpected data received", .{});
+    //         return;
+    //     },
+    //     else => return err,
+    // };
+}
+
+fn processWorkResult(self: *GuestStage, result_content: core.Symbol, lookup: *std.StringHashMap(core.Event.Payload.SourcePath)) !void {
     var reader = core.CborStream.Reader.init(result_content);
 
     const source_path = try reader.readString();
     const dest_name = try reader.readString();
     const message = try reader.readString();
     const status = try reader.readEnum(GenerateWorker.ResultStatus);
-    
+
     const kv_ = lookup.fetchRemove(source_path);
     defer {
         if (kv_) |*kv| kv.value.deinit();
@@ -171,4 +183,22 @@ fn processWorkResult(self: *Self, result_content: core.Symbol, lookup: *std.Stri
         });
     }
     try self.logger.log(.trace, "End generate from `{s}`", .{if (kv_) |kv| kv.value.name else "????"});
+}
+
+const State = union(events.EventPhase.Kind) {
+    launching: BootPhaseState,
+    request: void,
+    ready: ReadyPhaseState,
+    terminating: void,
+    quitting: void,
+
+    const deinit = deinitState;
+};
+
+fn deinitState(self: *State, allocator: std.mem.Allocator) void {
+    switch (self.*) {
+        .launching => |*state| state.deinit(),
+        .ready => |*state| state.deinit(allocator),
+        else => unreachable,
+    }
 }

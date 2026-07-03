@@ -1,75 +1,49 @@
 const std = @import("std");
-const clap = @import("clap");
+// const clap = @import("clap");
 const core = @import("core");
 
-const log = core.Logger.SystemDirect(@import("build_options").APP_CONTEXT);
+const ArgScanner = core.settings.types.ArgScanner;
 
-const help = @import("./help.zig");
+const default_init_scope = @import("build_options").default_init_scope;
 
+const config_types = @import("../configs/types.zig");
+const ArgHelp = @import("../help/ArgHelp.zig");
 const Setting = @This();
 
-arena: *std.heap.ArenaAllocator,
-general: GeneralSetting,
-command: CommandSetting,
+base: BaseSetting,
+command: SubcommandSetting,
 
-pub const GeneralSetting = @import("./commands/GeneralSetting.zig");
-pub const CommandSetting = @import("./commands/commands.zig").CommandSetting;
+pub const BaseSetting = @import("./commands/BaseSetting.zig");
+pub const SubcommandSetting = @import("./commands/Subcommand.zig").Setting;
 
-pub fn deinit(self: *Setting) void {
-    self.arena.deinit();
-    self.arena.child_allocator.destroy(self.arena);
-}
-
-pub fn loadFromArgs(allocator: std.mem.Allocator) !core.settings.LoadResult(Setting, help.ArgHelpSetting) {
-    var args_iter = try std.process.argsWithAllocator(allocator);
+pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, args: std.process.Args) !core.settings.types.LoadResult(Setting, *const ArgHelp.Config) {
+    var args_iter = try args.iterateAllocator(allocator);
     defer args_iter.deinit();
 
     _ = args_iter.next();
 
-    var diag: clap.Diagnostic = .{};
-    var parser = clap.streaming.Clap(help.GeneralSettingArgId, std.process.ArgIterator){
-        .params = help.GeneralSettingArgId.Decls,
-        .iter = &args_iter,
-        .diagnostic = &diag,
+    var scanner = ArgScanner(std.process.Args.Iterator).init(&args_iter);
+    var res = BaseSetting.Builder(std.process.Args.Iterator).fromArgs(allocator, &scanner, .stderr)
+    catch {
+        return .{.help = &ArgHelp.toplevel};
     };
 
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
-    errdefer allocator.destroy(arena);
-    errdefer arena.deinit();
+    const sub_res = SubcommandSetting.fromArgs(io, allocator, env, &scanner, &res.builder, res.command, res.builder.scope orelse default_init_scope);
 
-    const general_setting = 
-        switch (try loadGeneralArgs(arena, @TypeOf(parser), &parser)) {
-            .success => |setting| setting,
-            .help => |setting| return .{ .help = setting },
-        }
-    ;
-    const command_setting = 
-        switch(try CommandSetting.loadArgs(arena, @TypeOf(parser), &parser, general_setting.scope)) {
-            .success => |setting| setting,
-            .help => |setting| return .{ .help = setting },
-        }
-    ;
-    
-    const setting: Setting = .{
-        .arena = arena,
-        .general = general_setting,
-        .command = command_setting,
+    const setting_pair = switch (sub_res) {
+        .help => |help| return .{.help = help},
+        .success => |settings| settings,
     };
-
-    return .{ .success = setting };
-}
-
-fn loadGeneralArgs(arena: *std.heap.ArenaAllocator, comptime Parser: type, parser: *Parser) !core.settings.LoadResult(GeneralSetting, help.ArgHelpSetting) {
-    const builder = 
-        GeneralSetting.Builder.loadArgs(Parser, parser)
-        catch |err| switch (err) {
-            error.SettingLoadFailed, error.ShowHelp => return .{ .help = help.GeneralHelpSetting },
-            else => return err,
-        }
-    ;
 
     return .{
-        .success = try builder.build(arena.allocator())
+        .success = .{
+            .base = setting_pair.base,
+            .command = setting_pair.command,
+        }
     };
+}
+
+pub fn deinit(self: *Setting, io: std.Io, allocator: std.mem.Allocator) void {
+    self.base.deinit(io, allocator);
+    self.command.deinit(allocator);
 }

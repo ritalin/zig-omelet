@@ -1,6 +1,12 @@
 .{
     .stage_watch = .{
         .@"omelet-watch-files" = .{
+            // Guest name
+            // default: Same as parent field name
+            .name = .default,
+            // Guest component management.
+            // default: true
+            .enable_managed = .{.enabled = true},
             // default: launch from path same as runner
             // path: launch from specified full/cwd-relative directory path
             .location = .default,
@@ -40,13 +46,13 @@
                 // .watch = .{.enabled = true}
                 // ```
                 .watch = .default, 
-        },
-            // wheather launch stage automatic
-            .managed = true,
+            },
         },
     },
     .stage_extract = .{
         .@"omelet-duckdb-extract" = .{
+            .name = .default,
+            .enable_managed = .{.enabled = true},
             .location = .default,
             .extra_args = .{
                 // Schema folder path(s)
@@ -57,11 +63,12 @@
                 // ```
                 .schema_dir_set = .default
             },
-            .managed = true,
         },
     },
     .stage_generate = .{
         .@"omelet-ts-generate" = .{
+            .name = .default,
+            .enable_managed = .{.enabled = true},
             .location = .default,
             .extra_args = .{
                 // Destination folder path
@@ -72,7 +79,6 @@
                 // ```
                 .output_dir_path = .default
             },
-            .managed = true,
         },
     },
 }

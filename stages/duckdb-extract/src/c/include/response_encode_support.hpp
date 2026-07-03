@@ -1,4 +1,6 @@
 #include "omelet_c_types.h"
+#include "cbor_encode.hpp"
+#include "duckdb_worker.h"
 
 namespace worker {
 
@@ -10,9 +12,33 @@ enum class LogLevel {
     trace = ::log_level_trace,
 };
 
-auto encodeStatementCount(const size_t count) -> std::vector<char>;
-auto encodeStatementOffset(size_t offset) -> std::vector<char>;
-auto encodeTopicBody(const size_t offset , std::optional<std::string> name_alt, const std::unordered_map<std::string, std::vector<char>>& topic_bodies) -> std::vector<char>;
-auto encodeWorkerLog(LogLevel log_level, const std::string& id, const size_t offset, const std::string message) -> std::vector<char>;
+auto encodeStatementCount(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t count) -> void;
+
+auto encodeStatementOffset(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    size_t offset) -> void;
+
+auto encodeTopicBody(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const SourceDescriptor& desc, 
+    const size_t offset, 
+    std::optional<std::string> name_alt, 
+    const std::unordered_map<std::string_view, CborEncoder<VectorBackend>>& topic_bodies) -> void;
+
+auto encodeWorkerLog(
+    CborEncoder<NngBackend>& encoder, 
+    const std::string_view& stage, 
+    const std::string_view& worker_phase, 
+    const SourceDescriptor& desc,
+    const size_t offset, 
+    LogLevel log_level, 
+    const std::string& message) -> void;
 
 }

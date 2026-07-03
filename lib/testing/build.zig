@@ -1,34 +1,45 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
-
+    const catch2_prefix = 
+        b.option([]const u8, "CATCH2_PREFIX", "catch2 installed path") 
+        orelse b.graph.environ_map.get("CATCH2_PREFIX").?
+    ;
+    
     lib_module: {
         const mod = b.addModule("runner", .{
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         });
+
+        if (builtin.os.tag == .linux) {
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/15/libstdc++.so"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"});
+        }
+        else {
+            mod.link_libcpp = true;
+        }
+
         catch2_native_config: {
             mod.addCSourceFiles(.{
                 .root = b.path("src/c"),
                 .files = &.{
                     "catch2_session_run.cpp",
-                }
+                },
+                .flags = &.{
+                    "-std=c++20", 
+                    if ((optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                },
             });
             mod.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "lib"})});
             mod.addIncludePath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "include"})});
@@ -41,36 +52,4 @@ pub fn build(b: *std.Build) void {
     test_module: {
         break:test_module;
     }
-
-// ===================
-
-    // const exe = b.addExecutable(.{
-    //     .name = "lib-main",
-    //     .root_source_file = b.path("src/main.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-    // exe.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{zmq_prefix, "zmq/lib"}) });
-    // exe.linkSystemLibrary("zmq");
-    // exe.linkLibCpp();
-    // exe.linkLibC();
-
-    // exe.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/include"})});
-    // exe.addCSourceFiles(.{
-    //     .root = .{ .cwd_relative = b.pathResolve(&.{"../vendor/cbor/src/"}) },
-    //     .files = &.{
-    //         "encoder.c",
-    //         "common.c",
-    //         "decoder.c",
-    //         "parser.c",
-    //         "ieee754.c",
-    //     }
-    // });
-
-    // b.installArtifact(exe);
-    // const run_exe = b.addRunArtifact(exe);
-    // run_exe.step.dependOn(b.getInstallStep());
-    // const run_step = b.step("run", "Run exe");
-    // run_step.dependOn(&run_exe.step);
 }

@@ -1,38 +1,49 @@
 const std = @import("std");
 const core = @import("core");
+
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
-const log = core.Logger.TraceDirect(@import("build_options").app_context);
+const app_context = @import("build_options").app_context;
+const renderHelp = @import("./help/rendering.zig").render;
 
-extern fn ParseDescribeStmt() callconv(.C) void;
+pub const std_options: std.Options = .{
+    .logFn = core.Logger.forwardIntegratedLog,
+};
 
-pub fn main() !void {
-    var gpa = (std.heap.GeneralPurposeAllocator(.{.stack_trace_frames = 6, .thread_safe = true, .safety = true}){});
-    defer {
-        log.debug("Leak? {}", .{gpa.deinit()});
-    }
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    var setting = Setting.loadFromArgs(allocator) catch {
-        try Setting.help(std.io.getStdErr().writer());
-        std.process.exit(1);
+    var setting = switch (Setting.loadFromArgs(allocator, init.minimal.args)) {
+        .help => |help| {
+            try renderHelp(help);
+            std.process.exit(1);
+        },
+        .success => |setting| setting,
     };
-    defer setting.deinit();
+    defer setting.deinit(allocator);
 
     core.Logger.filterWith(setting.log_level);
+    
+    var connection = try Stage.Connection.create(init.io, allocator, setting.endpoints);
+    defer connection.deinit();
 
-    var stage = try Stage.init(allocator, setting);
+    var stage = try Stage.create(init.io, allocator, &connection, &setting);
     defer stage.deinit();
-
-    try stage.run(setting);
-
-    log.debug("Finished", .{});
+    try stage.run();
 }
 
 test "main" {
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
     std.testing.refAllDecls(@This());
+}
 
-    const run_catch2 = @import("test_runner").run_catch2;
-    try std.testing.expectEqual(0, try run_catch2(std.testing.allocator));
+test "cpp main" {
+    const test_options = @import("build_options");
+    if (!test_options.is_test_separated) {
+        const run_catch2 = @import("test_runner").run_catch2;
+        try std.testing.expectEqual(0, try run_catch2(std.testing.io, std.testing.allocator, .{}));
+    }
 }

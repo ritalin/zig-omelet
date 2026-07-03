@@ -1,8 +1,12 @@
 zig-cache
-.zig-cache/
+.zig-cache
 zig-out
+zig-pkg
 _dump
 _sandbox
+_output
 .DS_Store
 .omelet
+.env
+.vscode
 test_result.txt

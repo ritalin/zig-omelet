@@ -18,12 +18,12 @@ namespace worker {
 
 class TableCatalogResolveVisitor {
 public:
-    TableCatalogResolveVisitor(CatalogLookup& lookup_ref, ZmqChannel& channel): channel(channel), lookup(lookup_ref) {}
+    TableCatalogResolveVisitor(CatalogLookup& lookup_ref, NngChannel& channel): channel(channel), lookup(lookup_ref) {}
 public:
     auto VisitTableRef(duckdb::unique_ptr<duckdb::BoundTableRef> &table_ref) -> void;
     auto VisitSelectNode(duckdb::unique_ptr<duckdb::BoundQueryNode>& node) ->void;
 private:
-    ZmqChannel& channel;
+    NngChannel& channel;
     CatalogLookup& lookup;
 };
 

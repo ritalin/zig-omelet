@@ -1,33 +1,45 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core");
 const Stage = @import("./Stage.zig");
 const Setting = @import("./Setting.zig");
 
-const log = core.Logger.TraceDirect(@import("build_options").app_context);
+const app_context = @import("build_options").app_context;
+const renderHelp = @import("./help/rendering.zig").render;
 
-pub fn main() !void {
-    var gpa = (std.heap.GeneralPurposeAllocator(.{.stack_trace_frames=12}){});
-    defer {
-        log.debug("Leak? {}", .{gpa.deinit()});
-    }
-    const allocator = gpa.allocator();
+pub const std_options: std.Options = .{
+    .log_scope_levels = &.{
+        core.Logger.AppLevel,
+        core.Logger.TraceLevel,
+    },
+    .logFn = core.Logger.forwardIntegratedLog,
+};
 
-    var setting = Setting.loadFromArgs(allocator) catch {
-        try Setting.help(std.io.getStdErr().writer());
-        std.process.exit(1);
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+
+    var setting = switch(Setting.loadFromArgs(allocator, init.minimal.args)) {
+        .help => |help| {
+            try renderHelp(help);
+            std.process.exit(1);
+        },
+        .success => |setting| setting,
     };
-    defer setting.deinit();
+    defer setting.deinit(allocator);
 
     core.Logger.filterWith(setting.log_level);
-    
-    var stage = try Stage.init(allocator, setting);
+
+    var connection = try Stage.Connection.create(init.io, allocator, setting.endpoints);
+    defer connection.deinit();
+
+    var stage = try Stage.create(allocator, &connection, &setting);
     defer stage.deinit();
-
-    try stage.run(setting);
-
-    log.debug("Finished", .{});
+    try stage.run();
 }
 
 test "main" {
+    if (@import("test_options").run_as_workspace) {
+        std.debug.print(" in `Test/{s}` ", .{app_context});
+    }
     std.testing.refAllDecls(@This());
 }

@@ -3,7 +3,7 @@
 #include <duckdb.hpp>
 #include <duckdb/parser/expression/cast_expression.hpp>
 
-#include "zmq_worker_support.hpp"
+#include "worker_support.hpp"
 #include "duckdb_nullable_lookup.hpp"
 #include "user_type_support.hpp"
 
@@ -118,13 +118,13 @@ public:
 auto evalParameterType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementParameterStyle;
 auto evalStatementType(const duckdb::unique_ptr<duckdb::SQLStatement>& stmt) -> StatementType;
 auto swapMapEntry(const std::unordered_map<std::string, ParamLookupEntry>& map) -> std::unordered_map<std::string, ParamLookupEntry>;
-auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, ZmqChannel&& channel) -> ResolveResult<ParamCollectionResult>;
+auto walkSQLStatement(duckdb::unique_ptr<duckdb::SQLStatement>& stmt, NngChannel& channel) -> ResolveResult<ParamCollectionResult>;
 
 auto bindTypeToStatement(duckdb::ClientContext& context, duckdb::unique_ptr<duckdb::SQLStatement>&& stmt, const ParamNameLookup& names, const ParamExampleLookup& examples) -> BoundResult;
 
-auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints, ParamExampleLookup&& examples, ZmqChannel& channel) -> ParamResolveResult;
-auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnResolveResult;
-auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, ZmqChannel& channel) -> ColumnNullabilityResult;
-auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ZmqChannel& channel) -> std::optional<UserTypeResult>;
+auto resolveParamType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, ParamNameLookup&& name_lookup, BoundParamTypeHint&& type_hints, ParamExampleLookup&& examples, NngChannel& channel) -> ParamResolveResult;
+auto resolveColumnType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, StatementType stmt_type, duckdb::Connection& conn, NngChannel& channel) -> ColumnResolveResult;
+auto resolveSelectListNullability(duckdb::unique_ptr<duckdb::LogicalOperator>& op, duckdb::Connection& conn, NngChannel& channel) -> ColumnNullabilityResult;
+auto resolveUserType(duckdb::unique_ptr<duckdb::LogicalOperator>& op, NngChannel& channel) -> std::optional<UserTypeResult>;
 
 }

@@ -1,158 +1,183 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const workspace = b.option(bool, "workspace", "Run test as workspace") orelse false;
     const exe_prefix = b.option([]const u8, "exe_prefix", "product name") orelse "stage";
-    const zmq_prefix = b.option([]const u8, "zmq_prefix", "zmq installed path") orelse "/usr/local/opt/zmq";
-    const duckdb_prefix = b.option([]const u8, "duckdb_prefix", "duckdb installed path") orelse "/usr/local/opt/duckdb";
-    const catch2_prefix = b.option([]const u8, "catch2_prefix", "catch2 installed path") orelse "/usr/local/opt/catch2";
+    const nng_prefix =
+        b.option([]const u8, "NNG_PREFIX", "NNG path prefix")
+        orelse b.graph.environ_map.get("NNG_PREFIX").?
+    ;
+    const duckdb_prefix = 
+        b.option([]const u8, "DUCKDB_PREFIX", "duckdb installed path") 
+        orelse b.graph.environ_map.get("DUCKDB_PREFIX").?
+    ;
+    const catch2_prefix = 
+        b.option([]const u8, "CATCH2_PREFIX", "catch2 installed path") 
+        orelse b.graph.environ_map.get("CATCH2_PREFIX").?
+    ;
 
-    std.debug.print("**** extract/zmq_prefix {s}\n", .{zmq_prefix});
-    std.debug.print("**** extract/duckdb {s}\n", .{duckdb_prefix});
-    std.debug.print("**** extract/catch2_prefix {s}\n", .{catch2_prefix});
+    const deps = b.dependency("third_parties", .{
+        .NNG_PREFIX = nng_prefix,
+        .target = target,
+        .optimize = optimize,
+    });
+    const dep_lib_core = b.dependency("lib_core", .{ .NNG_PREFIX = nng_prefix, .workspace = workspace });
+    const dep_lib_testing = b.dependency("lib_testing", .{.CATCH2_PREFIX = catch2_prefix});
 
-    const dep_zzmq = b.dependency("zzmq", .{ .zmq_prefix = @as([]const u8, zmq_prefix) });
-    const dep_clap = b.dependency("clap", .{});
-    const dep_lib_core = b.dependency("lib_core", .{.zmq_prefix = zmq_prefix});
-    const dep_lib_testing = b.dependency("lib_testing", .{.catch2_prefix = catch2_prefix});
+    const app_context = "duckdb-extract";
+    const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
 
-    const app_context = "extract";
-    const exe_name = b.fmt("{s}-{s}-{s}", .{exe_prefix, "duckdb", app_context}); // for displaying help
-
-    const build_options = b.addOptions();
-    build_options.addOption([]const u8, "app_context", app_context);
-    build_options.addOption([]const u8, "exe_name", exe_name);
+    const mod_interop_c = b.addTranslateC(.{
+        .root_source_file = b.path("./src/c/include/duckdb_worker.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    for (deps.module("nng-core").include_dirs.items) |dir| {
+        mod_interop_c.addIncludePath(dir.path);
+    }
+    
+    const app_root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = dep_lib_core.module("core") },
+            .{ .name = "clap", .module = deps.module("clap") },
+            .{ .name = "nnng", .module = deps.module("nnng") },
+            .{ .name = "nng_core", .module = deps.module("nng-core") },
+            .{ .name = "c", .module = mod_interop_c.createModule() },
+        },
+    });
 
     app_module: {
-        const exe = b.addExecutable(.{
-            .name = exe_name,
-            .root_source_file = b.path("src/main.zig"),
+        const build_options = b.addOptions();
+        build_options.addOption([]const u8, "app_context", exe_name);
+        build_options.addOption([]const u8, "exe_name", exe_name);
+        build_options.addOption([]const u8, "worker_stage", exe_name);
+        build_options.addOption(bool, "forward_worker", true);
+
+        const app_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{.name = "root_module", .module = app_root_module},
+                .{.name = "build_options", .module = build_options.createModule()},
+            },
         });
-
+        
         native_config: {
-            // exe.addIncludePath(b.path("src/c/include"));
-            exe.root_module.addImport("worker_runtime", mod_worker: {
-                break:mod_worker createWorkerModule(b, .{
-                    .name = "worker_extract",
+            const mod_worker = worker: {
+                const mod = createWorkerModule(b, .{
                     .target = target,
                     .optimize = optimize,
                     .duckdb_prefix = duckdb_prefix,
-                    .zmq_prefix = zmq_prefix,
+                    .nng_prefix = nng_prefix,
                     .catch2_prefix = catch2_prefix,
+                    .root_source = mod_interop_c.getOutput(),
                     .dep_modules = &.{
-                        .{.name = "cbor_cpp_support", .mod = dep_lib_core.module("cbor_cpp_support")},
-                        .{.name = "omelet_c_support", .mod = dep_lib_core.module("omelet_c_support")},
+                        .{.name = "cbor_cpp", .mod = dep_lib_core.module("cbor-cpp")},
+                        .{.name = "omelet_c", .mod = dep_lib_core.module("omelet_c")},
+                        .{.name = "nng_core", .mod = deps.module("nng-core") },
+                    },
+                    .dep_libraries = &.{
+                        dep_lib_core.artifact("cborcpp"),
                     },
                     .use_catch2 = false
                 });
-            });
+                mod.addIncludePath(dep_lib_core.path("include"));
+                break:worker mod;
+            };
+            app_module.addImport("worker_runtime", mod_worker);
             break:native_config;
         }
-        import_modules: {
-            exe.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-            exe.root_module.addImport("clap", dep_clap.module("clap"));
-            exe.root_module.addImport("core", dep_lib_core.module("core"));
-            exe.root_module.addOptions("build_options", build_options);
-            break:import_modules;
-        }
         app_runner: {
-            // This declares intent for the executable to be installed into the
-            // standard location when the user invokes the "install" step (the default
-            // step when running `zig build`).
+            const exe = b.addExecutable(.{
+                .name = exe_name,
+                .root_module = app_module,
+            });
             b.installArtifact(exe);
-
-            // This *creates* a Run step in the build graph, to be executed when another
-            // step is evaluated that depends on it. The next line below will establish
-            // such a dependency.
+            
             const run_cmd = b.addRunArtifact(exe);
-
-            // By making the run step depend on the install step, it will be run from the
-            // installation directory rather than directly from within the cache directory.
-            // This is not necessary, however, if the application depends on other installed
-            // files, this ensures they will be present and in the expected location.
             run_cmd.step.dependOn(b.getInstallStep());
 
-            // This allows the user to pass arguments to the application in the build
-            // command itself, like this: `zig build run -- arg1 arg2 etc`
             if (b.args) |args| {
                 run_cmd.addArgs(args);
             }
-
-            // Apply zmq communication cannel
-            try @import("lib_core").builder_supports.DebugEndpoint.applyStageChannel(run_cmd);
 
             run_cmd.addArgs(&.{
                 "--log-level=trace",
                 "--schema-dir=./_schema-examples"
             });
-            // This creates a build step. It will be visible in the `zig build --help` menu,
-            // and can be selected like this: `zig build run`
-            // This will evaluate the `run` step rather than the default, which is "install".
+
             const run_step = b.step("run", "Run the app");
             run_step.dependOn(&run_cmd.step);
             break:app_runner;
         }
         break:app_module;
     }
-
     test_module: {
+        const is_test_separated = b.option(bool, "SEP_TEST", "Separate tests for zig and C++") orelse false;
+
+        const build_options = b.addOptions();
+        build_options.addOption([]const u8, "app_context", exe_name);
+        build_options.addOption([]const u8, "exe_name", exe_name);
+        build_options.addOption([]const u8, "worker_stage", app_context);
+        build_options.addOption(bool, "is_test_separated", is_test_separated);
+        build_options.addOption(bool, "forward_worker", false);
+
         const test_prefix = "test";
-        const exe_unit_tests = b.addTest(.{
-            .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
-            .root_source_file = b.path("src/main.zig"),
+        const test_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{.name = "test_root", .module = app_root_module},
+                .{.name = "test_runner", .module = dep_lib_testing.module("runner") },
+                .{.name = "build_options", .module = build_options.createModule()},
+            }
         });
 
-        native_config: {
-            // exe_unit_tests.addIncludePath(b.path("src/c/include"));
-            exe_unit_tests.root_module.addImport("worker_runtime", mod_worker: {
-                break:mod_worker createWorkerModule(b, .{
-                    .name = "worker_extract_test",
+        const mod_worker = native_config: {
+            const mod_worker = worker: {
+                const mod = createWorkerModule(b, .{
                     .target = target,
                     .optimize = optimize,
                     .duckdb_prefix = duckdb_prefix,
-                    .zmq_prefix = zmq_prefix,
+                    .nng_prefix = nng_prefix,
                     .catch2_prefix = catch2_prefix,
+                    .root_source = mod_interop_c.getOutput(),
                     .dep_modules = &.{
-                        .{.name = "cbor_cpp_support", .mod = dep_lib_core.module("cbor_cpp_support")},
-                        .{.name = "omelet_c_support", .mod = dep_lib_core.module("omelet_c_support")},
+                        .{.name = "cbor_cpp", .mod = dep_lib_core.module("cbor-cpp")},
+                        .{.name = "omelet_c", .mod = dep_lib_core.module("omelet_c")},
+                        .{.name = "nng_core", .mod = deps.module("nng-core")},
+                    },
+                    .dep_libraries = &.{
+                        dep_lib_core.artifact("cborcpp"),
                     },
                     .use_catch2 = true
                 });
-            });
-            break:native_config;
-        }
-        import_modules: {
-            exe_unit_tests.root_module.addImport("zmq", dep_zzmq.module("zzmq"));
-            exe_unit_tests.root_module.addImport("clap", dep_clap.module("clap"));
-            exe_unit_tests.root_module.addImport("core", dep_lib_core.module("core"));
-            exe_unit_tests.root_module.addImport("test_runner", dep_lib_testing.module("runner"));
-            exe_unit_tests.root_module.addOptions("build_options", build_options);
-            break:import_modules;
-        } 
-        test_runner: {
-            const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+                break:worker mod;
+            };
+            break:native_config mod_worker;
+        };
+        test_module.addImport("c", mod_worker);
 
-            // Similar to creating the run step earlier, this exposes a `test` step to
-            // the `zig build --help` menu, providing a way for the user to request
-            // running the unit tests.
+        const mod_test_options = b.addOptions();
+        mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
+        mod_test_options.addOption(bool, "run_as_workspace", workspace);
+        test_module.addImport("test_options", mod_test_options.createModule());
+
+        const exe_unit_tests = test_runner: {
+            const exe_unit_tests = b.addTest(.{
+                .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
+                .root_module = test_module,
+            });
+            const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+            run_exe_unit_tests.has_side_effects = true;
+
             const test_step = b.step("test", "Run unit tests");
             test_step.dependOn(&run_exe_unit_tests.step);
 
@@ -160,7 +185,30 @@ pub fn build(b: *std.Build) void {
                 test_step.dependOn(&b.addInstallArtifact(exe_unit_tests, .{.dest_sub_path = "../test/" ++ app_context}).step);
                 break:test_artifact;
             }
-            break:test_runner;
+            break:test_runner exe_unit_tests;
+        };
+        cpp_test_runner: {
+            if (!is_test_separated) break:cpp_test_runner;
+
+            const cpp_unit_tests = b.addExecutable(.{
+                .name = b.fmt("test-cpp-{s}", .{app_context}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("tools/cpp_test_bootstrap.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{.name = "test_root", .module = app_root_module},
+                        .{.name = "c", .module = mod_worker},
+                        .{.name = "test_runner", .module = dep_lib_testing.module("runner") },
+                        .{.name = "build_options", .module = build_options.createModule()},
+                    }
+                }),
+            });
+            cpp_unit_tests.use_llvm = true;
+            const cpp_test_runner = b.addInstallArtifact(cpp_unit_tests, .{
+                .dest_sub_path = b.pathJoin(&.{"../test/", cpp_unit_tests.name}),
+            });
+            exe_unit_tests.step.dependOn(&cpp_test_runner.step);
         }
         break:test_module;
     }
@@ -169,26 +217,39 @@ pub fn build(b: *std.Build) void {
 fn createWorkerModule(
     b: *std.Build, 
     config: struct {
-        name: []const u8,
         target: std.Build.ResolvedTarget,
         optimize: std.builtin.OptimizeMode,
         duckdb_prefix: []const u8,
-        zmq_prefix: []const u8,
+        nng_prefix: []const u8,
         catch2_prefix: []const u8, 
+        root_source: std.Build.LazyPath,
         dep_modules: []const (struct {name: []const u8, mod: *std.Build.Module}),
+        dep_libraries: []const *std.Build.Step.Compile,
         use_catch2: bool
     }
 ) *std.Build.Module {
-    const mod = b.addModule(config.name, .{
-        .root_source_file = b.path("src/duckdb_worker.zig"),
+    const mod = b.createModule(.{
+        .root_source_file = config.root_source,
         .target = config.target,
         .optimize = config.optimize,
         .link_libc = true,
-        .link_libcpp = true,
     });
+
+    if (builtin.os.tag == .linux) {
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu/c++/15"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include"});
+            mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/15/libstdc++.so"});
+            mod.addObjectFile(.{.cwd_relative = "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"});
+    }
+    else {
+        mod.link_libcpp = true;
+    }
 
     native_config: {
         mod.addIncludePath(b.path("src/c/include"));
+        mod.addIncludePath(.{.cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "include"})});
         mod.addCSourceFiles(.{ 
             .root = b.path("src/c"),
             .files = &.{
@@ -205,19 +266,31 @@ fn createWorkerModule(
                 "resolver/resolve_column_binding.cpp",
                 "resolver/resolve_select_statement_nullable.cpp",
                 "resolver/resolve_user_type.cpp",
-                "supports/zmq_worker_support.cpp",
+                "supports/worker_support.cpp",
                 "supports/user_type_support.cpp",
                 "supports/statement_walker_support.cpp",
                 "supports/response_encode_support.cpp",
             },
-            .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+            .flags = &.{
+                "-std=c++20", 
+                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                "-Wno-error=invalid-constexpr", // TODO: workaround math::floor() constexpr failed for clang++
+            },
         });
         mod.addIncludePath(b.path("../../vendor/magic-enum/include"));
-        const mergeIncludePath = @import("lib_core").builder_supports.LazyPath.mergeIncludePath;
         for (config.dep_modules) |dep_mod| {
-            mergeIncludePath(mod, dep_mod.mod);
+            for (dep_mod.mod.include_dirs.items) |dir| {
+                mod.addIncludePath(dir.path);
+            }
+            // mod.addImport(dep_mod.name, dep_mod.mod);
         }
         break:native_config;
+    }
+    link_module: {
+        for (config.dep_libraries) |lib| {
+            mod.linkLibrary(lib);
+        }
+        break:link_module;
     }
     catch2_config: {
         if (config.use_catch2) {
@@ -238,7 +311,11 @@ fn createWorkerModule(
                     "resolver.select_list/test_update_statement.cpp",
                     "resolver.select_list/test_insert_statement.cpp",
                 },
-                .flags = &.{"-std=c++20", if (config.optimize == .Debug) "-Werror" else ""},
+                .flags = &.{
+                    "-std=c++20", 
+                    if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                    "-Wno-error=invalid-constexpr",
+                },
             });
         }
         else {
@@ -246,44 +323,28 @@ fn createWorkerModule(
         }
         break:catch2_config;
     }
-    zmq_native_config: {
-        mod.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{config.zmq_prefix, "include" }) });
-        mod.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{config.zmq_prefix, "lib"}) });
-        mod.linkSystemLibrary("zmq", .{});
-        break:zmq_native_config;
-    }
     duckdb_native_config: {
         mod.addIncludePath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "include" }) });
         mod.addLibraryPath(.{ .cwd_relative = b.pathResolve(&.{config.duckdb_prefix, "lib"}) });
-        mod.linkSystemLibrary("duckdb_static", .{});
-        mod.linkSystemLibrary("duckdb_fastpforlib", .{});
-        mod.linkSystemLibrary("duckdb_re2", .{});
-        mod.linkSystemLibrary("duckdb_utf8proc", .{});
-        mod.linkSystemLibrary("autocomplete_extension", .{});
-        mod.linkSystemLibrary("duckdb_pg_query", .{});
-        mod.linkSystemLibrary("duckdb_miniz", .{});
-        mod.linkSystemLibrary("duckdb_fsst", .{});
-        mod.linkSystemLibrary("icu_extension", .{});
-        mod.linkSystemLibrary("duckdb_hyperloglog", .{});
-        mod.linkSystemLibrary("duckdb_yyjson", .{});
-        mod.linkSystemLibrary("parquet_extension", .{});
-        mod.linkSystemLibrary("duckdb_mbedtls", .{});
-        mod.linkSystemLibrary("json_extension", .{});
-        mod.linkSystemLibrary("duckdb_fmt", .{});
-        mod.linkSystemLibrary("duckdb_skiplistlib", .{});
+        
+        if (builtin.os.tag != .linux) {
+            mod.linkSystemLibrary("duckdb_static", .{});
+        }
+        else {
+            mod.linkSystemLibrary("duckdb", .{.preferred_link_mode = .dynamic});
+        }
 
-        if (builtin.os.tag == .linux) {
-            mod.linkSystemLibrary("jemalloc_extension", .{});
-            mod.linkSystemLibrary("duckdb_zstd", .{});
+        if (builtin.os.tag != .linux) {
+            mod.linkSystemLibrary("duckdb_generated_extension_loader", .{});
             mod.linkSystemLibrary("core_functions_extension", .{});
+            mod.linkSystemLibrary("autocomplete_extension", .{});
+            mod.linkSystemLibrary("icu_extension", .{});
+            mod.linkSystemLibrary("parquet_extension", .{});
+            mod.linkSystemLibrary("json_extension", .{});
+            // mod.linkSystemLibrary("jemalloc_extension", .{});
+            mod.linkSystemLibrary("duckdb_zstd", .{});
         }
         break:duckdb_native_config;
-    }
-    import_modules: {
-        for (config.dep_modules) |dep_mod| {
-            mod.addImport(dep_mod.name, dep_mod.mod);
-        }
-        break:import_modules;
     }
     
     return mod;

@@ -1,0 +1,5 @@
+.{
+    .target_scope = .default,
+    .from_scope = .{.values = .{ "default" }},
+    .global = .{.enabled = false},
+}

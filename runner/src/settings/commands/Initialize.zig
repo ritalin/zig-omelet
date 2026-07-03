@@ -178,7 +178,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             }
 
             if (has_err) {
-                return error.LoadSettingFailed;
+                return error.ShowCommandHelp;
             }
 
             return .{

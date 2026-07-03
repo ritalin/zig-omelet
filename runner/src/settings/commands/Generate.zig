@@ -204,6 +204,13 @@ pub fn Builder(comptime ArgIterator: type) type {
                 }
                 break:sources slice;
             };
+            if (sources.len == 0) {
+                has_err = true;
+                if (self.build_log_style == .stderr) {
+                    std.log.warn("Need to specify SQL source and/or schema folder at least one", .{});
+                }
+            }
+
             const schemas = schemas: {
                 const schema_dir_set = if (self.schema_dir_set.items.len > 0) self.schema_dir_set.items else builder_default.schema_dir_set.items;
                 const slice = try allocator.alloc(FilePath, schema_dir_set.len);
@@ -220,13 +227,6 @@ pub fn Builder(comptime ArgIterator: type) type {
                 }
                 break:schemas slice;
             };
-
-            if ((sources.len == 0) and (schemas.len == 0)) {
-                has_err = true;
-                if (self.build_log_style == .stderr) {
-                    std.log.warn("Need to specify SQL source and/or schema folder at least one", .{});
-                }
-            }
 
             var include_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
             var exclude_filters: std.ArrayListUnmanaged(core.types.FilePath) = .empty;
@@ -259,7 +259,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             };
 
             if (has_err) {
-                return error.LoadSettingFailed;
+                return error.ShowCommandHelp;
             }
 
             return .{

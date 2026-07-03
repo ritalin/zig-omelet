@@ -74,14 +74,23 @@ pub fn Defaults(comptime ArgId: type) type {
                     inline for (fields) |f| {
                         if (std.mem.eql(u8, f.name, name)) {
                             const key: ArgId = @enumFromInt(f.value);
+                            var diag: std.zon.parse.Diagnostics = .{};
                             const val = 
-                                std.zon.parse.fromZoirNodeAlloc(Self.Arg, allocator, ast, ir, node_index, null, .{})
-                                catch return error.InvalidSettingEntry
+                                std.zon.parse.fromZoirNodeAlloc(Self.Arg, allocator, ast, ir, node_index, &diag, .{})
+                                catch {
+                                    if (error_style == .stderr) {
+                                        std.log.warn("{f}", .{diag});
+                                    }
+                                    return error.InvalidSettingEntry;
+                                }
                             ;
 
                             self.map.put(key, val);
                             break:apply;
                         }
+                    }
+                    if (error_style == .stderr) {
+                        std.log.warn("Unexpected key in settng/config (key: {s})", .{name});
                     }
                     return error.InvalidSettingKey;
                 }

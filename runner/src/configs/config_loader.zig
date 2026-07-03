@@ -67,10 +67,11 @@ fn loadGuestConfigFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.Fi
     const source = try reader.interface.allocRemainingAlignedSentinel(allocator, .unlimited, .@"1", 0);
     defer allocator.free(source);
 
-    return loadGuestConfigSource(allocator, source, strategies, .stderr);
+    return loadGuestConfigSource(io, allocator, source, strategies, .stderr);
 }
 
 fn loadGuestConfigSource(
+    io: std.Io,
     allocator: std.mem.Allocator, 
     source: core.types.SymbolZ, 
     strategies: core.configs.types.StageStrategy, 
@@ -100,22 +101,25 @@ fn loadGuestConfigSource(
     const node = index.get(ir);
     if (std.meta.activeTag(node) != .struct_literal) return error.InvalidConfigFile;
 
+    const default_exe_dir = try std.process.executableDirPathAlloc(io, allocator);
+    defer allocator.free(default_exe_dir);
+
     for (node.struct_literal.names, 0..) |name, i| {
         const field_index: std.zig.Zoir.Node.Index = node.struct_literal.vals.at(@intCast(i));
         const ident_name = name.get(ir);
 
         switch (try core.configs.supports.resolveStageKind(ident_name)) {
             .watch => {
-                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .watch, strategies, core.configs.guests.GuestWatch.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .watch, strategies, default_exe_dir, core.configs.guests.GuestWatch.ArgId(.{}), &guests);
             },
             .extract => {
-                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .extract, strategies, core.configs.guests.GuestExtract.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .extract, strategies, default_exe_dir, core.configs.guests.GuestExtract.ArgId(.{}), &guests);
             },
             .generate => {
-                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .generate, strategies, core.configs.guests.GuestGenerate.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .generate, strategies, default_exe_dir, core.configs.guests.GuestGenerate.ArgId(.{}), &guests);
             },
             .init => {
-                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .init, strategies, core.configs.guests.GuestInitialize.ArgId(.{}), &guests);
+                try loadGuestStages(allocator, log_style, &ast, &ir, field_index, .init, strategies, default_exe_dir, core.configs.guests.GuestInitialize.ArgId(.{}), &guests);
             },
         }
     }
@@ -130,6 +134,7 @@ fn loadGuestStages(
     parent_index: std.zig.Zoir.Node.Index, 
     comptime stage_kind: core.configs.types.StageKind,
     strategies: core.configs.types.StageStrategy,
+    default_exe_dir: FilePath,
     comptime GuestArgId: type,
     guests: *std.MultiArrayList(config_types.Guest)) !void
 {
@@ -174,7 +179,14 @@ fn loadGuestStages(
 
         const name = if ((std.meta.activeTag(tmpl.name) == .values) and (tmpl.name.values.len > 0)) tmpl.name.values[0] else stage_name;
         const enable_managed = if (std.meta.activeTag(tmpl.enable_managed) == .enabled) tmpl.enable_managed.enabled else true;
-        const location = if ((std.meta.activeTag(tmpl.location) == .values) and (tmpl.location.values.len > 0)) tmpl.location.values[0] else stage_name;
+        const location = location: {
+            if ((std.meta.activeTag(tmpl.location) == .values) and (tmpl.location.values.len > 0)) {
+                break:location tmpl.location.values[0];
+            }
+            else {
+                break:location try std.fs.path.join(allocator, &.{default_exe_dir, stage_name});
+            }
+        };
 
         const extra_args: config_types.Guest.ExtraArgSet = switch (stage_kind) {
             .watch => .{.watch = tmpl.extra_args},
@@ -293,6 +305,7 @@ pub const tests_guest = struct {
     const StageStrategy = core.configs.types.StageStrategy;
 
     test "Toplevel node" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -302,10 +315,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "category node#1 (invalid)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -317,10 +331,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{});
 
-        try std.testing.expectError(error.UnexpectGuestStage, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.UnexpectGuestStage, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "category node#2 (valid)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -334,13 +349,14 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .optional, .extract = .optional, .generate = .optional});
 
-        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
+        var stages = try loadGuestConfigSource(io, allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(0, stages.len);
     }
 
     test "stage name token#1" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -358,7 +374,7 @@ pub const tests_guest = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        const stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
+        const stages = try loadGuestConfigSource(io, allocator, source, strategies, .discard);
 
         try std.testing.expectEqual(1, stages.len);
 
@@ -370,6 +386,7 @@ pub const tests_guest = struct {
     }
 
     test "stage name token#2" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -387,7 +404,7 @@ pub const tests_guest = struct {
             \\}
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
+        var stages = try loadGuestConfigSource(io, allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -400,6 +417,7 @@ pub const tests_guest = struct {
     }
 
     test "Missing config field" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -416,7 +434,7 @@ pub const tests_guest = struct {
         ;
 
         const strategies = StageStrategy.init(.{.generate = .one});
-        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
+        var stages = try loadGuestConfigSource(io, allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         try std.testing.expectEqual(1, stages.len);
@@ -429,6 +447,7 @@ pub const tests_guest = struct {
     }
 
     test "Invalid stage strategy#1 (one stage#1)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -441,10 +460,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#1 (one stage#2)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -467,10 +487,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .one});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#2 (many stage)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -483,10 +504,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .many});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid stage strategy#2 (optional stage)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -509,10 +531,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidStageCount, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid location field name" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -530,10 +553,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid managed field value#1" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -551,10 +575,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Invalid location field value#2 (default)" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -572,10 +597,11 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.generate = .optional});
 
-        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(allocator, source, strategies, .discard));
+        try std.testing.expectError(error.InvalidConfigFile, loadGuestConfigSource(io, allocator, source, strategies, .discard));
     }
 
     test "Custom extra_args field value" {
+        const io = std.testing.io;
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -595,7 +621,7 @@ pub const tests_guest = struct {
         ;
         const strategies = StageStrategy.init(.{.watch = .one});
 
-        var stages = try loadGuestConfigSource(allocator, source, strategies, .discard);
+        var stages = try loadGuestConfigSource(io, allocator, source, strategies, .discard);
         defer stages.deinit(allocator);
 
         const extra_arg_set = stages.get(0).extra_args;

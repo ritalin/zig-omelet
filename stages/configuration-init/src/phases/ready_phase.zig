@@ -28,7 +28,6 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
                 },
                 .ready_source_path => {
                     validate: {
-                     std.debug.print("*** output_dir_path: {s}\n", .{stage.setting.output_dir_path});
                        const out_root_dir = 
                             std.Io.Dir.openDirAbsolute(stage.io, stage.setting.output_dir_path, .{})
                             catch |err| switch (err) {
@@ -61,7 +60,6 @@ pub fn NewConfigurationState(comptime GuestStage: type) type {
                         return;
                     }
 
-                    std.debug.print("*** source_dir_path: {s}\n", .{stage.setting.source_dir_path});
                     var hasher = core.file_supports.Hasher.init(.{});
                     try core.file_supports.makeDirHash(stage.io, &hasher, stage.setting.source_dir_path);
 

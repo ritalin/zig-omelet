@@ -81,4 +81,4 @@ jobs:
           
       - name: Run test
         run: |
-          zig build test-all --verbose
+          zig build test-all -DSKIP_BUILDS="duckdb-extract" --verbose

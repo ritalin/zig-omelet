@@ -44,13 +44,14 @@ pub fn build(b: *std.Build) void {
         intoWorkspaceModule(b, "nng-core", dep_nnng.module("nng-core"));
     }
 
-    const dep_efsw = b.lazyDependency("efsw", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    if (dep_efsw) |dep| {
-        intoWorkspaceModule(b, "efsw", dep.module("efsw"));
-    }
+    // TODO:
+    // const dep_efsw = b.lazyDependency("efsw", .{
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // if (dep_efsw) |dep| {
+    //     intoWorkspaceModule(b, "efsw", dep.module("efsw"));
+    // }
 }
 
 fn intoWorkspaceModule(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {

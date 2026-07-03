@@ -32,7 +32,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "core", .module = dep_lib_core.module("core") },
             .{ .name = "clap", .module = deps.module("clap") },
-            .{ .name = "efsw", .module = deps.module("efsw") },
+            //  TODO:
+            // .{ .name = "efsw", .module = deps.module("efsw") },
             .{ .name = "build_options", .module = build_options.createModule() }
         },
     };

@@ -55,14 +55,10 @@ jobs:
             -o /tmp/libduckdb.zip && \
             unzip /tmp/libduckdb.zip -d /tmp/libduckdb
 
+          ls -l /tmp/libduckdb
           sudo mkdir -p /opt/deps/duckdb/lib
-          sudo cp -R /tmp/libduckdb/* /opt/deps/duckdb/lib
-          
-          echo "=== /tmp/libduckdb ==="
-          find /tmp/libduckdb -maxdepth 2 -ls
-          echo
-          echo "=== /opt/deps/duckdb ==="
-          find /opt/deps/duckdb -maxdepth 3 -ls
+          sudo cp -v /tmp/libduckdb/* /opt/deps/duckdb/lib
+          ls -l /opt/deps/duckdb/lib
       - name: Install DuckDB headers
         run: |
           rm -rf /tmp/duckdb-src

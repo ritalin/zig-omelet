@@ -12,10 +12,9 @@ this tool has following fetues:
 
 ## Requirement
 
-* zig (https://ziglang.org) - 0.14.0 or latter
-* libduckdb (https://duckdb.org) - 1.1.2 or latter
-* libzmq (https://zeromq.org) - 4.3.5 or latter
-* libcatch2 (https://github.com/catchorg/Catch2) 3.6.0 or latter
+* zig (https://ziglang.org) - 0.16.0 or latter
+* libduckdb (https://duckdb.org) - 1.5.3 or latter
+* libcatch2 (https://github.com/catchorg/Catch2) 3.15.0 or latter
 
 This product has tested on MacOS Ventura 13.6.7.
 
@@ -147,15 +146,15 @@ Following command is generate a subcommand configuration environment specified c
 A environment is generated at `.omelet` directory in current directory.
 
 ```
-./zig-out/bin/omelet init-config --command generate
+./zig-out/bin/omelet init-default
 ```
 
-This command is also can use `--scope` option to specify a custom scope.
+This command is also can use `--target-scope` option to specify a custom scope.
 
 `--global` option also supports.
 
 ```
-./zig-out/bin/omelet init-config --command generate --scope my_scope
+./zig-out/bin/omelet init-config --target-scope my_scope
 ```
 
 In general option, using `--use-scope` option result in applying the custom scope.

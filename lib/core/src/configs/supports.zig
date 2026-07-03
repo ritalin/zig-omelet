@@ -59,7 +59,10 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, env: *
     }
     path: {
         if (candidates.home_dir) |dir_path| {
-            var dir_ = try known_folders.open(io, allocator, env, .local_configuration, .{});
+            var dir_ = known_folders.open(io, allocator, env, .local_configuration, .{}) catch |err| switch (err) {
+                error.FileNotFound => break:path,
+                else => return err,
+            };
             if (dir_) |*dir| {
                 defer dir.close(io);
 
@@ -73,13 +76,12 @@ fn resolveFileCandidateInternal(io: std.Io, allocator: std.mem.Allocator, env: *
             }
         }
     }
-
     path: {
         if (candidates.executable_dir) |dir_path| {
             const exe_dir_path = try std.process.executableDirPathAlloc(io, allocator);
             defer allocator.free(exe_dir_path);
 
-            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, ".", dir_path, category.templateDir(), file_name});
+            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, "..", dir_path, category.templateDir(), file_name});
             defer allocator.free(path_abs);
 
             return std.Io.Dir.openFileAbsolute(io, path_abs, .{})
@@ -128,7 +130,7 @@ pub fn resolveConfigDirPath(io: std.Io, allocator: std.mem.Allocator, env: *cons
             const exe_dir_path = try std.process.executableDirPathAlloc(io, allocator);
             defer allocator.free(exe_dir_path);
 
-            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, dir_path, category.templateDir()});
+            const path_abs = try std.fs.path.join(allocator, &.{exe_dir_path, "..", dir_path, category.templateDir()});
             errdefer allocator.free(path_abs);
 
             const config_dir = std.Io.Dir.openDirAbsolute(io, path_abs, .{})
@@ -172,7 +174,7 @@ pub fn formatConfigRootDirPath(io: std.Io, allocator: std.mem.Allocator, env: *c
         .executable_dir => |dir_path| {
             const root_path = try std.process.executableDirPathAlloc(io, allocator);
             defer allocator.free(root_path);
-            return std.fs.path.join(allocator, &.{root_path, dir_path, category.destPath()});
+            return std.fs.path.join(allocator, &.{root_path, "..", dir_path, category.destPath()});
         },
     }
 

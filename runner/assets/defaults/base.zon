@@ -29,4 +29,11 @@
     // Available entries: values, default
     // default: .{.values = .{"default"}}
     .use_scope = .default,
+    // Enable(true)/Disable(false) interactive mode
+    // .default: Passed from CLI arg
+    // .enabled: false or true
+    // ```
+    // .interactive = .{.enabled = true}
+    // ```
+    .interactive = .default, 
 }

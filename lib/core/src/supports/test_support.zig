@@ -20,7 +20,9 @@ pub fn createTmpDir() !std.testing.TmpDir {
     var env = try std.testing.environ.createMap(allocator);
     defer env.deinit();
 
-    const tmp_dir: std.Io.Dir = (try known_folders.open(io, allocator, &env, .cache, .{})).?;
+    const tmp_dir_path = try known_folders.getPath(io, allocator, &env, .cache);
+    defer if (tmp_dir_path) |path| allocator.free(path);
+    const tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(io, tmp_dir_path.?, .{});
     defer tmp_dir.close(io);
 
     const parent_dir = try tmp_dir.createDirPathOpen(io, "omelet", .{});

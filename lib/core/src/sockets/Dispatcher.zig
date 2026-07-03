@@ -557,12 +557,6 @@ pub const tests = struct {
     test "single iteration" {
         const io = std.testing.io;
         const allocator = std.testing.allocator;
-        
-        var env = try std.testing.environ.createMap(allocator);
-        defer env.deinit();
-        const p = try @import("known_folders").getPath(io, allocator, &env, .cache);
-        defer if (p) |pp| allocator.free(pp);
-        std.debug.print("*** single iteration/tmp path = {?s}", .{p});
 
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();

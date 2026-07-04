@@ -1,5 +1,5 @@
 .{
+    .source_dir_path = .default,
+    .output_dir_path = .default,
     .target_scope = .default,
-    .from_scope = .{.values = .{ "default" }},
-    .global = .{.enabled = false},
 }

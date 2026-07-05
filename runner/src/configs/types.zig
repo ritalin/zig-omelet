@@ -15,10 +15,11 @@ pub const Host = struct {
 pub const Guest = struct {
     name: core.types.Symbol,
     location: core.types.FilePath,
-    kind: core.configs.types.StageKind,
+    kind: Kind,
     mode: Guest.Mode = .managed,
     extra_args: ExtraArgSet,
 
+    pub const Kind = core.configs.types.StageKind;
     pub const Mode = enum { daemon, managed };
     pub const ExtraArgSet = union(core.configs.types.StageKind) {
         watch: ExtraArg(core.configs.guests.GuestWatch.ArgId(.{})),

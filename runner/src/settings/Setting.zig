@@ -28,7 +28,7 @@ pub fn loadFromArgs(io: std.Io, allocator: std.mem.Allocator, env: *const std.pr
         return .{.help = &ArgHelp.toplevel};
     };
 
-    const sub_res = SubcommandSetting.fromArgs(io, allocator, env, &scanner, &res.builder, res.command, res.builder.scope orelse default_init_scope);
+    const sub_res = SubcommandSetting.fromArgs(io, allocator, env, &scanner, &res.builder, res.command);
 
     const setting_pair = switch (sub_res) {
         .help => |help| return .{.help = help},

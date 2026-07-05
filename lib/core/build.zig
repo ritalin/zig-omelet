@@ -101,6 +101,7 @@ pub fn build(b: *std.Build) void {
         const mod_unit_tests = b.addTest(.{
             .name = "test-lib-core",
             .root_module = mod_test_root,
+            .test_runner = .{ .mode = .simple, .path = b.path("../tools/zig_runner.zig")},
         });
         mod_unit_tests.use_llvm = true;
 

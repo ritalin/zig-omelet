@@ -66,6 +66,7 @@ pub fn build(b: *std.Build) void {
         const mod_test = b.addTest(.{
             .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
             .root_module = b.createModule(app_module_config),
+            .test_runner = .{.mode = if (workspace) .simple else .server, .path = b.path("../../lib/tools/zig_runner.zig")},
         });
         mod_test.root_module.addImport("test_options", mod_test_options.createModule());
 

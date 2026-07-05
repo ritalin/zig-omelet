@@ -66,6 +66,7 @@ pub fn build(b: *std.Build) !void {
         const exe_unit_tests = b.addTest(.{
             .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
             .root_module = b.createModule(app_module_config),
+            .test_runner = .{.mode = .simple, .path = b.path("../lib/tools/zig_runner.zig")},
         });
 
         const test_options = b.addOptions();

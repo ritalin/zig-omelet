@@ -22,6 +22,7 @@ const HeartbeatTask = @import("./tasks/HeartbeatTask.zig");
 const task_support = @import("./supports/task_support.zig");
 
 const BootPhaseState = @import("./phases/boot_phase.zig").BootPhaseState(HostRunner);
+const ConnectPhaseState = @import("./phases/connect_phase.zig").ConnectPhaseState(HostRunner);
 const RequestPhaseState = @import("./phases/request_phase.zig").RequestPhaseState(HostRunner);
 const ReadyPhaseState = @import("./phases/ready_phase.zig").ReadyPhaseState(HostRunner);
 const TerminatePhaseState = @import("./phases/terminate_phase.zig").TerminatePhaseState(HostRunner);
@@ -33,7 +34,7 @@ io: std.Io,
 setting: *const Setting,
 connection: *HostRunner.Connection,
 dispatcher: EventDispatcher.Sized(poller_size),
-state: State = undefined,
+state: State,
 config: *const Config,
 guest_names: std.BufSet,
 reapers: *TaskReaper,
@@ -59,6 +60,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .setting = setting,
         .connection = connection,
         .dispatcher = try connection.configureDispatcher(poller_size, options),
+        .state = .preboot,
         .config = config,
         .guest_names = guests,
         .reapers = try TaskReaper.init(io, allocator),
@@ -77,6 +79,10 @@ pub fn run(self: *HostRunner) !void {
         // TODO: fatal error log
         return err;
     };    
+}
+
+pub fn iteration(self: *HostRunner, options: EventDispatcher.IterationOptions) !void {
+    _ = try self.dispatcher.iteration(HostRunner.Connection.stage_name, options, HostRunner.onDispatch);
 }
 
 pub fn log(self: *HostRunner, comptime level: events.LogLevel, comptime fmt: []const u8, args: anytype) !void {
@@ -100,7 +106,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(poller_size), entry: ReceiveEnt
     }
 
     switch (self.state) {
-        .launching => |*state| {
+        .boot => |*state| {
+            try state.handle(self, entry, dirty);
+        },
+        .connecting => |*state| {
             try state.handle(self, entry, dirty);
         },
         .request => |*state| {
@@ -142,11 +151,13 @@ pub fn transitPhase(self: *HostRunner, phase_kind: events.EventPhase.Kind, phase
 
     if (phase_agree == .pending) {
         switch (phase_kind) {
-            .launching => try self.doBootingPhase(),
+            .preboot => {},
+            .boot => try self.doBootingPhase(),
+            .connecting => try self.doConnectingPhase(),
             .request => try self.doRequestPhase(),
             .ready => try self.doReadyPhase(),
             .terminating => try self.doTerminatePhase(),
-            .quitting => {},
+            .quitting, .quit_done => {},
         }
     }
     else {
@@ -159,11 +170,20 @@ pub fn transitPhase(self: *HostRunner, phase_kind: events.EventPhase.Kind, phase
 }
 
 fn doBootingPhase(self: *HostRunner) !void {
-    const next_state = try BootPhaseState.create(
+    self.state = .{ .boot = BootPhaseState.init };
+
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(HostRunner.Connection.stage_name));
+}
+
+fn doConnectingPhase(self: *HostRunner) !void {
+    self.state.deinit();
+    const next_state = try ConnectPhaseState.create(
         self.allocator, 
         &self.guest_names
     ); 
-    self.state = .{ .launching = next_state };
+    self.state = .{ .connecting = next_state };
+
+    try self.sendProbeHeartbeat(.connecting, 1);
 }
 
 fn doRequestPhase(self: *HostRunner) !void {
@@ -175,8 +195,7 @@ fn doRequestPhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .request = next_state };
 
-    try self.sendProbe(.{.probe =.request}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
-
+    try self.sendProbeHeartbeat(.request, 1);
 }
 
 fn doReadyPhase(self: *HostRunner) !void {
@@ -189,14 +208,14 @@ fn doReadyPhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .ready = next_state };
 
-    try self.sendProbe(.{.probe = .ready}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
+    try self.sendProbeHeartbeat(.ready, 1);
 }
 
 fn doTerminatePhase(self: *HostRunner) !void {
     self.state.deinit();
     self.state = .{ .terminating = try TerminatePhaseState.create(self.allocator, &self.guest_names) };
 
-    try self.sendProbe(.{.probe = .terminating}, 1, self.config.host.heartbeat_limit, self.config.host.heartbeat_interval);
+    try self.sendProbeHeartbeat(.terminating, 1);
     try self.log(.debug, "Start quitting...", .{});
 }
 
@@ -209,14 +228,9 @@ pub fn sendProbe(self: *HostRunner, event: events.Event, count: usize, limit: He
     );
 }
 
-pub fn sendProbeHeartbeat(self: *HostRunner, event_type: events.EventType, phase: events.EventPhase.Kind, count: u64) !void {
-    if ((event_type == .probe) and (std.meta.eql(self.dispatcher.phase, .{.kind = phase, .agreement = .pending}))) {
-        const interval = self.config.host.heartbeat_interval;
-        try self.sendProbe(.{.probe = phase}, count, self.config.host.heartbeat_limit, interval);
-    }
-    else {
-        return error.DiscardProbe;
-    }
+pub fn sendProbeHeartbeat(self: *HostRunner, phase: events.EventPhase.Kind, count: u64) !void {
+    const interval = self.config.host.heartbeat_interval;
+    try self.sendProbe(.{.probe = phase}, count, self.config.host.heartbeat_limit, interval);
 }
 
 pub fn sendProgressHeartbeat(self: *HostRunner) !void {
@@ -224,27 +238,24 @@ pub fn sendProgressHeartbeat(self: *HostRunner) !void {
     try self.sendProbe(.ready_progress, 1, self.config.host.heartbeat_limit, interval);
 }
 
-// TODO:
-// fn onAfterLaunch(self: HostRnner, socket: *zmq.ZSocket, routing_id: ?core.Symbol) !void {
-//     if (self.connection.dispatcher.state.level.terminating) {
-//         traceLog.debug("Stopping launch process", .{});
-//         try self.connection.dispatcher.delay(socket, app_context, .pending_fatal_quit, routing_id);
-//     }
-// }
-
 const State = union(events.EventPhase.Kind) {
-    launching: BootPhaseState,
+    preboot: void,
+    boot: BootPhaseState,
+    connecting: ConnectPhaseState,
     request: RequestPhaseState,
     ready: ReadyPhaseState,
     terminating: TerminatePhaseState,
     quitting: void,
+    quit_done: void,
 
     const deinit = deinitState;
 };
 
 fn deinitState(self: *State) void {
     switch (self.*) {
-        .launching => |*state| state.deinit(),
+        .preboot => {},
+        .boot => |*state| state.deinit(),
+        .connecting => |*state| state.deinit(),
         .request => |*state| state.deinit(),
         .ready => |*state| state.deinit(),
         .terminating => |*state| state.deinit(),

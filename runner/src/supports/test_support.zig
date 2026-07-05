@@ -1,9 +1,11 @@
 const std = @import("std");
 const core = @import("core");
 
+const types = core.types;
 const events = core.events;
 
 const Setting = @import("../settings/Setting.zig");
+const Config = @import("../configs/Config.zig");
 const HeartbeatTask = @import("../tasks/HeartbeatTask.zig");
 
 const stage_name = "host";
@@ -43,11 +45,90 @@ pub fn writeAssetFile(tmp_dir: *const std.testing.TmpDir, options: core.configs.
     try writer.flush();
 }
 
-pub fn sendMessage(channel: core.sockets.RpcChannel, event: core.events.Event) void {
+pub fn sendMessage(channel: core.sockets.RpcChannel, event: events.Event) void {
     channel.submit(std.testing.io, event, .{}) catch |err| {
         std.debug.print("*** Test:sendMessage/err: {}\n", .{err});
     };
 }
+
+pub fn initSetting(ep: core.types.Endpoints) Setting {
+    return .{
+        .base = .{
+            .log_level = .debug,
+            .log_quiet = true,
+            .no_color = false,
+            .interactive = false,
+            .endpoints = ep,
+            .ipc_config = .default,
+            .scope = "default",
+            .config_scope = "default",
+        },
+        .command = .{.@"init-config" = .{ .source_dir_path = "", .output_dir_path = "", .target_scope = "" } },
+    };
+}
+
+pub fn initConfig(allocator: std.mem.Allocator, names: []const types.Symbol, kinds: []const Config.Guest.Kind) !Config {
+    var guests: std.MultiArrayList(Config.Guest) = .empty;
+    
+    for (names, kinds) |name, kind| {
+        try guests.append(allocator, .{
+            .name = name,
+            .kind = kind,
+            .location = "",
+            .mode = .managed,
+            .extra_args = .{.init = .{}},
+        });
+    }
+
+    return .{
+        .host = .{
+            .heartbeat_interval = std.Io.Duration.fromMilliseconds(20),
+            .heartbeat_limit = .unlimited,
+            .ready_progress_interval = std.Io.Duration.fromMilliseconds(20),
+        },
+        .guests = guests,
+    };
+}
+
+pub const GuestStage = struct {
+    stage_name: types.StageName,
+    connection: core.sockets.Connection.Client("dummy"),
+    dispatcher: core.sockets.EventDispatcher.Sized(1),
+
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, name: types.StageName, ep: types.Endpoints) !*GuestStage {
+        const self = try allocator.create(GuestStage);
+        self.stage_name = name;
+        self.connection = try core.sockets.Connection.Client("dummy").create(io, allocator , ep);
+        try self.connection.connect();
+
+        self.dispatcher = try self.connection.configureDispatcher(1, .{.log_style = .discard});
+
+        return self;
+    }
+
+    pub fn deinit(self: *GuestStage, allocator: std.mem.Allocator) void {
+        self.dispatcher.deinit();
+        self.connection.deinit();
+        allocator.destroy(self);
+    }
+
+    pub fn request(self: *GuestStage, event: events.Event) !void {
+        const channel = try core.sockets.SendChannel.init(
+            self.connection.context.allocator, 
+            self.connection.push_socket.pipe.item.id,
+            self.stage_name, 
+            self.connection.push_socket.pipe.item.sender(),
+        );
+        try self.dispatcher.queue.post(event, channel);
+    }
+
+    pub fn iteration(self: *GuestStage, options: core.sockets.EventDispatcher.IterationOptions) !void {
+        _ = try self.dispatcher.iteration(self.stage_name, options, GuestStage.onDispatchNoop);
+    }
+
+    fn onDispatchNoop(_: *core.sockets.EventDispatcher.Sized(1), _: core.sockets.ReceiveEntry, _: *core.sockets.EventDispatcher.DirtyState) !void {
+    }
+};
 
 pub const TestStage = struct {
     setting: Setting,
@@ -94,7 +175,7 @@ pub const TestStage = struct {
         );
     }
 
-    pub fn sendProbeHeartbeat(stage: *TestStage, _: events.EventType, phase: events.EventPhase.Kind, count: u64) !void {
+    pub fn sendProbeHeartbeat(stage: *TestStage, phase: events.EventPhase.Kind, count: u64) !void {
         const interval = TestStage.nextInterval(0);
         return stage.sendProbe(
             .{.probe = phase},

@@ -6,7 +6,7 @@
             .name = .default,
             // Guest component management.
             // default: true
-            .enable_managed = .{.enable = true},
+            .enable_managed = .{.enabled = true},
             // default: launch from path same as runner
             // path: launch from specified full/cwd-relative directory path
             .location = .default,

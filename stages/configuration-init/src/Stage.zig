@@ -9,6 +9,8 @@ const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
 
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ConnectPhaseState = core.guest_phases.ConnectPhaseState(GuestStage);
+const TerminatePhaseState = core.guest_phases.TerminatePhaseState(GuestStage);
 
 const Setting = @import("./Setting.zig");
 const NewConfigurationState = @import("./phases/ready_phase.zig").NewConfigurationState(GuestStage);
@@ -47,7 +49,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        .state = .{ .launching = BootPhaseState.init },
+        .state = undefined,
     };
 }
 
@@ -75,8 +77,11 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 
     if (phase_agree == .pending) {
         switch (phase_kind) {
+            .boot => try self.doBootPhase(),
+            .connecting => try self.doConnectingPhase(),
             .request => {}, 
             .ready => try self.doReadyPhase(),
+            .terminating => {},
             .quitting => {},
             else => unreachable,
         }
@@ -91,7 +96,6 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                 try self.transitPhase(.quitting, .confirmed);
                 return;
             }
-
             if (self.dispatcher.phase.kind != phase) {
                 try self.log(.debug, "Phase unmatched/phase: {s}, current: {s}", .{@tagName(phase), @tagName(self.dispatcher.phase.kind)});
                 return;
@@ -100,6 +104,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                 try self.log(.debug, "Discard probe/phase: {s}", .{@tagName(phase)});
                 return;
             }
+
             switch (phase) {
                 .request => {
                     var channel = try self.connection.requestChannel();
@@ -124,6 +129,18 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
     }
 }
 
+fn doBootPhase(self: *GuestStage) !void {
+    self.state.deinit();
+    self.state = .{ .boot = BootPhaseState.init };
+
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
+}
+
+fn doConnectingPhase(self: *GuestStage) !void {
+    self.state.deinit();
+    self.state = .{ .connecting = ConnectPhaseState.init };
+}
+
 fn doReadyPhase(self: *GuestStage) !void {
     self.state.deinit();
     self.state = .{ .ready = NewConfigurationState.create };
@@ -133,7 +150,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
-        .launching => |state| {
+        .boot => |state| {
+            try state.handle(self, entry, dirty);
+        },
+        .connecting => |state| {
             try state.handle(self, entry, dirty);
         },
         .ready => |state| {
@@ -146,18 +166,23 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
 }
 
 const State = union(events.EventPhase.Kind) {
-    launching: BootPhaseState,
+    preboot: void,
+    boot: BootPhaseState,
+    connecting: ConnectPhaseState,
     request: void,
     ready: NewConfigurationState,
     terminating: void,
     quitting: void,
+    quit_done: void,
 
     const deinit = deinitState;
 };
 
 fn deinitState(self: *State) void {
     switch (self.*) {
-        .launching => |*state| state.deinit(),
+        .preboot => {},
+        .boot => |*state| state.deinit(),
+        .connecting => |*state| state.deinit(),
         .ready => |*state| state.deinit(),
         else => unreachable,
     }

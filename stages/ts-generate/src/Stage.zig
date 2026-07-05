@@ -9,6 +9,7 @@ const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
 
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ConnectPhaseState = core.guest_phases.ConnectPhaseState(GuestStage);
 const ReadyPhaseState = @import("./phases/ready_phase.zig").ReadyPhaseState(GuestStage);
 
 const GenerateWorker = @import("./GenerateWorker.zig");
@@ -46,8 +47,7 @@ pub fn create(allocator: std.mem.Allocator, connection: *Connection, setting: *c
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        .state = .{ .launching = BootPhaseState.init },
-        // .logger = Logger.init(allocator, connection.dispatcher, setting.standalone),
+        .state = undefined,
     };
 }
 
@@ -75,9 +75,12 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 
     if (phase_agree == .pending) {
         switch (phase_kind) {
+            .boot => try self.doBootPhase(),
+            .connecting => try self.doConnectingPhase(),
             .request => {},
             .ready => try self.doReadyPhase(),
-            .quitting => self.doQuitPhase(),
+            .terminating => {},
+            .quitting => {},
             else => unreachable,
         }
     }
@@ -124,20 +127,31 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
     }
 }
 
+fn doBootPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .boot = BootPhaseState.init };
+
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
+}
+
+fn doConnectingPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .connecting = ConnectPhaseState.init };
+}
+
 fn doReadyPhase(self: *GuestStage) !void {
     self.state.deinit(self.allocator);
     self.state = .{ .ready = try ReadyPhaseState.create(self.allocator) };
-}
-
-fn doQuitPhase(self: *GuestStage) void {
-    self.state.deinit(self.allocator);
 }
 
 fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) anyerror!void {
     const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
-        .launching => |state| {
+        .boot => |state| {
+            try state.handle(self, entry, dirty);
+        },
+        .connecting => |state| {
             try state.handle(self, entry, dirty);
         },
         .ready => |*state| {
@@ -186,18 +200,23 @@ fn processWorkResult(self: *GuestStage, result_content: core.Symbol, lookup: *st
 }
 
 const State = union(events.EventPhase.Kind) {
-    launching: BootPhaseState,
+    preboot: void,
+    boot: BootPhaseState,
+    connecting: ConnectPhaseState,
     request: void,
     ready: ReadyPhaseState,
     terminating: void,
     quitting: void,
+    quit_done: void,
 
     const deinit = deinitState;
 };
 
 fn deinitState(self: *State, allocator: std.mem.Allocator) void {
     switch (self.*) {
-        .launching => |*state| state.deinit(),
+        .preboot => {},
+        .boot => |*state| state.deinit(),
+        .connecting => |*state| state.deinit(),
         .ready => |*state| state.deinit(allocator),
         else => unreachable,
     }

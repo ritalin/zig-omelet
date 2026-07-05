@@ -20,7 +20,7 @@ const encodeSubscription = @import("../../events/encoder.zig").encodeSubscriptio
 const decodeSubscription = @import("../../events/decoder.zig").decodeSubscription;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
-pub fn Client(comptime stage_name: types.StageName) type {
+pub fn Client(comptime stage_name_: types.StageName) type {
     return struct {
         context: nnng.Context,
         req_socket: nnng.Req.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
@@ -30,6 +30,8 @@ pub fn Client(comptime stage_name: types.StageName) type {
         push_worker_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
 
         const Self = @This();
+
+        pub const stage_name = stage_name_;
 
         pub fn create(io: std.Io, allocator: std.mem.Allocator, endpoints: types.Endpoints) !Self {
             const context = nnng.Context.init(io, allocator);
@@ -167,8 +169,9 @@ pub fn Client(comptime stage_name: types.StageName) type {
                 };
             }
 
-            const bootEntry = try ReceiveEntry.booting(stage_name);
-            try dispatcher.queue.pushReceiveQueue(bootEntry);
+            // TODO:
+            // const bootEntry = try ReceiveEntry.booting(stage_name);
+            // try dispatcher.queue.pushReceiveQueue(bootEntry);
 
             return dispatcher;
         }
@@ -187,7 +190,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
         pub fn requestChannel(self: *Self) !RpcChannel {
             return RpcChannel.init(
-                stage_name, 
+                Self.stage_name, 
                 self.req_socket.pipe.item.sender(), 
                 self.req_socket.pipe.item.receiver()
             );
@@ -197,7 +200,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
             return SendChannel.init(
                 self.context.allocator, 
                 self.push_socket.pipe.item.id,
-                stage_name, 
+                Self.stage_name, 
                 self.push_socket.pipe.item.sender(), 
             );
         }
@@ -220,7 +223,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
 
         fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
             _ = ptr;
-            try putConsoleLog(level, stage_name, "{s}", .{ msg });
+            try putConsoleLog(level, Self.stage_name, "{s}", .{ msg });
         }
 
         fn PollHandler(comptime poller_size: comptime_int) type {
@@ -229,7 +232,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
                     for (results) |result| {
                         switch (result) {
                             .failed => |payload| {
-                                try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
+                                try dispatcher.log(.err, Self.stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
                             },
                             .ready => |channel| {
                                 const receiver = channel.receiver();
@@ -244,7 +247,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
                                             try dispatcher.queue.pushReceiveQueue(entry);
                                         }
                                         else |err| {
-                                            try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                            try dispatcher.log(.err, Self.stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
                                         }
                                     }
                                 }
@@ -287,7 +290,7 @@ pub fn Client(comptime stage_name: types.StageName) type {
                     const channel = SendChannel.fromMessage(
                         self.context.allocator, 
                         self.push_socket.pipe.item.id,
-                        stage_name, 
+                        Self.stage_name, 
                         self.push_socket.pipe.item.sender(), 
                         msg,
                     );

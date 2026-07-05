@@ -17,7 +17,7 @@ const WORKER_ENDPOINT = root.configs.Endpoint.WORKER_ENDPOINT;
 const encodeToCbor = @import("../../events/encoder.zig").encodeToCbor;
 const putConsoleLog = @import("../../supports/log_support.zig").putConsoleLog;
 
-pub fn Server(comptime stage_name: types.StageName) type {
+pub fn Server(comptime stage_name_: types.StageName) type {
     return struct {
         context: nnng.Context,
         reply_socket: nnng.Rep.Protocol(nnng.Transport.Listener, nnng.Pipe.Parallel),
@@ -26,6 +26,8 @@ pub fn Server(comptime stage_name: types.StageName) type {
         inproc_socket: nnng.Push.Protocol(nnng.Transport.Dialer, nnng.Pipe.Sync),
 
         const Self = @This();
+
+        pub const stage_name = stage_name_;
 
         pub fn create(io: std.Io, allocator: std.mem.Allocator, parallel_limit: usize, endpoints: types.Endpoints) !Self {
             const context = nnng.Context.init(io, allocator);
@@ -98,28 +100,25 @@ pub fn Server(comptime stage_name: types.StageName) type {
             try nnng.ReceivePoller(poller_size).Parallel.attach(&dispatcher.poller, &self.reply_socket.pipe, .{});
             try nnng.ReceivePoller(poller_size).Sync.attach(&dispatcher.poller, &self.pull_socket.pipe, .{});
 
-            const bootEntry = try ReceiveEntry.booting(stage_name);
-            try dispatcher.queue.pushReceiveQueue(bootEntry);
-
             return dispatcher;
         }
 
         pub fn commandChannel(self: *const Self) !SendChannel {
-            return SendChannel.init(self.context.allocator, self.cmd_socket.pipe.item.id, stage_name, self.cmd_socket.pipe.item.sender());
+            return SendChannel.init(self.context.allocator, self.cmd_socket.pipe.item.id, Self.stage_name, self.cmd_socket.pipe.item.sender());
         }
 
         pub fn dataChannel(self: *const Self) !SendChannel {
-            return SendChannel.init(self.context.allocator, self.inproc_socket.pipe.item.id, stage_name, self.inproc_socket.pipe.item.sender());
+            return SendChannel.init(self.context.allocator, self.inproc_socket.pipe.item.id, Self.stage_name, self.inproc_socket.pipe.item.sender());
         }
 
         fn doNonIntegratedLog(ptr: *anyopaque, level: events.LogLevel, msg: []const u8)anyerror!void {
             _ = ptr;
-            try putConsoleLog(level, stage_name, "{s}", .{ msg });
+            try putConsoleLog(level, Self.stage_name, "{s}", .{ msg });
         }
 
         fn writeResponse(msg: *nnng.Message, event: Event) !void {
             msg.writer.end = 0;
-            try encodeToCbor(&msg.writer, .{ .header = EventHeader.fromEvent(event), .stage_name = stage_name, .event = event });
+            try encodeToCbor(&msg.writer, .{ .header = EventHeader.fromEvent(event), .stage_name = Self.stage_name, .event = event });
         }
 
         fn PollHandler(comptime poller_size: comptime_int) type {
@@ -128,7 +127,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
                     for (results) |result| {
                         switch (result) {
                             .failed => |payload| {
-                                try dispatcher.log(.err, stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
+                                try dispatcher.log(.err, Self.stage_name, "Poll failed/pipe_id: {}, err: {s}", .{ payload.id, @errorName(payload.err) });
                             },
                             .ready => |channel| {
                                 const receiver = channel.receiver();
@@ -143,7 +142,7 @@ pub fn Server(comptime stage_name: types.StageName) type {
                                         }
                                     }
                                     else |err| {
-                                        try dispatcher.log(.err, stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
+                                        try dispatcher.log(.err, Self.stage_name, "Failed decode event/pipe_id: {}, err: {s}", .{ channel.id, @errorName(err) });
 
                                         if (channel.features.replyable) {
                                             var msg_mut = msg;

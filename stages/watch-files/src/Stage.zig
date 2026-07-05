@@ -10,6 +10,7 @@ const ReceiveEntry = core.sockets.ReceiveEntry;
 const EventPhase = core.events.EventPhase;
 
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ConnectPhaseState = core.guest_phases.ConnectPhaseState(GuestStage);
 const ReadyWatchFileState = @import("./phases/ready_phase.zig").ReadyWatchFileState(GuestStage);
 
 const Setting = @import("./Setting.zig");
@@ -47,12 +48,12 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .setting = setting,
         .connection = connection,
         .dispatcher = dispatcher,
-        .state = .{ .launching = BootPhaseState.init },
+        .state = .preboot,
     };
 }
 
 pub fn deinit(self: *GuestStage) void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
     self.dispatcher.deinit();
 }
 
@@ -75,8 +76,11 @@ pub fn transitPhase(self: *GuestStage, phase_kind: EventPhase.Kind, phase_agree:
 
     if (phase_agree == .pending) {
         switch (phase_kind) {
+            .boot => try self.doBootPhase(),
+            .connecting => try self.doConnectingPhase(),
             .request => try self.doRequestPhase(),
             .ready => try self.doReadyPhase(),
+            .terminating => {},
             .quitting => {},
             else => unreachable,
         }
@@ -123,12 +127,24 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
     }
 }
 
+fn doBootPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .boot = BootPhaseState.init };
+
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
+}
+
+fn doConnectingPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .connecting = ConnectPhaseState.init };
+}
+
 fn doRequestPhase(self: *GuestStage) !void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
 }
 
 fn doReadyPhase(self: *GuestStage) !void {
-    self.state.deinit();
+    self.state.deinit(self.allocator);
     self.state = .{ .ready = ReadyWatchFileState.create };
 }
 
@@ -136,7 +152,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     const self: *GuestStage = @alignCast(@fieldParentPtr("dispatcher", dispatcher));
 
     switch (self.state) {
-        .launching => |state| {
+        .boot => |state| {
+            try state.handle(self, entry, dirty);
+        },
+        .connecting => |state| {
             try state.handle(self, entry, dirty);
         },
         .ready => |*state| {
@@ -149,18 +168,23 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
 }
 
 const State = union(EventPhase.Kind) {
-    launching: BootPhaseState,
+    preboot: void,
+    boot: BootPhaseState,
+    connecting: ConnectPhaseState,
     request: void,
     ready: ReadyWatchFileState,
     terminating: void,
     quitting: void,
+    quit_done: void,
 
     const deinit = deinitState;
 };
 
-fn deinitState(self: *State) void {
+fn deinitState(self: *State, _: std.mem.Allocator) void {
     switch (self.*) {
-        .launching => |*state| state.deinit(),
+        .preboot => {},
+        .boot => |*state| state.deinit(),
+        .connecting => |*state| state.deinit(),
         .ready => |*state| state.deinit(),
         else => unreachable,
     }
@@ -228,6 +252,7 @@ pub const tests = struct {
 
         var stage = try GuestStage.create(io, allocator, &conn, &setting);
         defer stage.deinit();
+        try stage.transitPhase(.ready, .confirmed);
 
         try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
 
@@ -308,6 +333,7 @@ pub const tests = struct {
 
         var stage = try GuestStage.create(io, allocator, &conn, &setting);
         defer stage.deinit();
+        try stage.transitPhase(.ready, .confirmed);
 
         try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
 
@@ -428,6 +454,7 @@ pub const tests = struct {
 
         var stage = try GuestStage.create(io, allocator, &conn, &setting);
         defer stage.deinit();
+        try  stage.transitPhase(.ready, .confirmed);
 
         try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
 
@@ -521,6 +548,7 @@ pub const tests = struct {
 
         var stage = try GuestStage.create(io, allocator, &conn, &setting);
         defer stage.deinit();
+        try stage.transitPhase(.ready, .confirmed);
 
         try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
 
@@ -607,6 +635,7 @@ pub const tests = struct {
 
         var stage = try GuestStage.create(io, allocator, &conn, &setting);
         defer stage.deinit();
+        try stage.transitPhase(.ready, .confirmed);
 
         try std.testing.expectEqual(0, stage.dispatcher.queue.send_queue.len);
 

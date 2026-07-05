@@ -39,7 +39,7 @@ pub fn TerminatePhaseState(comptime HostRunner: type) type {
                 },
                 .heartbeat => |payload| {
                     if (self.left_guests.count() > 0) {
-                        stage.sendProbeHeartbeat(payload.event_type, .terminating, payload.count) catch |err| switch (err) {
+                        stage.sendProbeHeartbeat(.terminating, payload.count) catch |err| switch (err) {
                             error.DiscardProbe => {
                                 dirty.* = .unhandled;
                             },
@@ -83,7 +83,7 @@ pub const tests = struct {
 
         fn doDefault(stage: *TestStage, entry: ReceiveEntry) !void {
             if (entry.event == .launching) {
-                try stage.sendProbeHeartbeat(.probe, .terminating, 1);
+                try stage.sendProbeHeartbeat(.terminating, 1);
             }
         }
     };
@@ -139,7 +139,7 @@ pub const tests = struct {
         try tasks.await(io);
 
         try std.testing.expectEqual(null, runner.stage.err);
-        try std.testing.expectEqual(.quitting, runner.stage.dispatcher.phase.kind);
+        try std.testing.expectEqual(.quit_done, runner.stage.dispatcher.phase.kind);
         try std.testing.expectEqual(0, runner.state.left_guests.count());
     }
 };

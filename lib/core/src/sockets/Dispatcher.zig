@@ -539,6 +539,7 @@ pub const tests = struct {
         defer dispatcher.deinit();
         dispatcher.vtable.on_quit = null;
 
+        // Wait for subscription propagation.
         try io.sleep(.fromMilliseconds(20), .awake);
 
         var msg = try nnng.Message.create();
@@ -644,6 +645,7 @@ pub const tests = struct {
         try std.testing.expectEqual(.preboot, c.host_dispatcher.phase.kind);
         try std.testing.expectEqual(.preboot, c.guest_dispatcher.phase.kind);
 
+        // Wait for subscription propagation.
         try io.sleep(.fromMilliseconds(20), .awake);
 
         var guest_status: IterationStatus = .awake;

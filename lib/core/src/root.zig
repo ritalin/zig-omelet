@@ -22,6 +22,7 @@ pub const sockets = struct {
 
 pub const guest_phases = struct {
     pub const BootPhaseState = @import("./guest_phases/boot_phase.zig").BootPhaseState;
+    pub const ConnectPhaseState = @import("./guest_phases/connect_phase.zig").ConnectPhaseState;
 };
 
 pub const Logger = @import("./Logger.zig");

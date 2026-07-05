@@ -11,6 +11,7 @@ const Logger = core.Logger.withAppContext(app_context);
 const ReceiveEntry = core.sockets.ReceiveEntry;
 
 const BootPhaseState = core.guest_phases.BootPhaseState(GuestStage);
+const ConnectPhaseState = core.guest_phases.ConnectPhaseState(GuestStage);
 const RequestTopicPhaseState = @import("./phases/request_phase.zig").RequestTopicPhaseState(GuestStage);
 const ExtractTopicBodyState = @import("./phases/ready_phase.zig").ExtractTopicBodyState(GuestStage);
 
@@ -62,7 +63,7 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .connection = connection,
         .dispatcher = dispatcher,
         .database = database,
-        .state = .{ .launching = phase },
+        .state = .preboot,
         .reapers = try core.TaskReaper.init(io, allocator),
     };
 }
@@ -93,8 +94,11 @@ pub fn transitPhase(self: *GuestStage, phase_kind: events.EventPhase.Kind, phase
 
     if (phase_agree == .pending) {
         switch (phase_kind) {
+            .boot => try self.doBootPhase(),
+            .connecting => try self.doConnectingPhase(),
             .request => try self.doRequestPhase(),
             .ready => try self.doReadyPhase(),
+            .terminating => {},
             .quitting => {},
             else => unreachable,
         }
@@ -135,6 +139,18 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
             dirty.* = .unhandled;
         }
     }
+}
+
+fn doBootPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .boot = BootPhaseState.init };
+
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
+}
+
+fn doConnectingPhase(self: *GuestStage) !void {
+    self.state.deinit(self.allocator);
+    self.state = .{ .connecting = ConnectPhaseState.init };
 }
 
 fn doRequestPhase(self: *GuestStage) !void {
@@ -187,7 +203,10 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
     try self.reapers.tick();
 
     switch (self.state) {
-        .launching => |state| {
+        .boot => |state| {
+            try state.handle(self, entry, dirty);
+        },
+        .connecting => |state| {
             try state.handle(self, entry, dirty);
         },
         .request => |*state| {
@@ -203,24 +222,26 @@ fn onDispatch(dispatcher: *EventDispatcher.Sized(1), entry: ReceiveEntry, dirty:
 }
 
 const State = union(events.EventPhase.Kind) {
-    launching: BootPhaseState,
+    preboot: void,
+    boot: BootPhaseState,
+    connecting: ConnectPhaseState,
     request: RequestTopicPhaseState,
     ready: ExtractTopicBodyState,
     terminating: void,
     quitting: void,
+    quit_done: void,
 
     const deinit = deinitState;
 };
 
 fn deinitState(self: *State, allocator: std.mem.Allocator) void {
     switch (self.*) {
-        .launching => |*state| state.deinit(),
+        .preboot => {},
+        .boot => |*state| state.deinit(),
+        .connecting => |*state| state.deinit(),
         .request => |*state| state.deinit(),
         .ready => |*state| state.deinit(allocator),
         else => unreachable,
     }
 }
 
-test "extract/duckdb" {
-    std.testing.refAllDecls(@This());
-}

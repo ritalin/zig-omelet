@@ -78,7 +78,7 @@ pub fn ReadyPhaseState(comptime HostRunner: type) type {
                     switch (payload.event_type) {
                         .probe => {
                             if (! self.isCompleted()) {
-                                stage.sendProbeHeartbeat(payload.event_type, .ready, payload.count) catch |err| switch (err) {
+                                stage.sendProbeHeartbeat(.ready, payload.count) catch |err| switch (err) {
                                     error.DiscardProbe => {
                                         try stage.defaultHandler(entry, dirty);
                                     },

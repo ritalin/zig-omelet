@@ -20,53 +20,18 @@ pub fn BootPhaseState(comptime GuestStage: type) type {
         pub fn handle(self: *const Self, stage: *GuestStage, entry: ReceiveEntry, dirty: *EventDispatcher.DirtyState) !void {
             switch (entry.event) {
                 .launching => {
-                    try self.bootLog(stage);
-                },
-                .probe => |phase| {
-                    if ((phase == .launching) and (std.meta.eql(stage.dispatcher.phase, .{.kind = .launching, .agreement = .pending}))) {
-                        var channel = try stage.connection.requestChannel();
-
-                        if (self.vtable.on_prepare) |on_prepare| {
-                            on_prepare(stage) catch {
-                                try stage.dispatcher.queue.post(.failed_launching, try stage.connection.dataChannel());
-                                return;
-                            };
-                        }
-
-                        channel.submit(stage.connection.context.io, .launched, .{}) catch {
+                    if (self.vtable.on_prepare) |on_prepare| {
+                        on_prepare(stage) catch {
                             try stage.dispatcher.queue.post(.failed_launching, try stage.connection.dataChannel());
+                            try stage.transitPhase(.terminating, .pending);
                             return;
                         };
-                        try stage.transitPhase(.request, .pending);
                     }
-                    else {
-                        try stage.defaultHandler(entry, dirty);
-                    }
+                    try stage.transitPhase(.connecting, .pending);
                 },
                 else => {
                     try stage.defaultHandler(entry, dirty);
                 }
-            }
-        }
-
-        fn bootLog(self: *const Self, stage: *GuestStage) !void {
-            _ = self;
-            const ep = stage.setting.endpoints;
-
-            try stage.log(.debug, "Beginning...", .{});
-
-            dump_subscription: {
-                var arena = std.heap.ArenaAllocator.init(stage.allocator);
-                defer arena.deinit();
-
-                try stage.log(.debug, "Subscriber filters: {s}", .{try stage.connection.listSubscriptions(arena.allocator())});
-                break:dump_subscription;
-            }
-            dump_setting: {
-                try stage.log(.debug, "CLI: Req/Rep Channel = {s}", .{ep.req_rep});
-                try stage.log(.debug, "CLI: Pub/Sub Channel = {s}", .{ep.pub_sub});
-                try stage.log(.debug, "CLI: Push/pull Channel = {s}", .{ep.push_pull});
-                break :dump_setting;
             }
         }
     };

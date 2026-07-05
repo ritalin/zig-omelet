@@ -65,7 +65,7 @@ pub const EventPhase = struct {
     kind: EventPhase.Kind,
     agreement: EventPhase.Agreement,
 
-    pub const Kind = enum { launching, request, ready, terminating, quitting };
+    pub const Kind = enum { preboot, boot, connecting, request, ready, terminating, quitting, quit_done };
     pub const Agreement = enum { pending, confirmed };
 };
 

@@ -239,7 +239,7 @@ pub const tests = struct {
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.ack), .stage_name = test_context, .event = .ack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.nack), .stage_name = test_context, .event = .nack });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.heartbeat), .stage_name = test_context, .event = .{.heartbeat = heartbeat} });
-        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe), .stage_name = test_context, .event = .{.probe = .launching} });
+        try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.probe), .stage_name = test_context, .event = .{.probe = .connecting} });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launching), .stage_name = test_context, .event = .launching });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.launched), .stage_name = test_context, .event = .launched });
         try encodeToCbor(&buffer.writer, EventPacket{ .header = EventHeader.fromEvent(.failed_launching), .stage_name = test_context, .event = .failed_launching });
@@ -294,7 +294,7 @@ pub const tests = struct {
             try std.testing.expectEqual(.probe, packet.header.tag());
             try std.testing.expectEqual({}, packet.header.probe);
             try std.testing.expectEqualStrings(test_context, packet.stage_name);
-            try std.testing.expectEqualDeep(.launching, packet.event.probe);
+            try std.testing.expectEqualDeep(.connecting, packet.event.probe);
             break:probe_launching;
         }
         launching: {

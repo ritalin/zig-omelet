@@ -56,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
     var runner = try Runner.create(init.io, allocator, &connection, &config, &setting);
     defer runner.deinit();
 
-    try runner.transitPhase(.launching, .pending);
+    try runner.transitPhase(.boot, .pending);
     try runner.run();
 
     try process_reaper.wait(init.io);

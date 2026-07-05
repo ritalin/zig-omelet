@@ -52,7 +52,7 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
                 },
                 .heartbeat => |payload| {
                     if (self.left_guests.count() > 0) {
-                        stage.sendProbeHeartbeat(payload.event_type, .request, payload.count) catch |err| switch (err) {
+                        stage.sendProbeHeartbeat(.request, payload.count) catch |err| switch (err) {
                             error.DiscardProbe => {
                                 dirty.* = .unhandled;
                             },

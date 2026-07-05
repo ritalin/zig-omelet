@@ -175,10 +175,10 @@ pub const tests = struct {
 
         fn stealDispatchEvent(self: *WorkerTestBed) !?core.sockets.ReceiveEntry {
             while (true) {
-                switch (try self.stage.dispatcher.iteration("test", onDispatchDelay)) {
+                switch (try self.stage.dispatcher.iteration("test", .{}, onDispatchDelay)) {
                     .handled => break,
-                    .awake => {},
                     .terminated => return null,
+                    else => {},
                 }
             }
 

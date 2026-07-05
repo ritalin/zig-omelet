@@ -30,7 +30,7 @@ pub fn Sized(comptime poller_size: comptime_int) type {
                     .receive_queue = .empty,
                 },
                 .poller = try ReceivePoller.create(context),
-                .phase = .{ .kind = .launching, .agreement = .pending },
+                .phase = .{ .kind = .preboot, .agreement = .pending },
                 .log_router = .{ .style = options.log_style, .no_color = options.no_color },
                 .vtable = .{
                     .on_poll = on_poll,
@@ -48,12 +48,14 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
             defer skip_entries.deinit(self.queue.allocator);
 
+            var prev_status: IterationStatus = .awake;
+
             while (true) {
                 const entry = self.queue.receive_queue.popFront();
-                const status = try self.iterationInternal(stage_name, entry, &skip_entries, on_dispatch);
+                prev_status = try self.iterationInternal(stage_name, prev_status, entry, &skip_entries, on_dispatch);
 
-                switch (status) { 
-                    .handled => continue, 
+                switch (prev_status) { 
+                    .handled, .no_entry, .pending_quit, .pending_poll => continue, 
                     .terminated => break,
                     .awake => {
                         defer skip_entries.clearRetainingCapacity();
@@ -63,73 +65,110 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             }
         }
 
-        pub fn iteration(self: *Dispatcher, stage_name: types.StageName, on_dispatch: VTable.DispatchFn) !IterationStatus {
+        pub fn iteration(self: *Dispatcher, stage_name: types.StageName, options: IterationOptions, on_dispatch: VTable.DispatchFn) !IterationStatus {
             var skip_entries: std.ArrayListUnmanaged(sockets.ReceiveEntry) = .empty;
             defer skip_entries.deinit(self.queue.allocator);
             
-            const status = try self.iterationInternal(stage_name, self.queue.receive_queue.popFront(), &skip_entries, on_dispatch);
+            var prev_status: IterationStatus = options.prev_status;
 
-            if ((status == .handled) and (skip_entries.items.len > 0)) {
-                try self.queue.entrySkipped(skip_entries.items);
+            while (true) {
+                prev_status = try self.iterationInternal(stage_name, prev_status, self.queue.receive_queue.popFront(), &skip_entries, on_dispatch);
+                switch (prev_status) {
+                    .handled => {
+                        if (!options.handle_all) break;
+                    },
+                    .no_entry => {
+                        if (options.handle_all) break;
+                    },
+                    .pending_quit => {
+                        if (options.no_quit) break;
+                    },
+                    .terminated => break,
+                    .pending_poll => {
+                        if (options.no_poll) break;
+                    },
+                    .awake => {
+                        if (!options.handle_all) break;
+                    },
+                }
             }
 
-            return status;
+            if (skip_entries.items.len > 0) {
+                try self.queue.entrySkipped(skip_entries.items);
+            }
+            return prev_status;
         }
 
         fn iterationInternal(
             self: *Dispatcher, 
             stage_name: types.StageName, 
+            prev_status: IterationStatus, 
             entry_opt: ?sockets.ReceiveEntry, 
             skip_entries: *std.ArrayListUnmanaged(sockets.ReceiveEntry),
             on_dispatch: VTable.DispatchFn) !IterationStatus 
         {
-            if (entry_opt) |e| {
-                var entry = e;
-                var dirty: EventDispatcher.DirtyState = .none;
+            switch (prev_status) {
+                .handled, .awake => {
+                    if (entry_opt) |e| {
+                        var entry = e;
+                        var dirty: EventDispatcher.DirtyState = .none;
 
-                try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ entry.pipe_id, @tagName(entry.event), entry.from_stage });
-                try on_dispatch(self, entry, &dirty);
+                        try self.log_router.log(self, .trace, stage_name, "Receive/pipe_id: {}, event: {s}, from-stage: {s}", .{ entry.pipe_id, @tagName(entry.event), entry.from_stage });
+                        try on_dispatch(self, entry, &dirty);
 
-                switch (dirty) {
-                    .none => {
-                        entry.deinit(self.queue.allocator);
-                    },
-                    .delayed => {
-                        try skip_entries.append(self.queue.allocator, entry);
-                    },
-                    .unhandled => {
-                        defer entry.deinit(self.queue.allocator);
-                        try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(entry.event), self.phase });
+                        switch (dirty) {
+                            .none => {
+                                entry.deinit(self.queue.allocator);
+                            },
+                            .delayed => {
+                                try skip_entries.append(self.queue.allocator, entry);
+                            },
+                            .unhandled => {
+                                defer entry.deinit(self.queue.allocator);
+                                try self.log(.warn, stage_name, "Unhandled/event: {s}, phase: {}", .{ @tagName(entry.event), self.phase });
+                            }
+                        }
+
+                        return .handled;
                     }
-                }
+                    return .no_entry;
+                },
+                .no_entry => {
+                    if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
+                        return .pending_quit;
+                    }
+                    const batch_sender_log = self.log_router.as_sender();
+                    const post_nonblocking = (! @import("builtin").is_test);
 
-                if (std.meta.eql(self.phase, .{ .kind = .quitting, .agreement = .confirmed})) {
+                    while (self.queue.send_queue.popFront()) |channel| {
+                        try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id });
+                        channel.submit(.{ .flags = .{.nonblocking = post_nonblocking} }) catch |err| switch (err) {
+                            error.WouldBlock => {
+                                try self.queue.postPriority(channel);
+                                break;
+                            },
+                            else => return err,
+                        };
+                    }
+                    return .pending_poll;
+                },
+                .pending_quit => {
                     // TODO: about daemon boot or managed boot
                     if (self.vtable.on_quit) |q| {
                         try (q.handler)(q.ptr);
                     }
+                    self.phase = .{.kind = .quit_done, .agreement = .confirmed};
                     return .terminated;
+                },
+                .terminated => {
+                    return .terminated;
+                },
+                .pending_poll => {
+                    _ = try self.poller.poll(Dispatcher.doPoll);
+
+                    return .awake;
                 }
-
-                return .handled;
             }
-
-            const batch_sender_log = self.log_router.as_sender();
-            
-            while (self.queue.send_queue.popFront()) |channel| {
-                try batch_sender_log.log(self, .trace, stage_name, "Send/pipe_id: {}", .{ channel.pipe_id,  });
-                channel.submit(.{ .flags = .{.nonblocking = true} }) catch |err| switch (err) {
-                    error.WouldBlock => {
-                        try self.queue.postPriority(channel);
-                        break;
-                    },
-                    else => return err,
-                };
-            }
-
-            _ = try self.poller.poll(Dispatcher.doPoll);
-
-            return .awake;
         }
 
         pub fn log(self: *Dispatcher, comptime level: events.LogLevel, stage_name: types.StageName, comptime fmt: []const u8, args: anytype) !void {
@@ -141,8 +180,6 @@ pub fn Sized(comptime poller_size: comptime_int) type {
             const self: *Dispatcher = @alignCast(@fieldParentPtr("poller", poller));
             try (self.vtable.on_poll)(self, results);
         }
-
-        pub const IterationStatus = enum { handled, terminated, awake };
 
         pub const LogForwarder = struct {
             ptr: *anyopaque,
@@ -273,6 +310,16 @@ pub const Options = struct {
     forward_worker: bool = true,
 };
 
+pub const IterationStatus = enum { 
+    handled, no_entry, pending_quit, pending_poll, terminated, awake 
+};
+pub const IterationOptions = struct {
+    prev_status: IterationStatus = .awake,
+    handle_all: bool = false,
+    no_poll: bool = false,
+    no_quit: bool = false,
+};
+
 test "dispatcher test" {
     std.testing.refAllDecls(@This());
 }
@@ -302,7 +349,7 @@ pub const tests = struct {
 
     fn clientHandler(d: *Dispatcher, entry: ReceiveEntry, _: *EventDispatcher.DirtyState) !void {
         switch (entry.event) {
-            .launching => {},
+            .launching, .ack => {},
             .probe => {
                 d.phase = .{.kind = .quitting, .agreement = .confirmed};
             },
@@ -363,11 +410,11 @@ pub const tests = struct {
             break:send_event;
         }
 
-        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
+        try std.testing.expectEqual(.preboot, dispatcher.phase.kind);
 
         try dispatcher.run("runner", serverHandler);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
+        try std.testing.expectEqual(.quit_done, dispatcher.phase.kind);
     }
 
     test "pull event by client worker PULL" {
@@ -453,11 +500,12 @@ pub const tests = struct {
             break:send_event;
         }
 
-        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
+        try std.testing.expectEqual(.preboot, dispatcher.phase.kind);
 
-        try dispatcher.run("runner", serverHandler);
+        var task = try io.concurrent(Dispatcher.run, .{&dispatcher, "runner", serverHandler});
+        try task.await(io);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
+        try std.testing.expectEqual(.quit_done, dispatcher.phase.kind);
     }
 
     test "receive event by SUB" {
@@ -491,6 +539,8 @@ pub const tests = struct {
         defer dispatcher.deinit();
         dispatcher.vtable.on_quit = null;
 
+        try io.sleep(.fromMilliseconds(20), .awake);
+
         var msg = try nnng.Message.create();
         send_event: {
             try encodeToCbor(&msg.writer, .{ .header = .probe, .stage_name = "test-stage", .event = .{.probe = .terminating} });
@@ -498,18 +548,56 @@ pub const tests = struct {
             break:send_event;
         }
 
-        try std.testing.expectEqual(.launching, dispatcher.phase.kind);
+        try std.testing.expectEqual(.preboot, dispatcher.phase.kind);
 
-        try dispatcher.run("guest", clientHandler);
+        var task = try io.concurrent(Dispatcher.run, .{&dispatcher, "guest", clientHandler});
+        try task.await(io);
 
-        try std.testing.expectEqual(.quitting, dispatcher.phase.kind);
+        try std.testing.expectEqual(.quit_done, dispatcher.phase.kind);
     }
 
-    test "Host/Guest communication" {
-        if (true) { 
-            // TODO: beacause blocked on GHA...
-            return error.SkipZigTest; 
+    const Coordinator = struct {
+        allocator: std.mem.Allocator,
+        host_dispatcher: Dispatcher,
+        host_connection: ServerConnection,
+        guest_dispatcher: Dispatcher,
+        guest_connection: ClientConnection,
+
+        pub fn handleQuit(ptr: *anyopaque) anyerror!void {
+            var self: *Coordinator = @ptrCast(@alignCast(ptr));
+
+            host: {
+                const entry: ReceiveEntry = .{
+                    .event = .quit,
+                    .msg = try nnng.Message.withCapacity(0),
+                    .pipe_id = 0,
+                    .buffer = &.{},
+                    .from_stage = ClientConnection.stage_name,
+                    .features = .{.last_msg_owner = true},
+                };
+                try self.host_dispatcher.queue.pushReceiveQueue(entry);
+                break:host;
+            }
+            guest: {
+                const entry: ReceiveEntry = .{
+                    .event = .ack,
+                    .msg = try nnng.Message.withCapacity(0),
+                    .pipe_id = 0,
+                    .buffer = &.{},
+                    .from_stage = ServerConnection.stage_name,
+                    .features = .{.last_msg_owner = true},
+                };
+                try self.guest_dispatcher.queue.pushReceiveQueue(entry);
+                break:guest;
+            }
         }
+    };
+
+    test "Host/Guest rally" {
+        // TODO: beacause blocked on GHA...
+        // if (true) { 
+        //     return error.SkipZigTest; 
+        // }
 
         const io = std.testing.io;
         const allocator = std.testing.allocator;
@@ -521,7 +609,7 @@ pub const tests = struct {
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
         defer supports.releaseEndpoint(io, &ep, &ep_config);
 
-        var host = try root.sockets.Connection.Server("runner#2").create(std.testing.io, std.testing.allocator, 4, ep);
+        var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         // var host = try ServerConnection.create(std.testing.io, std.testing.allocator, ep);
         defer host.deinit();
 
@@ -538,25 +626,79 @@ pub const tests = struct {
         try guest.req_socket.transport.start(.{});
         try guest.cmd_socket.transport.start(.{});
 
-        var host_dispatcher: Dispatcher = try host.configureDispatcher(8, .{ .log_style = .discard });
-        defer host_dispatcher.deinit();
+        var c: Coordinator = .{
+            .allocator = allocator,
+            .host_connection = host,
+            .host_dispatcher = try host.configureDispatcher(8, .{ .log_style = .discard }),
+            .guest_connection = guest,
+            .guest_dispatcher = try guest.configureDispatcher(8, .{ .log_style = .discard }),
+        };
+        defer c.host_dispatcher.deinit();
+        defer c.guest_dispatcher.deinit();
 
-        var guest_dispatcher: Dispatcher = try guest.configureDispatcher(8, .{ .log_style = .discard });
-        defer guest_dispatcher.deinit();
+        c.guest_dispatcher.vtable.on_quit = .{
+            .ptr = &c,
+            .handler = Coordinator.handleQuit,
+        };
 
-        publisg_event: {
-            const cmd = try host.commandChannel();
-            try host_dispatcher.queue.post(.{.probe = .terminating}, cmd);
-            break:publisg_event;
+        try std.testing.expectEqual(.preboot, c.host_dispatcher.phase.kind);
+        try std.testing.expectEqual(.preboot, c.guest_dispatcher.phase.kind);
+
+        try io.sleep(.fromMilliseconds(20), .awake);
+
+        var guest_status: IterationStatus = .awake;
+
+        host_iter: {
+            try c.host_dispatcher.queue.post(.{.probe = .terminating}, try host.commandChannel());
+            iter: {
+                const host_status = try c.host_dispatcher.iteration("host", .{.no_poll = true}, serverHandler);
+                try std.testing.expectEqual(.pending_poll, host_status);
+                break:iter;
+            }
+            break:host_iter;
         }
-
-        try std.testing.expectEqual(.launching, host_dispatcher.phase.kind);
-        try std.testing.expectEqual(.launching, guest_dispatcher.phase.kind);
-
-        try runConcurrent(&host_dispatcher, &guest_dispatcher);
-
-        try std.testing.expectEqual(.quitting, host_dispatcher.phase.kind);
-        try std.testing.expectEqual(.quitting, guest_dispatcher.phase.kind);
+        guest_iter: {
+            try std.testing.expectEqual(0, c.guest_dispatcher.queue.receive_queue.len);
+            iter: {
+                guest_status = try c.guest_dispatcher.iteration("guest", .{.no_quit = true, .prev_status = guest_status}, clientHandler);
+                try std.testing.expectEqual(.awake, guest_status);
+                try std.testing.expectEqual(1, c.guest_dispatcher.queue.receive_queue.len);
+                break:iter;
+            }
+            iter: {
+                guest_status = try c.guest_dispatcher.iteration("guest", .{.no_quit = true, .prev_status = guest_status}, clientHandler);
+                try std.testing.expectEqual(.handled, guest_status);
+                try std.testing.expectEqual(0, c.guest_dispatcher.queue.receive_queue.len);
+                try std.testing.expectEqual(.quitting, c.guest_dispatcher.phase.kind);
+                break:iter;
+            }
+            iter: {
+                guest_status = try c.guest_dispatcher.iteration("guest", .{.prev_status = guest_status}, clientHandler);
+                try std.testing.expectEqual(.terminated, guest_status);
+                try std.testing.expectEqual(0, c.guest_dispatcher.queue.send_queue.len);
+                try std.testing.expectEqual(.quit_done, c.guest_dispatcher.phase.kind);
+                break:iter;
+            }
+            break:guest_iter;
+        }
+        host_iter: {
+            var host_status: IterationStatus = .awake;
+            iter: {
+                host_status = try c.host_dispatcher.iteration("host", .{.no_quit = true, .prev_status = host_status}, serverHandler);
+                try std.testing.expectEqual(.handled, host_status);
+                try std.testing.expectEqual(0, c.host_dispatcher.queue.receive_queue.len);
+                try std.testing.expectEqual(.quitting, c.host_dispatcher.phase.kind);
+                break:iter;
+            }
+            iter: {
+                host_status = try c.host_dispatcher.iteration("host", .{.prev_status = host_status}, serverHandler);
+                try std.testing.expectEqual(.terminated, host_status);
+                try std.testing.expectEqual(0, c.host_dispatcher.queue.receive_queue.len);
+                try std.testing.expectEqual(.quit_done, c.host_dispatcher.phase.kind);
+                break:iter;
+            }
+            break:host_iter;
+        }
     }
 
     test "single iteration" {
@@ -592,21 +734,23 @@ pub const tests = struct {
             break:send_event;
         }
 
+        var prev_status: IterationStatus = .awake;
+
         iteration: {
-            const status = try dispatcher.iteration("runner", noopHandler);
-            try std.testing.expectEqual(.handled, status);
+            prev_status = try dispatcher.iteration("runner", .{.no_poll = true, .prev_status = prev_status}, noopHandler);
+            try std.testing.expectEqual(.pending_poll, prev_status);
             try std.testing.expectEqual(0, dispatcher.queue.receive_queue.len);
             break:iteration;
         }
         iteration: {
-            const status = try dispatcher.iteration("runner", noopHandler);
-            try std.testing.expectEqual(.awake, status);
+            prev_status = try dispatcher.iteration("runner", .{.prev_status = prev_status}, noopHandler);
+            try std.testing.expectEqual(.awake, prev_status);
             try std.testing.expectEqual(1, dispatcher.queue.receive_queue.len);
             break:iteration;
         }
         iteration: {
-            const status = try dispatcher.iteration("runner", noopHandler);
-            try std.testing.expectEqual(.handled, status);
+            prev_status = try dispatcher.iteration("runner", .{.prev_status = prev_status}, noopHandler);
+            try std.testing.expectEqual(.handled, prev_status);
             try std.testing.expectEqual(0, dispatcher.queue.receive_queue.len);
             break:iteration;
         }

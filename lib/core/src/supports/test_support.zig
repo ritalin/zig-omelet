@@ -35,30 +35,6 @@ pub fn createTmpDir() !std.testing.TmpDir {
     };
 }
 
-// TODO:
-// pub fn createEndpoint(tmp_dir: std.testing.TmpDir) !types.Endpoints {
-//     const io = std.testing.io;
-//     const allocator = std.testing.allocator;
-
-//     if (builtin.os.tag != .windows) {
-//         const ep_config = try testEndpointConfig(io, allocator, &tmp_dir);
-//         defer {
-//             allocator.free(ep_config.channel_root);
-//             allocator.free(ep_config.channel_dir);
-//         }
-//         return Endpoint.runtimeIpc(allocator, ep_config);
-//     }
-//     else {
-//         const config: root.configs.Endpoint.Confiig = .test_default;
-
-//         return Endpoint.runtimeIpc(allocator, .{ 
-//             .channel_root = &tmp_dir.sub_path, 
-//             .channel_dir = config.channel_dir, 
-//             .worker_endpoint = config.worker_endpoint,
-//         });
-//     }
-// }
-
 const test_default: Endpoint.Config = .{
     .channel_root = if (builtin.os.tag != .windows) "/tmp/omelet-test" else "omelet-test",
     .channel_dir = Endpoint.Config.default.channel_dir,
@@ -70,7 +46,7 @@ pub fn testEndpointConfig(io: std.Io, tmp_dir: *const std.testing.TmpDir, option
     const config: Endpoint.Config = .{
         .channel_root = test_default.channel_root,
         .channel_dir = try allocator.dupeSentinel(u8, &tmp_dir.sub_path, 0),
-        .worker_endpoint = options.worker_endpoint orelse test_default.worker_endpoint,
+        .worker_endpoint = try allocator.dupeSentinel(u8, options.worker_endpoint orelse &randomWorkerUrl(io), 0),
     };
 
     if (builtin.os.tag != .windows) {
@@ -100,4 +76,22 @@ pub fn releaseEndpoint(io: std.Io, endpoint: *types.Endpoints, config: *Endpoint
         }
     }
     allocator.free(config.channel_dir);
+
+    if (config.worker_endpoint) |url| {
+        allocator.free(url);
+    }
+}
+
+const IMPROC_PREFIX = "inproc://";
+
+fn randomWorkerUrl(io: std.Io) [16 + IMPROC_PREFIX.len]u8 {
+
+    var random_bytes: [12]u8 = undefined;
+    io.random(&random_bytes);
+    var url: [16 + IMPROC_PREFIX.len]u8 = undefined;
+    @memcpy(url[0..IMPROC_PREFIX.len], IMPROC_PREFIX);
+
+    _ = std.base64.url_safe.Encoder.encode(url[IMPROC_PREFIX.len..], &random_bytes);
+
+    return url;
 }

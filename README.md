@@ -41,7 +41,7 @@ zig build
 ### Run as one-shot
 
 ```
-./zig-out/bin/omelet generate \
+omelet generate \
     --source-dir=./_sql-examples \
     --schema-dir=./_schema-examples/user_types \
     --schema-dir=./_schema-examples/tables \
@@ -49,14 +49,15 @@ zig build
     --output-dir=./_dump/ts \
 ```
 
-Note that if the schema includes user-defined types, all of them must be specified before the table definitions.
+> [!NOTE]
+> if the schema includes user-defined types, all of them must be specified before the table definitions.
 
 ### Run with watch mode
 
 you can use `--watch` option to track the file content change.
 
 ```
-./zig-out/bin/omelet generate \
+omelet generate \
     --source-dir=./_sql-examples \
     --schema-dir=./_schema-examples/user_types \
     --schema-dir=./_schema-examples/tables \
@@ -65,21 +66,24 @@ you can use `--watch` option to track the file content change.
     --watch
 ```
 
-### Init default value environment
+### Init default setting environment scope
 
-Following command is generate a default value environment specified command (scope = `default`).
+Following command is generate a new scope specified environment scope (`default`).
 
 A environment is generated at `.omelet` directory in current directory.
 
-> [!CAUTION]
-> Note that `init-default` and `init-config` command is not supported the default value env.
+```
+omelet init-default --target-scope foo
+```
+
+if you want to specify the scope name explicitly, you can type following command.
 
 ```
-./zig-out/bin/omelet init-default --command generate
+omelet init-default --target-scope foo --from-scope test
 ```
 
 > [!NOTE]
-> you can use `-global` option to `.omelet` directory in user home directory.
+> you can use `--global` option to `.omelet` directory in local configuration directory on your machine.
 > ```
 > ./zig-out/bin/omelet init-default --command generate --global
 > ```
@@ -102,7 +106,6 @@ In general option, using `--use-scope` option result in applying the custom scop
     --exclude-filter=tables \
     --output-dir=./_dump/ts \
     --watch
-
 ```
 
 #### Default value environment formats
@@ -119,7 +122,7 @@ In general option, using `--use-scope` option result in applying the custom scop
 | .include_filter_set | .value (multiple) | Source/Schema path include filter(s). | .include_filter_set = .{.values = .{ "PATTERN1", ... } } |
 | .exclude_filter_set | .value (multiple) | Source/Schema path exclude filter(s). | .exclude_filter_set = .{.values = .{ "PATTERN1", ... } } |
 | .output_dir_path    | .value (single)   | Destination folder path               | .output_dir_path = .{ .values = .{"/path/to"} }          |
-| .watch              | .enabled          | Enable/Disable watch mode             | .watch = .{.enabled = true}                              |
+| .interactive        | .enabled          | Enable/Disable watch mode             | .interactive = .{.enabled = true}                        |
 
 `generate` command example:
 
@@ -135,7 +138,7 @@ In general option, using `--use-scope` option result in applying the custom scop
     .include_filter_set = .default,
     .exclude_filter_set = .{ .values = .{"tables"} },
     .output_dir_path = .{ .values = .{"./_dump/ts"} },
-    .watch = .{.enabled = true}, 
+    .interactive = .{.enabled = true}, 
 }
 ```
 
@@ -146,25 +149,29 @@ Following command is generate a subcommand configuration environment specified c
 A environment is generated at `.omelet` directory in current directory.
 
 ```
-./zig-out/bin/omelet init-default
+./zig-out/bin/omelet init-default --target-scope foo
 ```
 
-This command is also can use `--target-scope` option to specify a custom scope.
+If a scope is also specified, run following command.
+
+```
+./zig-out/bin/omelet init-config --target-scope my_scope --from-scope test
+```
 
 `--global` option also supports.
 
 ```
-./zig-out/bin/omelet init-config --target-scope my_scope
+./zig-out/bin/omelet init-config --target-scope my_scope --global
 ```
 
-In general option, using `--use-scope` option result in applying the custom scope.
+In general option, using `--use-config-scope` option result in applying the custom scope.
 
 #### Subcommand configuration environment formats
 
 > [!NOTE]
 > A value variant `.default` is always applied values from CLI arg input.
 
-Top leven configuration
+Top leven configuration of the `generate` subcommand:
 
 |       key       |                      note                      |
 | --------------- | ---------------------------------------------- |
@@ -177,10 +184,11 @@ Stage configuration
 > [!NOTE]
 > top level key in stage configuration indicates executable file name.
 
-| key         | value variant | note                                                              |
-| .location   | string        | Path of executable file name. `.default` is same as `omelet` app. |
-| .extra_args | list          | Extra arguments for a stage.                                      |
-| .managed    | bool          | Manage auto launch of a stage.                                    |
+| key                | value variant | note  
+| .name              | string        | Guest name. If .default, field name is used.                      |
+| .location          | string        | Path of executable file name. `.default` is same as `omelet` app. |
+| .enable_managed    | bool          | Manage auto launch of a stage.                                    |
+| .extra_args        | list          | Extra arguments for a stage.                                      |
 
 > [!NOTE]
 > A key of extra argument is same as default value environment of a stage.
@@ -206,4 +214,3 @@ Source/Schema file encoding is supported UTF8 only.
 
 - DuckDB: https://duckdb.org/
 - magic_enum: https://github.com/Neargye/magic_enum
-

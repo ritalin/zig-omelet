@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const known_folders = @import("known_folders");
+const nnng = @import("nnng");
 const root = @import("../root.zig");
 
 const types = root.types;
@@ -94,4 +95,38 @@ fn randomWorkerUrl(io: std.Io) [16 + IMPROC_PREFIX.len]u8 {
     _ = std.base64.url_safe.Encoder.encode(url[IMPROC_PREFIX.len..], &random_bytes);
 
     return url;
+}
+
+pub fn warmupPubSub(allocator: std.mem.Allocator, pub_pipe: nnng.Pipe.Sync, sub_pipe: nnng.Pipe.Sync, header: root.events.EventHeader) !void {
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    defer buffer.deinit();
+
+    const encodeSubscription = @import("../events/encoder.zig").encodeSubscription;
+    const subscription = try encodeSubscription(&buffer.writer, header);
+    
+    const sender = pub_pipe.item.sender();
+    const receiver = sub_pipe.item.receiver();
+
+    var msg: nnng.Message = undefined;
+    while (true) {
+        msg = try nnng.Message.create();
+        try msg.writer.writeAll(subscription);
+        try msg.writer.flush();
+
+        try sender.submit(msg);
+
+        msg = 
+            receiver.withOpt(.{.timeout = .fromMilliseconds(10)}).drain()
+            catch |err| switch (err) {
+                error.Timeout => continue,
+                else => return err,
+            }
+        ;
+        msg.deinit();
+        break;
+    }
+}
+
+pub fn cleanup() void {
+    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
 }

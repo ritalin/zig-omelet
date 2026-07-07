@@ -16,7 +16,7 @@ this tool has following fetues:
 * libduckdb (https://duckdb.org) - 1.5.3 or latter
 * libcatch2 (https://github.com/catchorg/Catch2) 3.15.0 or latter
 
-This product has tested on MacOS Ventura 13.6.7.
+This product has tested on MacOS Ventura 15.7.7.
 
 ## Build
 

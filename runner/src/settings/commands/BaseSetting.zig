@@ -40,6 +40,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
         no_color,
         interactive,
         use_scope,
+        use_config_scope,
         help,
 
         pub const Decls: []const clap.Param(@This()) = &.{
@@ -50,6 +51,7 @@ pub fn ArgId(comptime descriptions: core.settings.types.DescriptionMap) type {
             .{.id = .log_quiet, .names = .{.long = "quiet", .short = 'q'}, .takes_value = .none},
             .{.id = .no_color, .names = .{.long = "no-color"}, .takes_value = .none},
             .{.id = .use_scope, .names = .{.long = "use-scope"}, .takes_value = .one},
+            .{.id = .use_config_scope, .names = .{.long = "use-config-scope"}, .takes_value = .one},
             .{.id = .interactive, .names = .{.long = "watch"}, .takes_value = .none},
             .{.id = .help, .names = .{.long = "help", .short = 'h'}, .takes_value = .none},
         };
@@ -94,6 +96,7 @@ pub fn Builder(comptime ArgIterator: type) type {
         pub_sub_channel: ?core.types.Symbol = null,
         push_pull_channel: ?core.types.Symbol = null,
         scope: ?core.types.Symbol = null,
+        config_scope: ?core.types.Symbol = null,
 
         pub fn fromArgs(allocator: std.mem.Allocator, scanner: *ArgScanner(ArgIterator), log_style: core.Logger.LogStyle) !struct{ builder: Builder(ArgIterator), command: SubcommandArgId } {
             var diag: clap.Diagnostic = .{}; 
@@ -145,7 +148,10 @@ pub fn Builder(comptime ArgIterator: type) type {
                 .use_scope => {
                     if (arg.value) |v| self.scope = v;
                 },
-            }
+                 .use_config_scope => {
+                    if (arg.value) |v| self.config_scope = v;
+                },
+           }
         }
 
         fn applyDefaults(ptr: *anyopaque, allocator: std.mem.Allocator, defaults: *Defaults) !void {
@@ -177,6 +183,9 @@ pub fn Builder(comptime ArgIterator: type) type {
                     },
                     .use_scope => if ((entry.value.tag() == .values)) {
                         self.scope = try allocator.dupe(u8, entry.value.values[0]);
+                    },
+                    .use_config_scope => if ((entry.value.tag() == .values)) {
+                        self.config_scope = try allocator.dupe(u8, entry.value.values[0]);
                     },
                     .help => {},
                 }
@@ -219,6 +228,7 @@ pub fn Builder(comptime ArgIterator: type) type {
             const pub_sub_channel = try allocator.dupe(u8, self.pub_sub_channel orelse builder_default.pub_sub_channel orelse ipc_endpoints.pub_sub);
             const push_pull_channel = try allocator.dupe(u8, self.push_pull_channel orelse builder_default.push_pull_channel orelse ipc_endpoints.push_pull);
             const scope = try allocator.dupe(u8, self.scope orelse builder_default.scope orelse default_scope);
+            const confiig_scope = try allocator.dupe(u8, self.config_scope orelse builder_default.config_scope orelse default_init_scope);
 
             return .{
                 .log_level = self.log_level orelse builder_default.log_level orelse core.Logger.default,
@@ -232,7 +242,7 @@ pub fn Builder(comptime ArgIterator: type) type {
                 },
                 .ipc_config = ipc_config,
                 .scope = scope,
-                .config_scope = default_init_scope, // TODO: wants to pass from CLI arg
+                .config_scope = confiig_scope,
             };
         }
     };
@@ -270,6 +280,7 @@ pub const tests = struct {
             "--no-color", 
             "--watch",
             "--use-scope", "test",
+            "--use-config-scope", "demo",
             "generate"
         });        
 
@@ -296,6 +307,7 @@ pub const tests = struct {
         try std.testing.expectEqual(true, setting.no_color);
         try std.testing.expectEqual(true, setting.interactive);
         try std.testing.expectEqualStrings("test", setting.scope);
+        try std.testing.expectEqualStrings("demo", setting.config_scope);
     }
 
     test "All default args" {
@@ -320,6 +332,7 @@ pub const tests = struct {
             \\    .no_color = .{ .enabled = true },
             \\    .interactive = .{ .enabled = true },
             \\    .use_scope = .{ .values = .{ "demo" } },
+            \\    .use_config_scope = .{ .values = .{ "my-config" } },
             \\}
         ;
 
@@ -344,6 +357,7 @@ pub const tests = struct {
         try std.testing.expectEqual(true, setting.no_color);
         try std.testing.expectEqual(true, setting.interactive);
         try std.testing.expectEqualStrings("demo", setting.scope);
+        try std.testing.expectEqualStrings("my-config", setting.config_scope);
     }
 
     test "Explict + default args" {
@@ -399,5 +413,6 @@ pub const tests = struct {
         try std.testing.expectEqual(true, setting.no_color);
         try std.testing.expectEqual(true, setting.interactive);
         try std.testing.expectEqualStrings("test", setting.scope);
+        try std.testing.expectEqualStrings("default", setting.config_scope);
     }
 };

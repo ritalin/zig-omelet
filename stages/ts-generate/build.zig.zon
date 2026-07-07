@@ -1,6 +1,6 @@
 .{
     .name = .ts_generate,
-    .version = "0.0.0",
+    .version = "0.2.0",
     .fingerprint = 0xbcd9c7303a9b3a3,
     .dependencies = .{
         .third_parties = .{ .path = "../../third_parties" },

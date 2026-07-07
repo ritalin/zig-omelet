@@ -1,6 +1,6 @@
 .{
     .name = .omelet,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0x2b15b062d5f665ef,
     .paths = .{
         "build.zig",

@@ -1,6 +1,6 @@
 .{
     .name = .lib_testing,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0x97b75799086fd768,
     .paths = .{
         "build.zig",

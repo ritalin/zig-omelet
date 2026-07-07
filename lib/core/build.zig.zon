@@ -1,6 +1,6 @@
 .{
     .name = .lib_core,
-    .version = "0.0.0",
+    .version = "0.2.0",
     .fingerprint = 0x49fecfb367ec95af,
     .dependencies = .{
         .third_parties = .{

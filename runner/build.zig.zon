@@ -1,6 +1,6 @@
 .{
     .name = .runner,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xf92b8b3e3de02211,
     .paths = .{
         "build.zig",

@@ -437,7 +437,7 @@ pub const tests = struct {
 
         var worker_push_socket = socket: {
             const b = try nnng.Push.open(conn.context);
-            break:socket try b.as_dialer(WORKER_ENDPOINT);
+            break:socket try b.as_dialer(ep.worker orelse WORKER_ENDPOINT);
         };
         try worker_push_socket.transport.start(.{ .nonblocking = true });
         defer worker_push_socket.close();

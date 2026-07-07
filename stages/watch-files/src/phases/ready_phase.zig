@@ -10,6 +10,7 @@ const Event = core.events.Event;
 const PathMatcher = @import("../PathMatcher.zig").PathMatcher(u21);
 
 const FileIterateWorker = @import("../watch_worker.zig").FileIterateWorker;
+const FileWatchWorker = @import("../watch_worker.zig").FileWatchWorker;
 
 pub fn ReadyWatchFileState(comptime GuestStage: type) type {
     return struct {
@@ -28,7 +29,8 @@ pub fn ReadyWatchFileState(comptime GuestStage: type) type {
                         try stage.transitPhase(.ready, .confirmed);
 
                         if (stage.setting.watch) {
-                            // TODO: watch mode
+                            const worker = try FileWatchWorker(GuestStage).init(stage.io, stage.setting, stage.connection.push_worker_socket.pipe);
+                            try stage.reapers.detach(FileWatchWorker(GuestStage).run, .{worker});
                         }
                         return;
                     }

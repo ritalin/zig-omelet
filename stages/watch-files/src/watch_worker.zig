@@ -1,9 +1,12 @@
 const std = @import("std");
 const core = @import("core");
+const nnng = @import("nnng");
+const efsw = @import("efsw");
 
 const types = core.types;
 const events = core.events;
 
+const Setting = @import("./Setting.zig");
 const PathMatcher = @import("./PathMatcher.zig").PathMatcher(u21);
 const toUnicodeString = @import("./PathMatcher.zig").toUnicodeString;
 
@@ -166,3 +169,188 @@ test "resolve file path with dialect" {
     try std.testing.expectEqualStrings("sqlite", file_name.dialect.?);
 }
 
+pub fn FileWatchWorker(comptime GuestStage: type) type {
+    return struct {
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        states: []const State,
+        watcher: efsw.Watcher,
+        pipe: nnng.Pipe.Sync,
+
+        const Worker = @This();
+
+        pub fn init(io: std.Io, setting: *const Setting, pipe: nnng.Pipe.Sync) !Worker {
+            const allocator = std.heap.c_allocator;
+            const states = try allocator.alloc(State, setting.sources.len);
+
+            for (states, 0..) |*state, i| {
+                state.* = .{
+                    .io = io,
+                    .dir = &setting.sources[i],
+                    .filter = &setting.filter,
+                    .default_dialect = setting.default_dialect,
+                    .pipe = pipe,                    
+                };
+            }     
+
+            return .{
+                .io = io,
+                .allocator = allocator,
+                .states = states,
+                .watcher = try createWatcher(allocator, states),
+                .pipe = pipe,
+            };
+        }
+
+        pub fn deinit(self: *Worker) void {
+            self.allocator.free(self.states);
+        }
+
+        pub fn run(self: Worker) void {
+            var worker = self;
+            defer worker.deinit();
+
+            worker.watcher.start();
+
+            const err_msg = efsw.Watcher.LastError.get();
+            if (err_msg.len > 0) {
+                sendFatalError(worker.allocator, err_msg, worker.pipe) catch {};
+                return;
+            }
+
+            var barrier: std.Io.Event = .unset;
+            const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } };
+
+            while (true) {
+                barrier.waitTimeout(worker.io, timeout) 
+                catch |err| switch (err) {
+                    error.Timeout => continue,
+                    error.Canceled => return,
+                };
+            }
+        }
+
+        fn createWatcher(allocator: std.mem.Allocator, states: []State) !efsw.Watcher {
+            var watcher = try efsw.Watcher.init(allocator, false);
+
+            for (0..states.len) |i| {
+                const dir_path = states[i].dir.dir_path;
+                if (watcher.isWatching(dir_path)) continue;
+
+                _ = try watcher.addWatch(
+                    dir_path,
+                    .{
+                        .on_add = State.notifyChanged,
+                        .on_modified = State.notifyChanged,
+                        .on_renamed = State.notifyRenbame,
+                        .on_error = State.notifyWatchError,
+                        .mac_modified_exclude_filter = .{.finder_info = true, .inode = true},
+                        .recursive = true,
+                        .user_data = &states[i],
+                    }
+                );
+            }
+
+            return watcher;
+        }
+
+        fn sendFatalError(allocator: std.mem.Allocator, err: types.Symbol, pipe: nnng.Pipe.Sync) !void {
+            var channel = try core.sockets.SendChannel.init(allocator, pipe.item.id, GuestStage.stage_name, pipe.item.sender());
+            defer channel.deinit();
+
+            const log: events.Event.Payload.Log = .{
+                .level = .err,
+                .content = err,
+            };
+
+            try channel.encode(.{.report_fatal = log});
+            try channel.submit(.{});
+        }
+
+        fn sendSourcePath(state: *const State, allocator: std.mem.Allocator, dir_path: types.FilePath, sub_path: types.FilePath) !void {
+            const path_abs = try std.fs.path.join(allocator, &.{dir_path, sub_path});
+            defer allocator.free(path_abs);
+
+            if (! try isFileAccepted(allocator, state.filter, path_abs)) return;
+
+            var channel = try core.sockets.SendChannel.init(allocator, state.pipe.item.id, GuestStage.stage_name, state.pipe.item.sender());
+            defer channel.deinit();
+
+            const info = try resolveSourceName(dir_path, path_abs);
+
+            var hasher = core.file_supports.Hasher.init(.{});
+            try core.file_supports.makeFileHash(state.io, &hasher, std.Io.Dir.cwd(), path_abs);
+
+            const source: events.Event.Payload.SourcePath = .{
+                .category = state.dir.category,
+                .name = info.name,
+                .dialect = info.dialect orelse "duckdb",
+                .path = path_abs,
+                .hash = &hasher.finalResult(),
+            };
+
+            try channel.encode(.{.source_path = source});
+            try channel.submit(.{});
+        }
+
+        fn sendWatchLog(state: *const State, allocator: std.mem.Allocator, err: types.Symbol, action: efsw.Watcher.Action) !void {
+            var channel = try core.sockets.SendChannel.init(allocator, state.pipe.item.id, GuestStage.stage_name, state.pipe.item.sender());
+            defer channel.deinit();
+
+            const content = try std.fmt.allocPrint(allocator, "{s}/action: {s}, category: {s}, dir: {s}", .{err,@tagName(action), @tagName(state.dir.category), state.dir.dir_path});
+            defer allocator.free(content);
+
+            const log: events.Event.Payload.Log = .{
+                .level = .err,
+                .content = content,
+            };
+
+            try channel.encode(.{.log = log});
+            try channel.submit(.{});
+        }
+
+        pub const State = struct {
+            io: std.Io,
+            dir: *const Setting.SourceDir,
+            filter: *const PathMatcher,
+            default_dialect: types.Symbol,
+            pipe: nnng.Pipe.Sync,
+
+            fn notifyChanged(watcher: *efsw.Watcher, id: efsw.Watcher.WatchId, dir_path: []const u8, sub_path: []const u8, user_data: ?*anyopaque) !void {
+                _ = watcher;
+                _ = id;
+
+                if (user_data == null) return;
+
+                const state: *State = @ptrCast(@alignCast(user_data.?));
+
+                try sendSourcePath(state, std.heap.c_allocator, dir_path, sub_path);
+            }
+
+            fn notifyRenbame(watcher: *efsw.Watcher, id: efsw.Watcher.WatchId, dir_path: []const u8, new_name: []const u8, old_name: []const u8, user_data: ?*anyopaque) !void {
+                _ = watcher;
+                _ = id;
+                _ = old_name;
+
+                if (user_data == null) return;
+                const state: *State = @ptrCast(@alignCast(user_data.?));
+
+                try sendSourcePath(state, std.heap.c_allocator, dir_path, new_name);
+            }
+
+            fn notifyWatchError(watcher: *efsw.Watcher, id: efsw.Watcher.WatchId, action: efsw.Watcher.Action, _: anyerror, user_data: ?*anyopaque) !void {
+                _ = watcher;
+                _ = id;
+
+                if (user_data == null) return;
+                const state: *State = @ptrCast(@alignCast(user_data.?));
+
+                const allocator = std.heap.c_allocator;
+                const err = efsw.Watcher.LastError.get();
+
+                try sendWatchLog(state, allocator, err, action);
+            }
+
+        };
+    };
+}

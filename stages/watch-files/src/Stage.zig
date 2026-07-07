@@ -21,10 +21,12 @@ setting: *const Setting,
 connection: *GuestStage.Connection,
 dispatcher: EventDispatcher.Sized(1),
 state: State,
+reapers: *core.TaskReaper,
 
 const GuestStage = @This();
 
 pub const Connection = core.sockets.Connection.Client(app_context);
+pub const stage_name = Connection.stage_name;
 
 pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection, setting: *const Setting) !GuestStage {
     errdefer connection.deinit();
@@ -49,10 +51,13 @@ pub fn create(io: std.Io, allocator: std.mem.Allocator, connection: *Connection,
         .connection = connection,
         .dispatcher = dispatcher,
         .state = .preboot,
+        .reapers = try core.TaskReaper.init(io, allocator),
     };
 }
 
 pub fn deinit(self: *GuestStage) void {
+    self.reapers.deinit(self.allocator);
+
     self.state.deinit(self.allocator);
     self.dispatcher.deinit();
 }
@@ -78,7 +83,7 @@ pub fn transitPhase(self: *GuestStage, phase_kind: EventPhase.Kind, phase_agree:
         switch (phase_kind) {
             .boot => try self.doBootPhase(),
             .connecting => try self.doConnectingPhase(),
-            .request => try self.doRequestPhase(),
+            .request => {},
             .ready => try self.doReadyPhase(),
             .terminating => {},
             .quitting => {},
@@ -110,6 +115,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                     try self.transitPhase(.ready, .pending);
                 },
                 .terminating => {
+                    self.reapers.cancel(self.io);
                     try self.transitPhase(.quitting, .confirmed);
                 },
                 else => {
@@ -131,7 +137,7 @@ fn doBootPhase(self: *GuestStage) !void {
     self.state.deinit(self.allocator);
     self.state = .{ .boot = BootPhaseState.init };
 
-    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
+    try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.stage_name));
 }
 
 fn doConnectingPhase(self: *GuestStage) !void {
@@ -139,9 +145,10 @@ fn doConnectingPhase(self: *GuestStage) !void {
     self.state = .{ .connecting = ConnectPhaseState.init };
 }
 
-fn doRequestPhase(self: *GuestStage) !void {
-    self.state.deinit(self.allocator);
-}
+// fn doRequestPhase(self: *GuestStage) !void {
+//     try self.dispatcher.queue.post(.finish_topic, try self.connection.dataChannel());
+//     return self.transitPhase(.ready, .pending);
+// }
 
 fn doReadyPhase(self: *GuestStage) !void {
     self.state.deinit(self.allocator);

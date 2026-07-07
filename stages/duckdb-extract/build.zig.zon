@@ -1,6 +1,6 @@
 .{
     .name = .duckdb_extract,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0x4a811b04ff0963c3,
     .paths = .{
         "build.zig",

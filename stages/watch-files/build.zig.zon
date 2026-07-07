@@ -1,6 +1,6 @@
 .{
     .name = .watch_files,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xf406a3b761e60b8a,
     .paths = .{
         "build.zig",

@@ -1,6 +1,6 @@
 .{
     .name = .configuration_init,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .fingerprint = 0xa327927343b8e7c0,
     .paths = .{
         "build.zig",

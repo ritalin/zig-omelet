@@ -383,6 +383,7 @@ pub const tests = struct {
 
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
+        defer supports.cleanup();
 
         var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
@@ -427,6 +428,7 @@ pub const tests = struct {
         var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
         defer supports.releaseEndpoint(io, &ep, &ep_config);
+        defer supports.cleanup();
 
         var conn = try ClientConnection.create(std.testing.io, std.testing.allocator, ep);
         defer conn.deinit();
@@ -435,14 +437,7 @@ pub const tests = struct {
         var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
-        var worker_push_socket = socket: {
-            const b = try nnng.Push.open(conn.context);
-            break:socket try b.as_dialer(ep.worker orelse WORKER_ENDPOINT);
-        };
-        try worker_push_socket.transport.start(.{ .nonblocking = true });
-        defer worker_push_socket.close();
-
-        const worker_pipe = worker_push_socket.pipe.item;
+        const worker_pipe = conn.push_worker_socket.pipe.item;
 
         send_event: {
             var msg = try nnng.Message.create();
@@ -473,6 +468,7 @@ pub const tests = struct {
 
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
+        defer supports.cleanup();
 
         var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
@@ -485,14 +481,14 @@ pub const tests = struct {
         var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
-        var worker_push_socket = socket: {
+        var req_socket = socket: {
             const b = try nnng.Req.open(conn.context);
             break:socket try b.as_dialer(ep.req_rep);
         };
-        try worker_push_socket.transport.start(.{ .nonblocking = true });
-        defer worker_push_socket.close();
+        try req_socket.transport.start(.{ .nonblocking = true });
+        defer req_socket.close();
 
-        const pipe = worker_push_socket.pipe.item;
+        const pipe = req_socket.pipe.item;
         send_event: {
             var msg = try nnng.Message.create();
             try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
@@ -506,6 +502,13 @@ pub const tests = struct {
         try task.await(io);
 
         try std.testing.expectEqual(.quit_done, dispatcher.phase.kind);
+
+        treardown: {
+            var msg = try pipe.receiver().drain();
+            defer msg.deinit();
+            try std.testing.expectEqual(true, msg.bytes().len > 0);
+            break:treardown;
+        }
     }
 
     test "receive event by SUB" {
@@ -514,10 +517,12 @@ pub const tests = struct {
 
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
+        defer supports.cleanup();
 
         var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
         defer supports.releaseEndpoint(io, &ep, &ep_config);
+        defer supports.cleanup();
 
         var host = try ServerConnection.create(std.testing.io, std.testing.allocator, 4, ep);
         defer host.deinit();
@@ -539,8 +544,8 @@ pub const tests = struct {
         defer dispatcher.deinit();
         dispatcher.vtable.on_quit = null;
 
-        // Wait for subscription propagation.
-        try io.sleep(.fromMilliseconds(20), .awake);
+        // warm up subscription propagation.
+        try supports.warmupPubSub(allocator, host.cmd_socket.pipe, guest.cmd_socket.pipe, .probe);
 
         var msg = try nnng.Message.create();
         send_event: {
@@ -595,16 +600,12 @@ pub const tests = struct {
     };
 
     test "Host/Guest rally" {
-        // TODO: beacause blocked on GHA...
-        // if (true) { 
-        //     return error.SkipZigTest; 
-        // }
-
         const io = std.testing.io;
         const allocator = std.testing.allocator;
 
         var tmp_dir = try supports.createTmpDir();
         defer tmp_dir.cleanup();
+        defer supports.cleanup();
 
         var ep_config = try supports.testEndpointConfig(io, &tmp_dir, .{});
         var ep = try root.configs.Endpoint.runtimeIpc(allocator, ep_config);
@@ -645,8 +646,8 @@ pub const tests = struct {
         try std.testing.expectEqual(.preboot, c.host_dispatcher.phase.kind);
         try std.testing.expectEqual(.preboot, c.guest_dispatcher.phase.kind);
 
-        // Wait for subscription propagation.
-        try io.sleep(.fromMilliseconds(20), .awake);
+        // warm up subscription propagation.
+        try supports.warmupPubSub(allocator, host.cmd_socket.pipe, guest.cmd_socket.pipe, .probe);
 
         var guest_status: IterationStatus = .awake;
 
@@ -721,14 +722,14 @@ pub const tests = struct {
         var dispatcher: Dispatcher = try conn.configureDispatcher(8, .{.log_style = .discard});
         defer dispatcher.deinit();
 
-        var worker_push_socket = socket: {
+        var req_socket = socket: {
             const b = try nnng.Req.open(conn.context);
             break:socket try b.as_dialer(ep.req_rep);
         };
-        try worker_push_socket.transport.start(.{ .nonblocking = true });
-        defer worker_push_socket.close();
+        try req_socket.transport.start(.{ .nonblocking = true });
+        defer req_socket.close();
 
-        const pipe = worker_push_socket.pipe.item;
+        const pipe = req_socket.pipe.item;
         send_event: {
             var msg = try nnng.Message.create();
             try encodeToCbor(&msg.writer, .{ .header = .quit, .stage_name = "test-stage", .event = .quit });
@@ -755,6 +756,12 @@ pub const tests = struct {
             try std.testing.expectEqual(.handled, prev_status);
             try std.testing.expectEqual(0, dispatcher.queue.receive_queue.len);
             break:iteration;
+        }
+        treardown: {
+            var msg = try pipe.receiver().drain();
+            defer msg.deinit();
+            try std.testing.expectEqual(true, msg.bytes().len > 0);
+            break:treardown;
         }
     }
 };

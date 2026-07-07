@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -44,14 +45,29 @@ pub fn build(b: *std.Build) void {
         intoWorkspaceModule(b, "nng-core", dep_nnng.module("nng-core"));
     }
 
-    // TODO:
-    // const dep_efsw = b.lazyDependency("efsw", .{
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // if (dep_efsw) |dep| {
-    //     intoWorkspaceModule(b, "efsw", dep.module("efsw"));
-    // }
+    const dep_efsw = b.lazyDependency("efsw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    if (dep_efsw) |dep| {
+        const mod = dep.module("efsw");
+
+        if (builtin.os.tag == .linux) {
+                mod.link_libc = true;
+                mod.addIncludePath(.{.cwd_relative = "/usr/include/c++/15"});
+                mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu/c++/15"});
+                mod.addIncludePath(.{.cwd_relative = "/usr/include"});
+                mod.addIncludePath(.{.cwd_relative = "/usr/include/x86_64-linux-gnu"});
+                mod.addObjectFile(.{.cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/15/libstdc++.so"});
+                mod.addObjectFile(.{.cwd_relative = "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"});
+        }
+        else {
+            mod.link_libc = true;
+            mod.link_libcpp = true;
+        }
+
+        intoWorkspaceModule(b, "efsw", dep.module("efsw"));
+    }
 }
 
 fn intoWorkspaceModule(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {

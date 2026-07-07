@@ -136,6 +136,13 @@ pub fn defaultHandler(self: *HostRunner, entry: ReceiveEntry, dirty: *EventDispa
                 try self.dispatcher.log_router.handleLogEvent(entry.from_stage, payload);
             }
         },
+        .report_fatal => |payload| {
+            if (core.Logger.accepted(payload.level)) {
+                try self.dispatcher.log_router.handleLogEvent(entry.from_stage, payload);
+            }
+
+            //  TODO: shutdown
+        },
         .heartbeat => |payload| {
             // discard
             try self.log(.debug, "Discard/event:heartbeat.{s}, phase: {s}", .{@tagName(payload.event_type), @tagName(self.dispatcher.phase.kind)});

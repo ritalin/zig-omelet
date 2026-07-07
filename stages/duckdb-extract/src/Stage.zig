@@ -119,7 +119,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                 return;
             }
             if (self.dispatcher.phase.agreement == .confirmed) {
-                try self.log(.debug, "Discard probe/phase: {s}", .{@tagName(phase)});
+                try self.log(.debug, "Discard probe/phase: {s}, current: {s}", .{@tagName(phase), @tagName(self.dispatcher.phase.kind)});
                 return;
             }
             switch (phase) {
@@ -144,6 +144,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
 fn doBootPhase(self: *GuestStage) !void {
     self.state.deinit(self.allocator);
     self.state = .{ .boot = BootPhaseState.init };
+    self.state.boot.vtable.on_prepare = GuestStage.doPrepareLaunching;
 
     try self.dispatcher.queue.pushReceiveQueue(try core.sockets.ReceiveEntry.booting(GuestStage.Connection.stage_name));
 }

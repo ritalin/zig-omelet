@@ -32,8 +32,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "core", .module = dep_lib_core.module("core") },
             .{ .name = "clap", .module = deps.module("clap") },
-            //  TODO:
-            // .{ .name = "efsw", .module = deps.module("efsw") },
+            .{ .name = "efsw", .module = deps.module("efsw") },
+            .{ .name = "nnng", .module = deps.module("nnng") },
             .{ .name = "build_options", .module = build_options.createModule() }
         },
     };
@@ -52,12 +52,6 @@ pub fn build(b: *std.Build) void {
             run_cmd.addArgs(args);
         }
 
-        run_cmd.addArgs(&.{
-            "--log-level=trace",
-            "--source-dir=../../_sql-examples",
-            "--schema-dir=../../_schema-examples",
-        });
-
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
         break:app_runner;
@@ -75,13 +69,6 @@ pub fn build(b: *std.Build) void {
         mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
         exe_unit_tests.root_module.addImport("test_options", mod_test_options.createModule());
-
-        // YODO:
-        // native_config: {
-        //     exe_unit_tests.linkLibC();
-        //     exe_unit_tests.linkLibCpp();
-        //     break:native_config;
-        // }
 
         const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
         run_exe_unit_tests.has_side_effects = true;

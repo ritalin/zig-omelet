@@ -39,6 +39,8 @@ pub fn RequestPhaseState(comptime HostRunner: type) type {
 
                     self.left_guests.remove(entry.from_stage);
 
+                    try stage.log(.debug, "Request accepted/name: {s} (left: {})", .{entry.from_stage, self.left_guests.count()});
+
                     if (self.left_guests.count() == 0) {
                         if (core.Logger.accepted(.debug)) {
                             var iter = self.topics.iterator();

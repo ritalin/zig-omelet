@@ -101,7 +101,7 @@ pub fn defaultHandler(self: *GuestStage, entry: ReceiveEntry, dirty: *EventDispa
                 return;
             }
             if (self.dispatcher.phase.agreement == .confirmed) {
-                try self.log(.debug, "Discard probe/phase: {s}", .{@tagName(phase)});
+                try self.log(.debug, "Discard probe/phase: {s}, current: {s}", .{@tagName(phase), @tagName(self.dispatcher.phase.kind)});
                 return;
             }
 

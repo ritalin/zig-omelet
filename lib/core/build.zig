@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
                 deps.module("nng-core"),
             },
         });
+        _ = b.modules.getOrPutValue(b.allocator, "cbor-cpp", mod) catch @panic("OOM");
 
         const lib = b.addLibrary(.{
             .name = "cborcpp",
@@ -140,7 +141,7 @@ fn createCborCppModule(
         use_catch2: bool = false,
     }) *std.Build.Module 
 {
-    const mod = b.addModule(config.name, .{
+    const mod = b.createModule(.{
         .target = config.target,
         .optimize = config.optimize,
         .link_libc = true,
@@ -167,7 +168,7 @@ fn createCborCppModule(
             },
             .flags = &.{
                 "-std=c++20", 
-                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                if ((config.optimize == .debug) and (builtin.os.tag != .linux)) "-Werror" else "",
             },
         });
 

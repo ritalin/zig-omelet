@@ -103,10 +103,7 @@ pub fn build(b: *std.Build) void {
             
             const run_cmd = b.addRunArtifact(exe);
             run_cmd.step.dependOn(b.getInstallStep());
-
-            if (b.args) |args| {
-                run_cmd.addArgs(args);
-            }
+            run_cmd.addPassthruArgs();
 
             run_cmd.addArgs(&.{
                 "--log-level=trace",
@@ -166,7 +163,7 @@ pub fn build(b: *std.Build) void {
         test_module.addImport("c", mod_worker);
 
         const mod_test_options = b.addOptions();
-        mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
+        mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getDisplayName());
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
         test_module.addImport("test_options", mod_test_options.createModule());
 
@@ -273,7 +270,7 @@ fn createWorkerModule(
             },
             .flags = &.{
                 "-std=c++20", 
-                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                if ((config.optimize == .debug) and (builtin.os.tag != .linux)) "-Werror" else "",
                 "-Wno-error=invalid-constexpr", // TODO: workaround math::floor() constexpr failed for clang++
             },
         });
@@ -313,7 +310,7 @@ fn createWorkerModule(
                 },
                 .flags = &.{
                     "-std=c++20", 
-                    if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                    if ((config.optimize == .debug) and (builtin.os.tag != .linux)) "-Werror" else "",
                     "-Wno-error=invalid-constexpr",
                 },
             });

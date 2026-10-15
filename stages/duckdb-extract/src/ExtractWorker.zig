@@ -21,7 +21,7 @@ pub fn init(allocator: std.mem.Allocator, source_path: events.Event.Payload.Sour
     return .{
         .allocator = allocator,
         .category = source_path.category,
-        .path = try allocator.dupeZ(u8, source_path.path),
+        .path = try allocator.dupeSentinel(u8, source_path.path, 0),
         .name = try allocator.dupe(u8, source_path.name),
         .dialect = try allocator.dupe(u8, source_path.dialect),
         .hash = try allocator.dupe(u8, source_path.hash),

@@ -5,12 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const dep_clap = b.lazyDependency("clap", .{
+    const dep_clap = b.dependency("clap", .{
         .target = target,
         .optimize = optimize,    
     });
-    if (dep_clap) |dep| {
-        intoWorkspaceModule(b, "clap", dep.module("clap"));
+    {
+        intoWorkspaceModule(b, "clap", dep_clap.module("clap"));
     }
     
     const dep_known_folders = b.dependency("known_folders", .{
@@ -45,12 +45,12 @@ pub fn build(b: *std.Build) void {
         intoWorkspaceModule(b, "nng-core", dep_nnng.module("nng-core"));
     }
 
-    const dep_efsw = b.lazyDependency("efsw", .{
+    const dep_efsw = b.dependency("efsw", .{
         .target = target,
         .optimize = optimize,
     });
-    if (dep_efsw) |dep| {
-        const mod = dep.module("efsw");
+    {
+        const mod = dep_efsw.module("efsw");
 
         if (builtin.os.tag == .linux) {
                 mod.link_libc = true;
@@ -66,10 +66,20 @@ pub fn build(b: *std.Build) void {
             mod.link_libcpp = true;
         }
 
-        intoWorkspaceModule(b, "efsw", dep.module("efsw"));
+        intoWorkspaceModule(b, "efsw", dep_efsw.module("efsw"));
+    }
+
+    const dep_translate_c = b.dependency("translate_c", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    {
+        intoWorkspaceModule(b, "translate_c_helpers", dep_translate_c.module("helpers"));
     }
 }
 
 fn intoWorkspaceModule(b: *std.Build, name: []const u8, mod: *std.Build.Module) void {
     b.modules.put(b.allocator, b.dupe(name), mod) catch @panic("OOM");
 }
+
+pub const translate_c = @import("translate_c");

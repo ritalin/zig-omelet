@@ -31,14 +31,28 @@ pub fn build(b: *std.Build) void {
     const app_context = "duckdb-extract";
     const exe_name = b.fmt("{s}-{s}", .{exe_prefix, app_context}); // for displaying help
 
-    const mod_interop_c = b.addTranslateC(.{
-        .root_source_file = b.path("./src/c/include/duckdb_worker.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    for (deps.module("nng-core").include_dirs.items) |dir| {
-        mod_interop_c.addIncludePath(dir.path);
-    }
+    const mod_interop_c = mod: {
+        var dep_translate_c: std.Build.Dependency = .{ 
+            .builder = deps.module("translate_c_helpers").owner
+        };
+        const translator: @import("third_parties").translate_c.Translator = .init(&dep_translate_c,  .{
+                .target = target,
+                .optimize = optimize,
+                .c_source_file = b.path("./src/c/include/duckdb_worker.h"),
+        });
+        for (deps.module("nng-core").include_dirs.items) |dir| {
+            translator.mod.addIncludePath(dir.path);
+        }
+        break:mod translator;
+    };
+    // const mod_interop_c = b.addTranslateC(.{
+    //     .root_source_file = b.path("./src/c/include/duckdb_worker.h"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // for (deps.module("nng-core").include_dirs.items) |dir| {
+    //     mod_interop_c.addIncludePath(dir.path);
+    // }
     
     const app_root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -49,7 +63,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "clap", .module = deps.module("clap") },
             .{ .name = "nnng", .module = deps.module("nnng") },
             .{ .name = "nng_core", .module = deps.module("nng-core") },
-            .{ .name = "c", .module = mod_interop_c.createModule() },
+            // .{ .name = "c", .module = mod_interop_c.createModule() },
+            .{ .name = "c", .module = mod_interop_c.mod },
         },
     });
 
@@ -77,7 +92,7 @@ pub fn build(b: *std.Build) void {
                     .duckdb_prefix = duckdb_prefix,
                     .nng_prefix = nng_prefix,
                     .catch2_prefix = catch2_prefix,
-                    .root_source = mod_interop_c.getOutput(),
+                    .root_source = mod_interop_c.output_file,
                     .dep_modules = &.{
                         .{.name = "cbor_cpp", .mod = dep_lib_core.module("cbor-cpp")},
                         .{.name = "omelet_c", .mod = dep_lib_core.module("omelet_c")},
@@ -145,7 +160,7 @@ pub fn build(b: *std.Build) void {
                     .duckdb_prefix = duckdb_prefix,
                     .nng_prefix = nng_prefix,
                     .catch2_prefix = catch2_prefix,
-                    .root_source = mod_interop_c.getOutput(),
+                    .root_source = mod_interop_c.output_file,
                     .dep_modules = &.{
                         .{.name = "cbor_cpp", .mod = dep_lib_core.module("cbor-cpp")},
                         .{.name = "omelet_c", .mod = dep_lib_core.module("omelet_c")},
@@ -215,7 +230,7 @@ fn createWorkerModule(
     b: *std.Build, 
     config: struct {
         target: std.Build.ResolvedTarget,
-        optimize: std.builtin.OptimizeMode,
+        optimize: ?std.builtin.OptimizeMode,
         duckdb_prefix: []const u8,
         nng_prefix: []const u8,
         catch2_prefix: []const u8, 

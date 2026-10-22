@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
         });
 
         const mod_test_options = b.addOptions();
-        mod_test_options.addOption([]const u8, "source_asset_dir", @import("lib_core").AssetFilePath.from(.initCwd("./test_assets/configs/default").fullPath(b)));
+        mod_test_options.addOption([]const u8, "source_asset_dir", @import("lib_core").AssetFilePath.from(.initCwd("./test_assets/configs/default")).fullPath(b));
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
         exe_unit_tests.root_module.addImport("test_options", mod_test_options.createModule());
 

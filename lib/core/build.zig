@@ -17,8 +17,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,  
     });
 
-    const mod_context = "lib_core";
-
     lib_module_cbor_support: {
         const mod = createCborCppModule(b, .{
             .name = "cbor-cpp",
@@ -39,18 +37,14 @@ pub fn build(b: *std.Build) void {
         break:lib_module_cbor_support;
     }
     const mod_omelet_c = lib_module_omelet_c: {
-        const mod_interop_c = b.addTranslateC(.{
+        var dep_translate_c: std.Build.Dependency = .{ .builder = deps.module("translate_c_helpers").owner };
+        const translator: @import("third_parties").translate_c.Translator = .init(&dep_translate_c, .{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("include/omelet_c_types.h"),
+            .c_source_file = b.path("include/omelet_c_types.h"),
         });
-
-        const mod = b.addModule("omelet_c", .{
-            .root_source_file = mod_interop_c.getOutput(),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = false,
-        });
+        const mod = translator.mod;
+        b.modules.put(b.allocator, "omelet_c", mod) catch @panic("OOM");
 
         native_config: {
             mod.addIncludePath(b.path("include"));
@@ -73,6 +67,7 @@ pub fn build(b: *std.Build) void {
     };
     _ = b.addModule("core", mod_core_config);
 
+    const mod_context = "lib_core";
     test_module: {
         const run_as_workspace = b.option(bool, "workspace", "Run test as workspace") orelse false;
         const catch2_prefix = 
@@ -135,7 +130,7 @@ fn createCborCppModule(
     config: struct {
         name: []const u8,
         target: std.Build.ResolvedTarget,
-        optimize: std.builtin.OptimizeMode,
+        optimize: ?std.builtin.OptimizeMode,
         prefixes: struct {
             catch2: ?[]const u8 = null,
         } = .{},

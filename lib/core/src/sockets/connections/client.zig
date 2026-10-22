@@ -318,8 +318,10 @@ pub fn Client(comptime stage_name_: types.StageName) type {
         fn decodeWorkerPipeOptions(raw_mask: u64) WorkerPipeOptions {
             const mask: std.enums.EnumSet(WorkerPipeOption) = .{ .bits = .{ .mask = @intCast(raw_mask) } };
             var options: WorkerPipeOptions = .{};
-            inline for (std.meta.fields(WorkerPipeOption)) |f| {
-                @field(options, f.name) = mask.contains(@enumFromInt(f.value));
+            const info: std.lang.Type.Enum = @typeInfo(WorkerPipeOption).@"enum";
+
+            inline for (info.field_names, info.field_values) |field_name, field_value, | {
+                @field(options, field_name) = mask.contains(@enumFromInt(field_value));
             }
 
             return options;

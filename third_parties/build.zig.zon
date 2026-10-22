@@ -17,16 +17,20 @@
             .hash = "known_folders-0.0.0-Fy-PJsbKAACbDh9bBxR0MMThxZSS6A9RH4apWphNHY70",
         },
         .cbor_stream = .{
-            .url = "git+https://github.com/ritalin/zig-cbor-stream.git#83469b57894c355bfd9beda9f4a39c6a5331bf2b",
-            .hash = "zig_cbor_stream-0.2.5-mwaJWB3KAAC4mAct9YugrUJvV__rztBtaioSXcouPJwF",
+            .url = "git+https://github.com/ritalin/zig-cbor-stream.git#b82a7499482122612466ae6d2cbd8bd3fe89831a",
+            .hash = "zig_cbor_stream-0.3.0-mwaJWKbKAAD3qV9b1za0FtGNexaOs3VNAiEjHvCj-7Y3",
         },
         .nnng = .{
-            .url = "git+https://github.com/ritalin/nnng#a0faa0be689caabcd74909178e80ff5c7462ecb4",
-            .hash = "nnng-0.2.6-paXK8q1tAwAqdBWSRvteCQ_zmuqHXWrRsK7OArs4cXYq",
+            .url = "git+https://github.com/ritalin/nnng#27c8578d3004c3dabb83d704b66466ccf52a8641",
+            .hash = "nnng-0.3.0-paXK8tBuAwAr8Qpi-Czi86T_-lKb-ynbWOKdDvJxKORS",
         },
         .efsw = .{
-            .url = "git+https://github.com/ritalin/zig-efsw#e381fd2bbeb8c98f3a73a88a65329441a1ffbbca",
-            .hash = "zig_efsw-0.2.2-testQwpnAAAxtdaCrMjCxhBwuiB4lu0WpOULeqsUbVts",
+            .url = "git+https://github.com/ritalin/zig-efsw#51faf2fed4bf4b6bd74495de15a46c62ec5b46c0",
+            .hash = "zig_efsw-0.3.0-testQ5BnAABdSYamuHgCV1fpup2rtxMvaklc1kqPmUxB",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#670aff0ba6c9468d058d84316baae4649e344458",
+            .hash = "translate_c-0.0.0-Q_BUWqlPBwCVom2F6vaO2IKPmx9lYAC0J7t1NlmMSPwr",
         },
     },
 }

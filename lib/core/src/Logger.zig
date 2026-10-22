@@ -20,12 +20,12 @@ pub fn accepted(level: events.LogLevel) bool {
     return level_filter.contains(level);
 }
 
-pub const AppLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .Debug) .debug else .info, .scope = .app };
-pub const TraceLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .Debug) .debug else .info, .scope = .app_trace };
+pub const AppLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .debug) .debug else .info, .scope = .app };
+pub const TraceLevel: std.log.ScopeLevel = .{ .level = if (builtin.mode == .debug) .debug else .info, .scope = .app_trace };
 
-var level_filter = resetFilter(if (builtin.mode == .Debug) .debug else .info);
+var level_filter = resetFilter(if (builtin.mode == .debug) .debug else .info);
 
-pub const default: events.LogLevel = if (builtin.mode == .Debug) .debug else .info;
+pub const default: events.LogLevel = if (builtin.mode == .debug) .debug else .info;
 
 pub const IntegratedHandler = struct {
     ptr: *anyopaque,
@@ -79,10 +79,10 @@ pub fn filterWith(level: events.LogLevel) void {
 }
 
 fn resetFilter(level: events.LogLevel) events.LogLevelSet {
-    var filter = events.LogLevelSet.initFull();
+    var filter: events.LogLevelSet = .full;
+    const info: std.lang.Type.Enum = @typeInfo(events.LogLevel).@"enum";
 
-    const field_len = std.meta.fields(events.LogLevel).len;
-    for (@intFromEnum(level)+1..field_len) |value| {
+    for (@intFromEnum(level)+1..info.field_names.len) |value| {
         filter.remove(@enumFromInt(value));
     }
 
@@ -132,10 +132,11 @@ pub fn resolveLogLevel(s: ?types.Symbol) !events.LogLevel {
 
 pub fn resolveLogStyle(s: ?types.Symbol) !LogStyle {
     if (s == null) return error.EmptySymbol;
-    inline for (std.meta.fields(LogStyle)) |f| {
-        if (std.mem.eql(u8, f.name, s.?)) {
-            if (f.type == void) {
-                return @unionInit(LogStyle, f.name, {});
+    const info: std.lang.Type.Union = @typeInfo(LogStyle).@"union";
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        if (std.mem.eql(u8, field_name, s.?)) {
+            if (field_type == void) {
+                return @unionInit(LogStyle, field_name, {});
             }
             return .{.integrated = .batch};
         }

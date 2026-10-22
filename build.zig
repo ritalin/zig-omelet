@@ -141,7 +141,8 @@ pub fn build(b: *std.Build) void {
     run_cmd: {
         const cmd = b.addRunArtifact(stage_runner);
         cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| cmd.addArgs(args);
+        cmd.addPassthruArgs();
+
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&cmd.step);
         
@@ -160,23 +161,19 @@ fn addTestAll(b: *std.Build, parent_step: *std.Build.Step) void {
     var visited = std.BufSet.init(b.allocator);
     defer visited.deinit();
 
-    const prefx = b.pathFromRoot(".");
-    var deps_iter = b.graph.dependency_cache.valueIterator();
-
-    while (deps_iter.next()) |dep| {
+    for (b.graph.dependency_cache.values()) |dep| {
         var tls_iter = dep.*.builder.top_level_steps.iterator();
         while (tls_iter.next()) |entry| {
             const tls = entry.value_ptr.*;
             if (! std.mem.eql(u8, tls.step.name, "test")) continue;
 
             for (tls.step.dependencies.items) |dep_step| {
-                if (dep_step.id != .install_artifact) continue;
+                if (dep_step.tag != .install_artifact) continue;
 
                 const inst: *std.Build.Step.InstallArtifact = dep_step.cast(std.Build.Step.InstallArtifact) orelse continue;
 
                 if (inst.artifact.kind == .@"test") {
-                    const pkg_prefix = inst.step.owner.pathFromRoot(".");
-                    if (! std.mem.startsWith(u8, pkg_prefix, prefx)) continue;
+                    const pkg_prefix = inst.step.owner.root.root_dir.path.?;
                     if (std.mem.containsAtLeast(u8, pkg_prefix, 1, "zig-pkg")) continue;
                     if (visited.contains(pkg_prefix)) continue;
 
@@ -193,9 +190,9 @@ fn addTestAll(b: *std.Build, parent_step: *std.Build.Step) void {
                         }
                     );
                     // invoke test
-                    const invoke_step = b.addSystemCommand(&.{b.pathResolve(&.{b.install_prefix, path})});
-                    invoke_step.step.dependOn(&install_step.step);
-                    parent_step.dependOn(&invoke_step.step);
+                    const run_step = b.addRunArtifact(inst.artifact);
+                    run_step.step.dependOn(&install_step.step);
+                    parent_step.dependOn(&run_step.step);
                 }
             }
         }

@@ -85,7 +85,7 @@ pub fn PathMatcher(comptime TChar: type) type {
                 self.* = .{
                     .id = id,
                     .children = std.AutoHashMap(TChar, *PatriciaNode).init(allocator),
-                    .kinds = FilterKindSet.initEmpty(),
+                    .kinds = .empty,
                     .prefix = &[0]TChar{},
                 };
 

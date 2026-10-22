@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const AssetFilePath = @import("./src/supports/build_support.zig").AssetFilePath;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -15,8 +17,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,  
     });
 
-    const mod_context = "lib_core";
-
     lib_module_cbor_support: {
         const mod = createCborCppModule(b, .{
             .name = "cbor-cpp",
@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
                 deps.module("nng-core"),
             },
         });
+        _ = b.modules.getOrPutValue(b.allocator, "cbor-cpp", mod) catch @panic("OOM");
 
         const lib = b.addLibrary(.{
             .name = "cborcpp",
@@ -36,18 +37,14 @@ pub fn build(b: *std.Build) void {
         break:lib_module_cbor_support;
     }
     const mod_omelet_c = lib_module_omelet_c: {
-        const mod_interop_c = b.addTranslateC(.{
+        var dep_translate_c: std.Build.Dependency = .{ .builder = deps.module("translate_c_helpers").owner };
+        const translator: @import("third_parties").translate_c.Translator = .init(&dep_translate_c, .{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("include/omelet_c_types.h"),
+            .c_source_file = b.path("include/omelet_c_types.h"),
         });
-
-        const mod = b.addModule("omelet_c", .{
-            .root_source_file = mod_interop_c.getOutput(),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = false,
-        });
+        const mod = translator.mod;
+        b.modules.put(b.allocator, "omelet_c", mod) catch @panic("OOM");
 
         native_config: {
             mod.addIncludePath(b.path("include"));
@@ -70,6 +67,7 @@ pub fn build(b: *std.Build) void {
     };
     _ = b.addModule("core", mod_core_config);
 
+    const mod_context = "lib_core";
     test_module: {
         const run_as_workspace = b.option(bool, "workspace", "Run test as workspace") orelse false;
         const catch2_prefix = 
@@ -132,7 +130,7 @@ fn createCborCppModule(
     config: struct {
         name: []const u8,
         target: std.Build.ResolvedTarget,
-        optimize: std.builtin.OptimizeMode,
+        optimize: ?std.builtin.OptimizeMode,
         prefixes: struct {
             catch2: ?[]const u8 = null,
         } = .{},
@@ -140,7 +138,7 @@ fn createCborCppModule(
         use_catch2: bool = false,
     }) *std.Build.Module 
 {
-    const mod = b.addModule(config.name, .{
+    const mod = b.createModule(.{
         .target = config.target,
         .optimize = config.optimize,
         .link_libc = true,
@@ -167,7 +165,7 @@ fn createCborCppModule(
             },
             .flags = &.{
                 "-std=c++20", 
-                if ((config.optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                if ((config.optimize == .debug) and (builtin.os.tag != .linux)) "-Werror" else "",
             },
         });
 

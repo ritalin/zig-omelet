@@ -39,7 +39,7 @@ pub fn Defaults(comptime ArgId: type) type {
         }
 
         fn loadFromSource(self: *Self, allocator: std.mem.Allocator, contents: [:0]const u8, error_style: core.Logger.LogStyle) !void {
-            var ast = try std.zig.Ast.parse(allocator, contents, .zon);
+            var ast = try std.zig.Ast.parse(allocator, contents, .{.mode = .zon});
             defer ast.deinit(allocator);
             if (ast.errors.len > 0) {
                 if (error_style == .stderr) {
@@ -57,29 +57,35 @@ pub fn Defaults(comptime ArgId: type) type {
             defer ir.deinit(allocator);
 
             const root_index: std.zig.Zoir.Node.Index = .root;
-            const root_node = root_index.get(ir);
+            const root_node = root_index.get(&ir);
             switch (root_node) {
                 .struct_literal => {},
                 .empty_literal => return,
                 else => return error.InvalidSettingFile,
             }
 
-            const fields = std.meta.fields(ArgId);
+            const info: std.lang.Type.Enum = @typeInfo(ArgId).@"enum";
 
             for (root_node.struct_literal.names, 0..) |ident_name, i| {
-                const name = ident_name.get(ir);
+                const name = ident_name.get(&ir);
                 const node_index = root_node.struct_literal.vals.at(@intCast(i));
 
                 apply: {
-                    inline for (fields) |f| {
-                        if (std.mem.eql(u8, f.name, name)) {
-                            const key: ArgId = @enumFromInt(f.value);
-                            var diag: std.zon.parse.Diagnostics = .{};
+                    inline for (info.field_names, info.field_values) |field_name, field_value| {
+                        if (std.mem.eql(u8, field_name, name)) {
+                            const key: ArgId = @enumFromInt(field_value);
+                            var diag: std.zon.parse.Diagnostics = undefined;
                             const val = 
-                                std.zon.parse.fromZoirNodeAlloc(Self.Arg, allocator, ast, ir, node_index, &diag, .{})
+                                std.zon.parse.fromZoir(Self.Arg, .{ 
+                                    .arena = allocator, 
+                                    .ast = &ast, 
+                                    .zoir = &ir, 
+                                    .node = node_index, 
+                                    .diagnostics = &diag, 
+                                })
                                 catch {
                                     if (error_style == .stderr) {
-                                        std.log.warn("{f}", .{diag});
+                                        std.log.warn("{f}", .{diag.fmt("")});
                                     }
                                     return error.InvalidSettingEntry;
                                 }

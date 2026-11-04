@@ -12,11 +12,11 @@ this tool has following fetues:
 
 ## Requirement
 
-* zig (https://ziglang.org) - 0.16.0 or latter
-* libduckdb (https://duckdb.org) - 1.5.3 or latter
+* zig (https://ziglang.org) - 0.17.1 or latter
+* libduckdb (https://duckdb.org) - 1.5.6 or latter
 * libcatch2 (https://github.com/catchorg/Catch2) 3.15.0 or latter
 
-This product has tested on MacOS Ventura 15.7.7.
+This product has tested on MacOS Tahoe 26.5.2.
 
 ## Build
 

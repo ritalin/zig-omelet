@@ -46,10 +46,7 @@ pub fn build(b: *std.Build) void {
 
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
-
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
 
         run_cmd.addArgs(&.{});
 
@@ -58,8 +55,10 @@ pub fn build(b: *std.Build) void {
         break:app_runner;
     }
     test_runner: {
+        const test_asset_dir_path = b.root.join(b.allocator, "./test_assets/configs/default") catch @panic("OOM");
+
         const mod_test_options = b.addOptions();
-        mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
+        mod_test_options.addOption([]const u8, "source_asset_dir", @import("lib_core").AssetFilePath.from(test_asset_dir_path).fullPath(b));
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
 
         const test_prefix = "test";

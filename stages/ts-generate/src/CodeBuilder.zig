@@ -245,13 +245,17 @@ fn buildTypeMember(
     return buffer.written();
 }
 
+inline fn indentOf(comptime space: []const u8, comptime indent_level: usize) [space.len * indent_level]u8 {
+    return std.simd.repeat(space.len * indent_level, @as(@Vector(space.len, u8), space.*));
+}
+
 fn applyPlaceholder(self: *Self, allocator: std.mem.Allocator, parameters: []const FieldTypePair, user_type_names: std.BufSet, anon_user_types: std.StringHashMap(UserTypeDef)) !void {
     // It does not deinit beacouse of supplying from the arena.
     var buffer = std.Io.Writer.Allocating.init(allocator);
 
     const INDENT_LEVEL = 0;
 
-    try buffer.writer.writeAll(("  " ** INDENT_LEVEL) ++ "export type Parameter = {\n");
+    try buffer.writer.writeAll(indentOf("  ", INDENT_LEVEL) ++ "export type Parameter = {\n");
 
     // `  1: number | null`,
     for (parameters) |p| {
@@ -271,10 +275,10 @@ fn applyPlaceholder(self: *Self, allocator: std.mem.Allocator, parameters: []con
                 break:ts_type "any";
             }
         };
-        try buffer.writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s},\n", .{field, ts_type});
+        try buffer.writer.print(indentOf("  ", INDENT_LEVEL+1) ++ "{s}: {s},\n", .{field, ts_type});
     }
 
-    try buffer.writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
+    try buffer.writer.writeAll(indentOf("  ", INDENT_LEVEL) ++ "}");
     
     self.entries.put(.parameter, buffer.written());
 }
@@ -327,7 +331,7 @@ fn applyResultSets(self: *Self, allocator: std.mem.Allocator, result_set: []cons
     
     const INDENT_LEVEL = 0;
 
-    try buffer.writer.writeAll((" " ** INDENT_LEVEL) ++ "export type ResultSet = {\n");
+    try buffer.writer.writeAll(indentOf(" ", INDENT_LEVEL) ++ "export type ResultSet = {\n");
 
     // a: number | null
     for (result_set) |c| {
@@ -341,18 +345,18 @@ fn applyResultSets(self: *Self, allocator: std.mem.Allocator, result_set: []cons
         };
         const ts_type = try buildTypeMember(allocator, INDENT_LEVEL+1, c.field_type, user_type_names, anon_user_types, .{});
 
-        try buffer.writer.print(("  " ** (INDENT_LEVEL+1)) ++ "{s}: {s}{s};\n", .{
+        try buffer.writer.print(indentOf("  ", INDENT_LEVEL+1) ++ "{s}: {s}{s};\n", .{
             field, ts_type,
             if (c.nullable) " | null" else "",
         });
     }
-    try buffer.writer.writeAll(("  " ** INDENT_LEVEL) ++ "}");
+    try buffer.writer.writeAll(indentOf("  ", INDENT_LEVEL) ++ "}");
     
     self.entries.put(.result_set, buffer.written());
 }
 
 fn isLiteral(allocator: std.mem.Allocator, symbol: Symbol) !bool {
-    var tz = std.zig.Tokenizer.init(try allocator.dupeZ(u8, symbol));
+    var tz = std.zig.Tokenizer.init(try allocator.dupeSentinel(u8, symbol, 0));
     
     return tz.next().loc.end == symbol.len;
 }
@@ -365,7 +369,7 @@ fn applyUserType(self: *Self, allocator: std.mem.Allocator, user_type: UserTypeD
 
     const type_name = try IdentifierFormatter.format(allocator, user_type.header.name, .pascal_case);
 
-    try buffer.writer.print((" " ** INDENT_LEVEL) ++ "export type {s} = ", .{type_name});
+    try buffer.writer.print(indentOf(" ", INDENT_LEVEL) ++ "export type {s} = ", .{type_name});
 
     write_member: {
         var member_buf = std.Io.Writer.Allocating.init(allocator);

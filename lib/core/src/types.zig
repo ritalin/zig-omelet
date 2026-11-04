@@ -14,5 +14,3 @@ pub const BinaryData = []const u8;
 pub const StageName = []const u8;
 
 pub const FilterKind = enum {include, exclude};
-
-

@@ -47,10 +47,7 @@ pub fn build(b: *std.Build) void {
 
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
-
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
 
         const run_step = b.step("run", "Run the app");
         run_step.dependOn(&run_cmd.step);
@@ -66,7 +63,7 @@ pub fn build(b: *std.Build) void {
         });
 
         const mod_test_options = b.addOptions();
-        mod_test_options.addOption([]const u8, "source_asset_dir", b.path("./test_assets/configs/default").getPath(b));
+        mod_test_options.addOption([]const u8, "source_asset_dir", @import("lib_core").AssetFilePath.from(.initCwd("./test_assets/configs/default")).fullPath(b));
         mod_test_options.addOption(bool, "run_as_workspace", workspace);
         exe_unit_tests.root_module.addImport("test_options", mod_test_options.createModule());
 

@@ -163,9 +163,10 @@ fn decodeEventHeader(reader: *CborStream.Reader) !events.EventHeader {
     // TODO:EventHeader variant
     switch (tag) {
         else => {
-            inline for (std.meta.fields(events.EventType)) |field| {
-                if (field.value == @intFromEnum(tag)) {
-                    return @unionInit(events.EventHeader, field.name, {});
+            const info: std.lang.Type.Enum = @typeInfo(events.EventType).@"enum";
+            inline for (info.field_names, info.field_values) |field_name, field_value| {
+                if (field_value == @intFromEnum(tag)) {
+                    return @unionInit(events.EventHeader, field_name, {});
                 }
             }
         }

@@ -225,7 +225,7 @@ pub const tests = struct {
         fill: {
             var buffer: [16]u8 = undefined;
             var w = file.writer(io, &buffer);
-            try w.interface.writeAll("X" ** 10000);
+            try w.interface.writeAll(&@as([10000]u8, @splat('X')));
             try w.interface.flush();
             break:fill;
         }
@@ -608,7 +608,7 @@ pub const tests = struct {
         fill: {
             var buffer: [16]u8 = undefined;
             var w = file.writer(io, &buffer);
-            try w.interface.writeAll("X" ** 10000);
+            try w.interface.writeAll(&@as([10000]u8, @splat('X')));
             try w.interface.flush();
             break:fill;
         }

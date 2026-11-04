@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
                 },
                 .flags = &.{
                     "-std=c++20", 
-                    if ((optimize == .Debug) and (builtin.os.tag != .linux)) "-Werror" else "",
+                    if ((optimize == .debug) and (builtin.os.tag != .linux)) "-Werror" else "",
                 },
             });
             mod.addLibraryPath(.{.cwd_relative = b.pathResolve(&.{catch2_prefix, "lib"})});

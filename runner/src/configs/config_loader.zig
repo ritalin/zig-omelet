@@ -77,7 +77,7 @@ fn loadGuestConfigSource(
     strategies: core.configs.types.StageStrategy, 
     log_style: core.Logger.LogStyle) !std.MultiArrayList(config_types.Guest) 
 {
-    var ast = try std.zig.Ast.parse(allocator, source, .zon);
+    var ast = try std.zig.Ast.parse(allocator, source, .{.mode = .zon});
     defer ast.deinit(allocator);
     if (ast.errors.len > 0) {
         if (log_style == .stderr) {
@@ -98,7 +98,7 @@ fn loadGuestConfigSource(
     var guests: std.MultiArrayList(config_types.Guest) = .empty;
 
     const index: std.zig.Zoir.Node.Index = .root;
-    const node = index.get(ir);
+    const node = index.get(&ir);
     if (std.meta.activeTag(node) != .struct_literal) return error.InvalidConfigFile;
 
     const default_exe_dir = try std.process.executableDirPathAlloc(io, allocator);
@@ -106,7 +106,7 @@ fn loadGuestConfigSource(
 
     for (node.struct_literal.names, 0..) |name, i| {
         const field_index: std.zig.Zoir.Node.Index = node.struct_literal.vals.at(@intCast(i));
-        const ident_name = name.get(ir);
+        const ident_name = name.get(&ir);
 
         switch (try core.configs.supports.resolveStageKind(ident_name)) {
             .watch => {
@@ -139,7 +139,7 @@ fn loadGuestStages(
     guests: *std.MultiArrayList(config_types.Guest)) !void
 {
     const strategy = strategies.get(stage_kind) orelse return error.UnexpectedGuestStage;
-    const parent_node = parent_index.get(ir.*);
+    const parent_node = parent_index.get(ir);
     validate_node: {
         switch (parent_node) {
             .struct_literal => break:validate_node,
@@ -157,21 +157,26 @@ fn loadGuestStages(
 
     for (parent_node.struct_literal.names, 0..) |ident_name, i| {
         const index = parent_node.struct_literal.vals.at(@intCast(i));
-        const stage_name = ident_name.get(ir.*);
+        const stage_name = ident_name.get(ir);
 
         // CAUTION: DO NOT call Diagnostics.deinit().
         // This is also release AST and ZOIR.
-        var diag: std.zon.parse.Diagnostics = .{};
+        var diag: std.zon.parse.Diagnostics = undefined; 
 
         const tmpl: GuestTemplate(GuestArgId) = 
-            std.zon.parse.fromZoirNodeAlloc(
+            std.zon.parse.fromZoir(
                 GuestTemplate(GuestArgId), 
-                allocator, ast.*, ir.*, index, &diag, 
-                .{}
+                .{
+                    .arena = allocator,
+                    .diagnostics = &diag,
+                    .node = index,
+                    .ast = ast,
+                    .zoir = ir
+                }
             )
             catch {
                 if (log_style == .stderr) {
-                    std.log.warn("{f}", .{diag});
+                    std.log.warn("{f}", .{diag.fmt("")});
                 }
                 return error.InvalidConfigFile;
             }
@@ -235,7 +240,7 @@ pub fn loadHost(io: std.Io, allocator: std.mem.Allocator, env: *const std.proces
 }
 
 fn loadHostConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ) !config_types.Host {
-    var ast = try std.zig.Ast.parse(allocator, source, .zon);
+    var ast = try std.zig.Ast.parse(allocator, source, .{.mode = .zon});
     defer ast.deinit(allocator);
     if (ast.errors.len > 0) {
         return error.InvalidConfigFile;
@@ -244,11 +249,17 @@ fn loadHostConfigSource(allocator: std.mem.Allocator, source: core.types.SymbolZ
     var ir = try std.zig.ZonGen.generate(allocator, ast, .{});
     defer ir.deinit(allocator);
 
+    var diag: std.zon.parse.Diagnostics = undefined; 
     const tmpl: HostTemplate = 
-        std.zon.parse.fromZoirNodeAlloc(
+        std.zon.parse.fromZoir(
             HostTemplate, 
-            allocator, ast, ir, .root, null, 
-            .{}
+            .{
+                .arena = allocator,
+                .diagnostics = &diag,
+                .ast = &ast,
+                .zoir = &ir,
+                .node = .root,
+            }
         )
         catch return error.InvalidConfigFile
     ;

@@ -156,17 +156,18 @@ fn writeArgs(
     default_extra_args: *const ExtraArg(GuestArgId),
     args: *std.ArrayListUnmanaged(core.types.Symbol)) !void
 {
-    inline for (comptime std.meta.fields(GuestArgId), GuestArgId.Decls) |f, decl| {
+    const info: std.lang.Type.Enum = @typeInfo(GuestArgId).@"enum";
+    inline for (info.field_names, info.field_values, GuestArgId.Decls) |field_name, field_value, decl| {
         comptime {
-            std.debug.assert(decl.id == @as(GuestArgId, @enumFromInt(f.value)));
+            std.debug.assert(decl.id == @as(GuestArgId, @enumFromInt(field_value)));
         }
-        const value = @field(extra_set, f.name);
+        const value = @field(extra_set, field_name);
 
         const arg_name = decl.names.long.?;
         writeArgsInternal(allocator, arg_name, value, args)
         catch |err| switch (err) {
             error.NeedDefaultValue => {
-                const default_value = @field(default_extra_args, f.name);
+                const default_value = @field(default_extra_args, field_name);
                 try writeArgsInternal(allocator, arg_name, default_value, args);
             },
             else => return err,

@@ -25,13 +25,13 @@ const ExceptStructView = std.StaticStringMap(void).initComptime(.{
 pub fn StructView(comptime T: type) type {
     comptime std.debug.assert(@typeInfo(T) == .@"struct");
 
-    const fields = std.meta.fields(T);
+    const info: std.lang.Type.Struct = @typeInfo(T).@"struct";
     comptime var i: usize = 0;
-    comptime var types: [fields.len]type = undefined;
-    inline for (fields) |field| {
-        if (comptime (!ExceptStructView.has(@typeName(field.type)))) {
+    comptime var types: [info.field_names.len]type = undefined;
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        if (comptime (!ExceptStructView.has(field_name))) {
             defer i += 1;
-            types[i] = field.type;
+            types[i] = field_type;
         }
     }
 
@@ -77,9 +77,11 @@ pub const EventHeader = union(EventType) {
 };
 
 fn headerFromEvent(tag: EventType) EventHeader {
-    inline for (std.meta.fields(Event)) |f| {
-        if (@field(EventHeader, f.name) == tag) {
-            return @unionInit(EventHeader, f.name, {});
+    const info: std.lang.Type.Union = @typeInfo(Event).@"union";
+
+    inline for (info.field_names) |field_name| {
+        if (@field(EventHeader, field_name) == tag) {
+            return @unionInit(EventHeader, field_name, {});
         }
     }
     unreachable;

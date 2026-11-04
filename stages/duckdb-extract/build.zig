@@ -186,6 +186,7 @@ pub fn build(b: *std.Build) void {
             const exe_unit_tests = b.addTest(.{
                 .name = b.fmt("{s}-{s}", .{test_prefix, app_context}),
                 .root_module = test_module,
+                .test_runner = .{.mode = if (workspace) .simple else .server, .path = b.path("../../lib/tools/zig_runner.zig")},
             });
             const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
             run_exe_unit_tests.has_side_effects = true;
@@ -203,7 +204,7 @@ pub fn build(b: *std.Build) void {
             if (!is_test_separated) break:cpp_test_runner;
 
             const cpp_unit_tests = b.addExecutable(.{
-                .name = b.fmt("test-cpp-{s}", .{app_context}),
+                .name = b.fmt("{s}-cpp-{s}", .{test_prefix, app_context}),
                 .root_module = b.createModule(.{
                     .root_source_file = b.path("tools/cpp_test_bootstrap.zig"),
                     .target = target,
